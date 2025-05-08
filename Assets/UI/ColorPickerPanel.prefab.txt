@@ -1,0 +1,86 @@
+/* Инструкция по созданию префаба ColorPickerPanel */
+
+Для создания панели выбора цвета, выполните следующие шаги в Unity Editor:
+
+1. Создайте Canvas для UI:
+   - GameObject -> UI -> Canvas
+   - Назовите его "ColorPickerCanvas"
+   - Canvas Scaler: Scale With Screen Size (Reference Resolution: 1920x1080)
+   - Добавьте компонент ColorPickerCanvas (скрипт, который вы создали)
+
+2. Добавьте кнопку переключения панели:
+   - Создайте GameObject -> UI -> Button в Canvas
+   - Назовите его "ToggleButton"
+   - Позиционируйте в удобном месте (например, нижний правый угол)
+   - Измените текст на "Цвета" или используйте иконку палитры
+   - В компоненте ColorPickerCanvas перетащите эту кнопку в поле toggleButton
+
+3. Создайте основную панель выбора цвета:
+   - Создайте GameObject -> UI -> Panel в Canvas
+   - Назовите его "ColorPickerPanel"
+   - Установите RectTransform:
+     - Anchors: Bottom
+     - Pivot: (0.5, 0.0)
+     - Width: ~600, Height: ~300
+     - Position Y: чуть выше нижнего края экрана
+   - Image: настройте фон панели (цвет, прозрачность)
+   - В компоненте ColorPickerCanvas перетащите этот Panel в поле colorPickerPanel
+   - Также перетащите его RectTransform в поле colorPickerTransform
+
+4. Создайте заголовок панели:
+   - Добавьте GameObject -> UI -> Text в ColorPickerPanel
+   - Назовите его "TitleText"
+   - Текст: "Выберите цвет стены"
+   - Выровняйте по центру вверху панели
+   - Настройте шрифт, размер и цвет по вашему дизайну
+
+5. Создайте контейнер для кнопок цветов:
+   - Добавьте GameObject -> UI -> GridLayoutGroup в ColorPickerPanel
+   - Назовите его "ColorsGrid"
+   - Настройте RectTransform:
+     - Anchors: растянуть горизонтально, фиксировать вертикально
+     - Отступы от краев для хорошего размещения внутри панели
+   - Настройте GridLayoutGroup:
+     - Cell Size: (50, 50)
+     - Spacing: (10, 10)
+     - Start Corner: Upper Left
+     - Start Axis: Horizontal
+     - Child Alignment: Center
+     - Constraint: Fixed Column Count (значение зависит от размера панели, примерно 6-8)
+
+6. Добавьте слайдер интенсивности:
+   - Создайте GameObject -> UI -> Slider в ColorPickerPanel
+   - Назовите его "BlendFactorSlider"
+   - Расположите под сеткой цветов
+   - Настройте Slider:
+     - Min Value: 0, Max Value: 1, Value: 0.5
+     - Transition: Color Tint
+     - Настройте цвета и визуальный стиль по вашему дизайну
+   - Добавьте текстовую подпись:
+     - GameObject -> UI -> Text рядом со слайдером
+     - Текст: "Интенсивность"
+
+7. Добавьте переключатель использования маски:
+   - Создайте GameObject -> UI -> Toggle в ColorPickerPanel
+   - Назовите его "UseMaskToggle"
+   - Расположите под слайдером
+   - Настройте Toggle:
+     - Is On: true (по умолчанию включено)
+     - Настройте визуальный стиль по вашему дизайну
+   - Измените текст на "Использовать маску стен"
+
+8. Добавьте компонент ColorPickerUI к ColorPickerPanel:
+   - Add Component -> Scripts -> ColorPickerUI
+   - Wall Paint Effect: перетащите компонент WallPaintEffect из сцены
+   - Blend Factor Slider: перетащите созданный BlendFactorSlider
+   - Use Mask Toggle: перетащите созданный UseMaskToggle
+   - Color Buttons Container: перетащите Transform объекта ColorsGrid
+   - Color Button Prefab: перетащите созданный ранее префаб ColorButtonPrefab
+
+9. Создайте префаб:
+   - Выберите весь Canvas
+   - Перетащите его в папку Assets/UI
+   - Назовите "ColorPickerCanvas"
+
+После создания префаба его можно добавить на сцену, где используется WallPaintEffect,
+и он будет автоматически подключен к системе перекраски стен. 

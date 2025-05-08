@@ -1,0 +1,52 @@
+/* Инструкция по созданию префаба ColorButtonPrefab */
+
+Для создания префаба кнопки цвета, выполните следующие шаги в Unity Editor:
+
+1. Создайте новый пустой GameObject в сцене:
+   - Правый клик в Hierarchy -> Create Empty
+   - Назовите его "ColorButtonPrefab"
+
+2. Добавьте компонент RectTransform:
+   - В Inspector -> Add Component -> Rect Transform
+   - Установите размеры: Width = 50, Height = 50
+   - Установите Anchors предпочтительно в левый верхний угол
+
+3. Добавьте компонент Image (основной фон кнопки):
+   - Add Component -> UI -> Image
+   - Цвет: белый (будет заменен при выборе цвета)
+   - Source Image: None или используйте круглый спрайт, если есть
+   - Если используете квадратный спрайт, установите Image Type = Filled и Fill Method = Radial 360
+
+4. Добавьте компонент Button:
+   - Add Component -> UI -> Button
+   - Transition: Color Tint
+   - Normal Color: белый (или любой другой цвет)
+   - Highlighted Color: чуть светлее нормального
+   - Pressed Color: чуть темнее нормального
+   - Target Graphic: перетащите компонент Image этого же объекта
+
+5. Создайте дочерний объект для обводки выделения:
+   - Правый клик на ColorButtonPrefab -> UI -> Image
+   - Назовите его "SelectionOutline"
+   - Настройте RectTransform:
+     - Anchors: растянуть на все стороны (Stretch-Stretch)
+     - Left, Right, Top, Bottom = -2 (чтобы обводка выходила за пределы кнопки на 2 пикселя)
+   - Настройте Image:
+     - Color: яркий контрастный цвет (например, #FFD700 для золотого)
+     - Source Image: можно использовать тот же спрайт, что и для кнопки
+     - Image Type: Outline
+     - Outline Weight: ~2-3
+   - По умолчанию отключите этот объект: Убрать галочку с поля "enabled" в компоненте Image
+
+6. Добавьте компонент ColorButton:
+   - Add Component -> Scripts -> ColorButton
+   - Color Image: перетащите компонент Image этого же объекта
+   - Button: перетащите компонент Button этого же объекта
+   - Selection Outline: перетащите компонент Image объекта SelectionOutline
+
+7. Создайте префаб:
+   - Перетащите ColorButtonPrefab из Hierarchy в папку Assets/UI
+   - Удалите временный объект из сцены
+
+После создания префаба вы можете использовать его в компоненте ColorPickerUI,
+назначив его в поле colorButtonPrefab в инспекторе. 
