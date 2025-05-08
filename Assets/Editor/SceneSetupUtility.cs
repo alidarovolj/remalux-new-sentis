@@ -10,9 +10,11 @@ using UnityEngine.UI;
 using Unity.XR.CoreUtils;
 using UnityEngine.InputSystem;
 using UnityEngine.XR.ARFoundation.InternalUtils;
+using System.Linq;
 
 /// <summary>
-/// Утилита для быстрого создания и настройки сцены с AR/ML функциональностью
+/// Утилита для быстрого создания и настройки сцены с AR/ML функциональностью.
+/// Улучшена в соответствии с рекомендациями по организации иерархии сцены.
 /// </summary>
 public class SceneSetupUtility : EditorWindow
 {
@@ -24,11 +26,44 @@ public class SceneSetupUtility : EditorWindow
     private bool setupLighting = true;
     
     private string sceneName = "AR_WallPainting";
+
+    // Конфигурационный ScriptableObject для настроек
+    private ARSceneConfig sceneConfig;
     
     [MenuItem("Remalux/Создать AR сцену")]
     public static void ShowWindow()
     {
         GetWindow<SceneSetupUtility>("Создать AR сцену");
+    }
+    
+    private void OnEnable()
+    {
+        // Ищем существующую конфигурацию или создаем новую
+        sceneConfig = AssetDatabase.FindAssets("t:ARSceneConfig")
+            .Select(AssetDatabase.GUIDToAssetPath)
+            .Select(AssetDatabase.LoadAssetAtPath<ARSceneConfig>)
+            .FirstOrDefault();
+
+        if (sceneConfig == null)
+        {
+            CreateDefaultConfig();
+        }
+    }
+
+    private void CreateDefaultConfig()
+    {
+        // Создаем конфигурацию по умолчанию
+        sceneConfig = ScriptableObject.CreateInstance<ARSceneConfig>();
+        string configPath = "Assets/Config/ARSceneConfig.asset";
+        string directory = Path.GetDirectoryName(configPath);
+        
+        if (!Directory.Exists(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+        
+        AssetDatabase.CreateAsset(sceneConfig, configPath);
+        AssetDatabase.SaveAssets();
     }
     
     private void OnGUI()
@@ -37,6 +72,29 @@ public class SceneSetupUtility : EditorWindow
         
         EditorGUILayout.Space();
         
+        // Отображаем поле для ScriptableObject конфигурации
+        EditorGUI.BeginChangeCheck();
+        sceneConfig = (ARSceneConfig)EditorGUILayout.ObjectField("Конфигурация", sceneConfig, typeof(ARSceneConfig), false);
+        if (EditorGUI.EndChangeCheck() && sceneConfig == null)
+        {
+            CreateDefaultConfig();
+        }
+        
+        EditorGUILayout.Space();
+        
+        if (sceneConfig != null)
+        {
+            // Редактирование конфигурации
+            if (GUILayout.Button("Редактировать конфигурацию"))
+            {
+                Selection.activeObject = sceneConfig;
+                EditorGUIUtility.PingObject(sceneConfig);
+            }
+        }
+        
+        EditorGUILayout.Space();
+        
+        // Чекбоксы для компонентов
         setupAR = EditorGUILayout.Toggle("Настроить AR компоненты", setupAR);
         setupUI = EditorGUILayout.Toggle("Настроить UI", setupUI);
         setupWallSegmentation = EditorGUILayout.Toggle("Настроить сегментацию стен", setupWallSegmentation);
@@ -63,6 +121,12 @@ public class SceneSetupUtility : EditorWindow
         {
             EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects);
             
+            // Сначала создаем необходимые ресурсы для шейдеров и материалов
+            if (setupWallPainting)
+            {
+                CreateWallPaintResources();
+            }
+            
             // Создаем корневые объекты
             GameObject arRoot = new GameObject("[AR]");
             GameObject uiRoot = new GameObject("[UI]");
@@ -72,6 +136,13 @@ public class SceneSetupUtility : EditorWindow
             if (setupAR)
             {
                 SetupARComponents(arRoot);
+                
+                // Проверяем и исправляем ссылки XROrigin после настройки AR компонентов
+                GameObject xrOriginObj = GameObject.Find("XR Origin");
+                if (xrOriginObj != null)
+                {
+                    FixXROriginReferences(xrOriginObj);
+                }
             }
             
             // Настраиваем UI
@@ -98,6 +169,12 @@ public class SceneSetupUtility : EditorWindow
                 SetupLighting();
             }
             
+            // Настраиваем URP Renderer Feature для эффекта перекраски, если нужно
+            if (setupWallPainting)
+            {
+                SetupURPRendererFeature();
+            }
+            
             // Сохраняем сцену
             string scenePath = "Assets/Scenes/" + sceneName + ".unity";
             
@@ -115,14 +192,32 @@ public class SceneSetupUtility : EditorWindow
     
     private void SetupARComponents(GameObject parent)
     {
+        // Объявляем переменные в начале метода
+        GameObject arSessionObj;
+        GameObject xrOriginObj;
+    
+        if (sceneConfig != null && sceneConfig.arSessionPrefab != null && sceneConfig.xrOriginPrefab != null)
+        {
+            // Используем префабы из конфигурации для AR компонентов
+            arSessionObj = PrefabUtility.InstantiatePrefab(sceneConfig.arSessionPrefab, parent.transform) as GameObject;
+            xrOriginObj = PrefabUtility.InstantiatePrefab(sceneConfig.xrOriginPrefab, parent.transform) as GameObject;
+            
+            // Проверяем и исправляем ссылки в XROrigin
+            FixXROriginReferences(xrOriginObj);
+            
+            Debug.Log("AR компоненты настроены из префабов.");
+            return;
+        }
+        
+        // Иначе создаем компоненты программно
         // Создаем AR Session
-        GameObject arSessionObj = new GameObject("AR Session");
+        arSessionObj = new GameObject("AR Session");
         arSessionObj.transform.SetParent(parent.transform);
         arSessionObj.AddComponent<ARSession>();
         arSessionObj.AddComponent<ARInputManager>();
 
         // Создаем XR Origin
-        GameObject xrOriginObj = new GameObject("XR Origin");
+        xrOriginObj = new GameObject("XR Origin");
         xrOriginObj.transform.SetParent(parent.transform);
         
         // Добавляем XROrigin компонент
@@ -176,27 +271,43 @@ public class SceneSetupUtility : EditorWindow
         // Добавляем AR Plane Manager
         var planeManager = trackersObj.AddComponent<ARPlaneManager>();
         
-        // Создаем префаб для визуализации плоскостей
-        GameObject planePrefab = new GameObject("AR Plane Visualization");
-        planePrefab.AddComponent<ARPlane>();
-        planePrefab.AddComponent<MeshFilter>();
-        planePrefab.AddComponent<MeshRenderer>();
-        planePrefab.AddComponent<ARPlaneMeshVisualizer>();
-        planePrefab.AddComponent<LineRenderer>();
-        
-        // Сохраняем префаб
-        string prefabPath = "Assets/Prefabs/AR/ARPlaneVisualization.prefab";
-        string prefabDirectory = Path.GetDirectoryName(prefabPath);
-        if (!Directory.Exists(prefabDirectory))
+        // Пытаемся использовать префаб плоскости из конфигурации
+        if (sceneConfig != null && sceneConfig.arPlanePrefab != null)
         {
-            Directory.CreateDirectory(prefabDirectory);
+            planeManager.planePrefab = sceneConfig.arPlanePrefab;
         }
-        
-        GameObject prefab = PrefabUtility.SaveAsPrefabAsset(planePrefab, prefabPath);
-        DestroyImmediate(planePrefab);
-        
-        // Назначаем префаб
-        planeManager.planePrefab = prefab;
+        else
+        {
+            // Создаем префаб для визуализации плоскостей
+            GameObject planePrefab = new GameObject("AR Plane Visualization");
+            planePrefab.AddComponent<ARPlane>();
+            planePrefab.AddComponent<MeshFilter>();
+            planePrefab.AddComponent<MeshRenderer>();
+            planePrefab.AddComponent<ARPlaneMeshVisualizer>();
+            planePrefab.AddComponent<LineRenderer>();
+            
+            // Сохраняем префаб
+            string prefabPath = "Assets/Prefabs/AR/ARPlaneVisualization.prefab";
+            string prefabDirectory = Path.GetDirectoryName(prefabPath);
+            if (!Directory.Exists(prefabDirectory))
+            {
+                Directory.CreateDirectory(prefabDirectory);
+            }
+            
+            GameObject prefab = PrefabUtility.SaveAsPrefabAsset(planePrefab, prefabPath);
+            DestroyImmediate(planePrefab);
+            
+            // Назначаем префаб
+            planeManager.planePrefab = prefab;
+            
+            // Обновляем конфигурацию
+            if (sceneConfig != null)
+            {
+                sceneConfig.arPlanePrefab = prefab;
+                EditorUtility.SetDirty(sceneConfig);
+                AssetDatabase.SaveAssets();
+            }
+        }
         
         // Добавляем дополнительные менеджеры
         trackersObj.AddComponent<ARPointCloudManager>();
@@ -206,11 +317,187 @@ public class SceneSetupUtility : EditorWindow
         arSessionObj.SetActive(true);
         xrOriginObj.SetActive(true);
         
+        // Сохраняем компоненты как префабы для дальнейшего использования
+        if (sceneConfig != null && sceneConfig.arSessionPrefab == null)
+        {
+            string sessionPrefabPath = "Assets/Prefabs/AR/ARSession.prefab";
+            string xrOriginPrefabPath = "Assets/Prefabs/AR/XROrigin.prefab";
+            
+            // Создаем директорию, если не существует
+            string prefabDirectory = Path.GetDirectoryName(sessionPrefabPath);
+            if (!Directory.Exists(prefabDirectory))
+            {
+                Directory.CreateDirectory(prefabDirectory);
+            }
+            
+            // Сохраняем префабы
+            sceneConfig.arSessionPrefab = PrefabUtility.SaveAsPrefabAsset(arSessionObj, sessionPrefabPath);
+            sceneConfig.xrOriginPrefab = PrefabUtility.SaveAsPrefabAsset(xrOriginObj, xrOriginPrefabPath);
+            
+            // Сохраняем конфигурацию
+            EditorUtility.SetDirty(sceneConfig);
+            AssetDatabase.SaveAssets();
+        }
+        
         Debug.Log("AR компоненты настроены. Должен отображаться фид камеры.");
+    }
+    
+    // Вспомогательный метод для проверки и исправления ссылок в XROrigin
+    private void FixXROriginReferences(GameObject xrOriginObj)
+    {
+        if (xrOriginObj == null) return;
+        
+        XROrigin xrOrigin = xrOriginObj.GetComponent<XROrigin>();
+        if (xrOrigin == null) return;
+        
+        // Проверяем и исправляем ссылку на Camera
+        if (xrOrigin.Camera == null)
+        {
+            // Ищем камеру в иерархии
+            Transform cameraOffsetTrans = xrOriginObj.transform.Find("Camera Offset");
+            if (cameraOffsetTrans != null)
+            {
+                Transform cameraTrans = cameraOffsetTrans.Find("AR Camera");
+                if (cameraTrans != null)
+                {
+                    Camera cam = cameraTrans.GetComponent<Camera>();
+                    if (cam != null)
+                    {
+                        xrOrigin.Camera = cam;
+                        Debug.Log("Ссылка на камеру в XROrigin была исправлена.");
+                    }
+                }
+                
+                // Проверяем и исправляем ссылку на Camera Floor Offset Object
+                if (xrOrigin.CameraFloorOffsetObject == null)
+                {
+                    xrOrigin.CameraFloorOffsetObject = cameraOffsetTrans.gameObject;
+                    Debug.Log("Ссылка на Camera Offset в XROrigin была исправлена.");
+                }
+            }
+        }
+        
+        // Применяем изменения
+        EditorUtility.SetDirty(xrOrigin);
+    }
+    
+    // Метод для настройки URP Renderer Feature
+    private void SetupURPRendererFeature()
+    {
+        // Ищем все URP активы в проекте
+        string[] guids = AssetDatabase.FindAssets("t:UniversalRenderPipelineAsset");
+        if (guids.Length == 0)
+        {
+            Debug.LogWarning("Не найдены URP активы в проекте. Убедитесь, что проект использует URP.");
+            return;
+        }
+        
+        foreach (string guid in guids)
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            UniversalRenderPipelineAsset urpAsset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(path);
+            
+            if (urpAsset != null)
+            {
+                // Получаем renderer data через рефлексию
+                ScriptableRendererData rendererData = GetRendererDataFromURP(urpAsset);
+                
+                if (rendererData != null)
+                {
+                    // Проверяем наличие WallPaintFeature
+                    bool hasWallPaintFeature = false;
+                    foreach (var feature in rendererData.rendererFeatures)
+                    {
+                        if (feature.GetType().Name == "WallPaintFeature")
+                        {
+                            hasWallPaintFeature = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!hasWallPaintFeature)
+                    {
+                        // Ищем тип WallPaintFeature
+                        System.Type wallPaintFeatureType = FindTypeInAllAssemblies("WallPaintFeature");
+                        if (wallPaintFeatureType != null && typeof(ScriptableRendererFeature).IsAssignableFrom(wallPaintFeatureType))
+                        {
+                            // Создаем новый экземпляр и добавляем его
+                            ScriptableRendererFeature feature = ScriptableObject.CreateInstance(wallPaintFeatureType) as ScriptableRendererFeature;
+                            if (feature != null)
+                            {
+                                // Добавляем через рефлексию, так как rendererFeatures только для чтения
+                                AddRendererFeatureToRendererData(rendererData, feature);
+                                
+                                // Сохраняем изменения
+                                EditorUtility.SetDirty(rendererData);
+                                AssetDatabase.SaveAssets();
+                                
+                                Debug.Log("WallPaintFeature добавлен в URP Renderer: " + path);
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            Debug.LogWarning("WallPaintFeature не найден в проекте. Добавьте его вручную.");
+                        }
+                    }
+                    else
+                    {
+                        Debug.Log("WallPaintFeature уже добавлен в URP Renderer: " + path);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Вспомогательный метод для получения ScriptableRendererData из URP Asset
+    private ScriptableRendererData GetRendererDataFromURP(UniversalRenderPipelineAsset urpAsset)
+    {
+        // Используем рефлексию для доступа к приватному полю m_RendererDataList
+        FieldInfo renderersField = typeof(UniversalRenderPipelineAsset).GetField("m_RendererDataList", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (renderersField != null)
+        {
+            var renderers = renderersField.GetValue(urpAsset) as ScriptableRendererData[];
+            if (renderers != null && renderers.Length > 0)
+            {
+                return renderers[0]; // Берем первый рендерер
+            }
+        }
+        
+        return null;
+    }
+    
+    // Вспомогательный метод для добавления feature в renderer data
+    private void AddRendererFeatureToRendererData(ScriptableRendererData rendererData, ScriptableRendererFeature feature)
+    {
+        // Получаем приватное поле m_RendererFeatures
+        FieldInfo field = typeof(ScriptableRendererData).GetField("m_RendererFeatures", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (field != null)
+        {
+            var features = field.GetValue(rendererData) as System.Collections.Generic.List<ScriptableRendererFeature>;
+            if (features != null)
+            {
+                // Добавляем feature и его имя
+                features.Add(feature);
+                AssetDatabase.AddObjectToAsset(feature, rendererData);
+                
+                // Называем feature
+                feature.name = "WallPaintFeature";
+            }
+        }
     }
     
     private void SetupUI(GameObject parent)
     {
+        // Пробуем использовать префаб UI из конфигурации
+        if (sceneConfig != null && sceneConfig.uiPrefab != null)
+        {
+            GameObject uiInstance = PrefabUtility.InstantiatePrefab(sceneConfig.uiPrefab, parent.transform) as GameObject;
+            Debug.Log("UI компоненты настроены из префаба.");
+            return;
+        }
+
         // Создаем Canvas
         GameObject canvas = new GameObject("Canvas");
         canvas.transform.SetParent(parent.transform);
@@ -285,6 +572,26 @@ public class SceneSetupUtility : EditorWindow
         
         // По умолчанию скрываем панель выбора цвета
         colorPickerPanel.SetActive(false);
+        
+        // Сохраняем Canvas как префаб, если его еще нет в конфигурации
+        if (sceneConfig != null && sceneConfig.uiPrefab == null)
+        {
+            string uiPrefabPath = "Assets/Prefabs/UI/MainCanvas.prefab";
+            
+            // Создаем директорию, если не существует
+            string prefabDirectory = Path.GetDirectoryName(uiPrefabPath);
+            if (!Directory.Exists(prefabDirectory))
+            {
+                Directory.CreateDirectory(prefabDirectory);
+            }
+            
+            // Сохраняем префаб
+            sceneConfig.uiPrefab = PrefabUtility.SaveAsPrefabAsset(canvas, uiPrefabPath);
+            
+            // Сохраняем конфигурацию
+            EditorUtility.SetDirty(sceneConfig);
+            AssetDatabase.SaveAssets();
+        }
         
         Debug.Log("UI компоненты настроены");
     }
@@ -369,8 +676,11 @@ public class SceneSetupUtility : EditorWindow
         // Добавляем компонент WallSegmentation
         Component segmentation = wallSegmentationObj.AddComponent(wallSegmentationType);
         
+        // Используем конфигурацию для настройки разрешения текстуры
+        Vector2Int resolution = (sceneConfig != null) ? sceneConfig.segmentationMaskResolution : new Vector2Int(256, 256);
+        
         // Создаем текстуру для маски сегментации
-        RenderTexture maskTexture = new RenderTexture(256, 256, 0, RenderTextureFormat.RFloat);
+        RenderTexture maskTexture = new RenderTexture(resolution.x, resolution.y, 0, RenderTextureFormat.RFloat);
         maskTexture.enableRandomWrite = true;
         maskTexture.Create();
         
@@ -380,13 +690,22 @@ public class SceneSetupUtility : EditorWindow
         // Назначаем ARCameraManager
         SetPrivateField(segmentation, "arCameraManager", cameraManager);
         
-        // Выдаем подробные инструкции пользователю
-        Debug.LogWarning(
-            "ВАЖНО: необходимо настроить модель сегментации стен!\n" +
-            "1. Найдите объект [Managers]/Wall Segmentation в сцене\n" +
-            "2. Назначьте вашу ONNX модель в поле Model Asset\n" +
-            "3. Если у вас нет модели, попробуйте использовать тестовую модель из директории Assets/Models/model.onnx"
-        );
+        // Если у нас есть модель в конфигурации, назначаем её
+        if (sceneConfig != null && sceneConfig.wallSegmentationModel != null)
+        {
+            SetPrivateField(segmentation, "modelAsset", sceneConfig.wallSegmentationModel);
+        }
+        
+        // Выдаем подробные инструкции пользователю только если модель не назначена
+        if (sceneConfig == null || sceneConfig.wallSegmentationModel == null)
+        {
+            Debug.LogWarning(
+                "ВАЖНО: необходимо настроить модель сегментации стен!\n" +
+                "1. Найдите объект [Managers]/Wall Segmentation в сцене\n" +
+                "2. Назначьте вашу ONNX модель в поле Model Asset\n" +
+                "3. Если у вас нет модели, попробуйте использовать тестовую модель из директории Assets/Models/model.onnx"
+            );
+        }
         
         Debug.Log("Компонент сегментации стен настроен");
         
@@ -407,43 +726,68 @@ public class SceneSetupUtility : EditorWindow
             // Добавляем компонент WallPaintEffect
             Component paintEffect = wallPaintEffectObj.AddComponent(wallPaintEffectType);
             
-            // Создаем материал для шейдера перекраски
-            Shader wallPaintShader = Shader.Find("Custom/WallPaint");
-            if (wallPaintShader != null)
+            // Используем материал из конфигурации, если он есть
+            if (sceneConfig != null && sceneConfig.wallPaintMaterial != null)
             {
-                Material wallPaintMaterial = new Material(wallPaintShader);
-                
-                // Настраиваем материал
-                wallPaintMaterial.SetColor("_PaintColor", Color.red); // Используем красный цвет по умолчанию для лучшей видимости
-                wallPaintMaterial.SetFloat("_BlendFactor", 0.7f);
-                
-                // Назначаем материал и ссылку на WallSegmentation
-                SetPrivateField(paintEffect, "wallPaintMaterial", wallPaintMaterial);
-                SetPrivateField(paintEffect, "wallSegmentation", segmentation);
-                
-                // Сохраняем материал в проект
-                string materialPath = "Assets/Materials/WallPaint.mat";
-                string materialDirectory = Path.GetDirectoryName(materialPath);
-                if (!Directory.Exists(materialDirectory))
-                {
-                    Directory.CreateDirectory(materialDirectory);
-                }
-                
-                AssetDatabase.CreateAsset(wallPaintMaterial, materialPath);
-                AssetDatabase.SaveAssets();
-                
-                // Выводим инструкцию по настройке URP
-                Debug.LogWarning(
-                    "ВАЖНО: требуется настройка URP Renderer!\n" +
-                    "1. Откройте Project Settings > Graphics\n" +
-                    "2. Выберите используемый URP Asset и нажмите Edit\n" +
-                    "3. В Renderer Features нажмите Add и выберите WallPaintFeature\n" +
-                    "4. Сохраните изменения"
-                );
+                SetPrivateField(paintEffect, "wallPaintMaterial", sceneConfig.wallPaintMaterial);
             }
             else
             {
-                Debug.LogError("Шейдер Custom/WallPaint не найден. Создайте шейдер для перекраски стен.");
+                // Создаем материал для шейдера перекраски
+                Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+                if (wallPaintShader != null)
+                {
+                    Material wallPaintMaterial = new Material(wallPaintShader);
+                    
+                    // Получаем цвет и коэффициент смешивания из конфигурации или используем значения по умолчанию
+                    Color paintColor = (sceneConfig != null) ? sceneConfig.defaultPaintColor : Color.red;
+                    float blendFactor = (sceneConfig != null) ? sceneConfig.defaultBlendFactor : 0.7f;
+                    
+                    // Настраиваем материал
+                    wallPaintMaterial.SetColor("_PaintColor", paintColor);
+                    wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
+                    
+                    // Назначаем материал и ссылку на WallSegmentation
+                    SetPrivateField(paintEffect, "wallPaintMaterial", wallPaintMaterial);
+                    SetPrivateField(paintEffect, "wallSegmentation", segmentation);
+                    
+                    // Сохраняем материал в проект
+                    string materialPath = "Assets/Materials/WallPaint.mat";
+                    string materialDirectory = Path.GetDirectoryName(materialPath);
+                    if (!Directory.Exists(materialDirectory))
+                    {
+                        Directory.CreateDirectory(materialDirectory);
+                    }
+                    
+                    Material savedMaterial = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+                    if (savedMaterial == null)
+                    {
+                        AssetDatabase.CreateAsset(wallPaintMaterial, materialPath);
+                        savedMaterial = wallPaintMaterial;
+                    }
+                    AssetDatabase.SaveAssets();
+                    
+                    // Обновляем конфигурацию
+                    if (sceneConfig != null)
+                    {
+                        sceneConfig.wallPaintMaterial = savedMaterial;
+                        EditorUtility.SetDirty(sceneConfig);
+                        AssetDatabase.SaveAssets();
+                    }
+                    
+                    // Выводим инструкцию по настройке URP
+                    Debug.LogWarning(
+                        "ВАЖНО: требуется настройка URP Renderer!\n" +
+                        "1. Откройте Project Settings > Graphics\n" +
+                        "2. Выберите используемый URP Asset и нажмите Edit\n" +
+                        "3. В Renderer Features нажмите Add и выберите WallPaintFeature\n" +
+                        "4. Сохраните изменения"
+                    );
+                }
+                else
+                {
+                    Debug.LogError("Шейдер Custom/WallPaint не найден. Создайте шейдер для перекраски стен.");
+                }
             }
         }
     }
@@ -481,5 +825,118 @@ public class SceneSetupUtility : EditorWindow
         {
             Debug.LogWarning($"Поле {fieldName} не найдено в типе {target.GetType().Name}");
         }
+    }
+
+    private void CreateWallPaintResources()
+    {
+        // Проверяем наличие директории Resources/Materials
+        string materialsDir = "Assets/Resources/Materials";
+        if (!Directory.Exists(materialsDir))
+        {
+            Directory.CreateDirectory(materialsDir);
+        }
+        
+        // Создаем шейдер
+        string shaderPath = materialsDir + "/WallPaint.shader";
+        string shaderContent = @"Shader ""Custom/WallPaint""
+{
+    Properties
+    {
+        _MainTex (""Texture"", 2D) = ""white"" {}
+        _PaintColor (""Paint Color"", Color) = (1,0,0,1)
+        _BlendFactor (""Blend Factor"", Range(0,1)) = 0.5
+        _SegmentationMask (""Segmentation Mask"", 2D) = ""black"" {}
+    }
+    SubShader
+    {
+        Tags { ""RenderType""=""Opaque"" ""RenderPipeline"" = ""UniversalPipeline"" }
+        LOD 100
+
+        Pass
+        {
+            HLSLPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile _ USE_MASK
+
+            #include ""Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl""
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                float2 uv : TEXCOORD0;
+            };
+
+            struct Varyings
+            {
+                float2 uv : TEXCOORD0;
+                float4 positionHCS : SV_POSITION;
+            };
+
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
+            TEXTURE2D(_SegmentationMask);
+            SAMPLER(sampler_SegmentationMask);
+            
+            half4 _PaintColor;
+            float _BlendFactor;
+            float4 _MainTex_ST;
+
+            Varyings vert(Attributes IN)
+            {
+                Varyings OUT;
+                OUT.positionHCS = TransformObjectToHClip(IN.positionOS.xyz);
+                OUT.uv = TRANSFORM_TEX(IN.uv, _MainTex);
+                return OUT;
+            }
+
+            half4 frag(Varyings IN) : SV_Target
+            {
+                half4 color = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv);
+                
+                #ifdef USE_MASK
+                // Используем маску сегментации для определения области покраски
+                float mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
+                
+                // Применяем цвет только в области стен
+                if (mask > 0.1)
+                {
+                    color = lerp(color, _PaintColor, _BlendFactor * mask);
+                }
+                #else
+                // Без маски - просто смешиваем цвета
+                color = lerp(color, _PaintColor, _BlendFactor);
+                #endif
+                
+                return color;
+            }
+            ENDHLSL
+        }
+    }
+    FallBack ""Hidden/Universal Render Pipeline/FallbackError""
+}";
+
+        File.WriteAllText(shaderPath, shaderContent);
+        AssetDatabase.ImportAsset(shaderPath);
+        
+        // Получаем созданный шейдер
+        Shader wallPaintShader = AssetDatabase.LoadAssetAtPath<Shader>(shaderPath);
+        if (wallPaintShader == null)
+        {
+            Debug.LogError("Не удалось создать шейдер для перекраски стен!");
+            return;
+        }
+        
+        // Создаем материал на основе шейдера
+        Material wallPaintMaterial = new Material(wallPaintShader);
+        wallPaintMaterial.SetColor("_PaintColor", Color.red);
+        wallPaintMaterial.SetFloat("_BlendFactor", 0.7f);
+        
+        // Сохраняем материал в проект
+        string materialPath = materialsDir + "/WallPaint.mat";
+        AssetDatabase.CreateAsset(wallPaintMaterial, materialPath);
+        AssetDatabase.SaveAssets();
+        
+        Debug.Log("Ресурсы для перекраски стен созданы успешно.");
     }
 } 

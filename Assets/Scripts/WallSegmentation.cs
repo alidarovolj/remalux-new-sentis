@@ -35,10 +35,38 @@ public class WallSegmentation : MonoBehaviour
     private bool isInitialized = false;
     
     // Публичное свойство для доступа к маске сегментации стен
-    public RenderTexture SegmentationMaskTexture => segmentationMaskTexture;
+    public RenderTexture SegmentationMaskTexture
+    {
+        get
+        {
+            // Проверяем, что текстура существует и правильно инициализирована
+            if (segmentationMaskTexture == null)
+            {
+                CreateMaskTexture();
+            }
+            else if (!segmentationMaskTexture.IsCreated())
+            {
+                segmentationMaskTexture.Create();
+            }
+            return segmentationMaskTexture;
+        }
+    }
     
     // Публичное свойство для проверки инициализации компонента
-    public bool IsInitialized => isInitialized;
+    public bool IsInitialized => isInitialized && runtimeModel != null && engine != null;
+    
+    private void CreateMaskTexture()
+    {
+        if (segmentationMaskTexture != null && segmentationMaskTexture.IsCreated())
+        {
+            segmentationMaskTexture.Release();
+        }
+        
+        segmentationMaskTexture = new RenderTexture(OUTPUT_WIDTH, OUTPUT_HEIGHT, 0, RenderTextureFormat.RFloat);
+        segmentationMaskTexture.enableRandomWrite = true;
+        segmentationMaskTexture.Create();
+        Debug.Log("SegmentationMaskTexture created or recreated successfully");
+    }
     
     private void Start()
     {
@@ -49,31 +77,53 @@ public class WallSegmentation : MonoBehaviour
             return;
         }
 
-        // Инициализация модели Sentis
-        runtimeModel = ModelLoader.Load(modelAsset);
-        engine = new Worker(runtimeModel, BackendType.GPUCompute);
-        
-        // Создаем входной тензор заранее
-        inputTensor = new Tensor<float>(new TensorShape(1, INPUT_CHANNELS, INPUT_HEIGHT, INPUT_WIDTH));
-        
-        // Создаем временную текстуру для преобразования изображения камеры
-        tempTexture = new Texture2D(INPUT_WIDTH, INPUT_HEIGHT, TextureFormat.RGB24, false);
-        
-        // Создаем выходную текстуру для маски, если она не назначена
-        if (segmentationMaskTexture == null)
+        try
         {
-            segmentationMaskTexture = new RenderTexture(OUTPUT_WIDTH, OUTPUT_HEIGHT, 0, RenderTextureFormat.RFloat);
-            segmentationMaskTexture.enableRandomWrite = true;
-            segmentationMaskTexture.Create();
-            Debug.Log("segmentationMaskTexture created dynamically.");
+            // Инициализация модели Sentis
+            runtimeModel = ModelLoader.Load(modelAsset);
+            engine = new Worker(runtimeModel, BackendType.GPUCompute);
+            
+            // Создаем входной тензор заранее
+            inputTensor = new Tensor<float>(new TensorShape(1, INPUT_CHANNELS, INPUT_HEIGHT, INPUT_WIDTH));
+            
+            // Создаем временную текстуру для преобразования изображения камеры
+            tempTexture = new Texture2D(INPUT_WIDTH, INPUT_HEIGHT, TextureFormat.RGB24, false);
+            
+            // Создаем выходную текстуру для маски, если она не назначена
+            if (segmentationMaskTexture == null)
+            {
+                CreateMaskTexture();
+            }
+            else if (!segmentationMaskTexture.IsCreated())
+            {
+                segmentationMaskTexture.Create();
+            }
+            
+            // Инициализация маски стен
+            wallMaskTexture = new Texture2D(OUTPUT_WIDTH, OUTPUT_HEIGHT, TextureFormat.R8, false);
+            wallMaskColors = new Color32[OUTPUT_WIDTH * OUTPUT_HEIGHT];
+            
+            // Заполняем маску нулями
+            for (int i = 0; i < wallMaskColors.Length; i++)
+            {
+                wallMaskColors[i] = new Color32(0, 0, 0, 255);
+            }
+            wallMaskTexture.SetPixels32(wallMaskColors);
+            wallMaskTexture.Apply();
+            
+            // Копируем пустую маску в RenderTexture
+            Graphics.Blit(wallMaskTexture, segmentationMaskTexture);
+            
+            // Устанавливаем флаг инициализации
+            isInitialized = true;
+            
+            Debug.Log("WallSegmentation initialized successfully");
         }
-        
-        // Инициализация маски стен
-        wallMaskTexture = new Texture2D(OUTPUT_WIDTH, OUTPUT_HEIGHT, TextureFormat.R8, false);
-        wallMaskColors = new Color32[OUTPUT_WIDTH * OUTPUT_HEIGHT];
-        
-        // Устанавливаем флаг инициализации
-        isInitialized = true;
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error initializing WallSegmentation: {e.Message}");
+            this.enabled = false;
+        }
     }
     
     private void OnDestroy()

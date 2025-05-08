@@ -24,6 +24,17 @@ public class WallPaintFeature : ScriptableRendererFeature
             return;
         }
         
+        // Проверяем, что материал содержит необходимые текстуры
+        if (passMaterial.HasProperty("_SegmentationMask"))
+        {
+            Texture segMask = passMaterial.GetTexture("_SegmentationMask");
+            if (segMask == null)
+            {
+                // Пропускаем добавление паса, если маска сегментации еще не готова
+                return;
+            }
+        }
+        
         // Устанавливаем renderer для использования в Execute, не вызываем cameraColorTargetHandle здесь
         wallPaintPass.SetRenderer(renderer);
         
@@ -49,6 +60,7 @@ public class WallPaintRenderPass : ScriptableRenderPass
     private RTHandle tempTexture;
     private string profilerTag = "WallPaint Pass";
     private ScriptableRenderer renderer;
+    private bool isSetupComplete = false;
     
     public WallPaintRenderPass(Material material)
     {
@@ -68,18 +80,36 @@ public class WallPaintRenderPass : ScriptableRenderPass
     
     public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
     {
+        isSetupComplete = false;
+        
+        if (renderer == null || wallPaintMaterial == null)
+        {
+            return;
+        }
+        
         // Выделяем временный RTHandle
         var desc = renderingData.cameraData.cameraTargetDescriptor;
         desc.depthBufferBits = 0; // Глубина не нужна для blit эффекта
         RenderingUtils.ReAllocateIfNeeded(ref tempTexture, desc, FilterMode.Bilinear, TextureWrapMode.Clamp, name: "_TempWallPaintTexture");
+        
+        isSetupComplete = tempTexture != null;
     }
 
     public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
     {
-        if (wallPaintMaterial == null || renderer == null)
+        if (!isSetupComplete || wallPaintMaterial == null || renderer == null)
         {
-            Debug.LogError("WallPaintRenderPass is not properly configured.");
             return;
+        }
+        
+        // Проверяем, что материал содержит все необходимые текстуры и они не null
+        if (wallPaintMaterial.HasProperty("_SegmentationMask"))
+        {
+            Texture segMask = wallPaintMaterial.GetTexture("_SegmentationMask");
+            if (segMask == null)
+            {
+                return;
+            }
         }
         
         // Получаем цветовой буфер только внутри метода Execute
@@ -87,7 +117,6 @@ public class WallPaintRenderPass : ScriptableRenderPass
         
         if (source == null || tempTexture == null)
         {
-            Debug.LogError("Source or target texture is null in WallPaintRenderPass.");
             return;
         }
         
@@ -95,13 +124,53 @@ public class WallPaintRenderPass : ScriptableRenderPass
         
         using (new ProfilingScope(cmd, profilingSampler))
         {
-            // Blit из source в temp с материалом, затем из temp обратно в source
-            Blitter.BlitCameraTexture(cmd, source, tempTexture, wallPaintMaterial, 0);
-            Blitter.BlitCameraTexture(cmd, tempTexture, source);
+            try
+            {
+                // Blit из source в temp с материалом, затем из temp обратно в source
+                // Используем безопасный вариант с обработкой ошибок
+                SafeBlitCameraTexture(cmd, source, tempTexture, wallPaintMaterial, 0);
+                SafeBlitCameraTexture(cmd, tempTexture, source);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error during WallPaintRenderPass execution: {e.Message}");
+                // Если произошла ошибка, просто прерываем выполнение
+                return;
+            }
         }
         
         context.ExecuteCommandBuffer(cmd);
         CommandBufferPool.Release(cmd);
+    }
+    
+    // Безопасный метод для Blit с проверками на null
+    private void SafeBlitCameraTexture(CommandBuffer cmd, RTHandle source, RTHandle destination, Material material = null, int pass = 0)
+    {
+        if (source == null || destination == null)
+        {
+            Debug.LogWarning("Source or destination RTHandle is null in SafeBlitCameraTexture");
+            return;
+        }
+        
+        // Используем Blit с RTHandle корректно
+        if (material != null)
+        {
+            // Проверяем, что все текстуры в материале не null
+            if (material.HasProperty("_SegmentationMask") && material.GetTexture("_SegmentationMask") == null)
+            {
+                // Если маска отсутствует, используем простой Blit без материала
+                Blit(cmd, source, destination);
+                return;
+            }
+            
+            // Используем метод Blit из класса ScriptableRenderPass вместо прямого вызова cmd.Blit
+            Blit(cmd, source, destination, material, pass);
+        }
+        else
+        {
+            // Простой Blit без материала
+            Blit(cmd, source, destination);
+        }
     }
 
     public override void OnCameraCleanup(CommandBuffer cmd)
@@ -112,5 +181,7 @@ public class WallPaintRenderPass : ScriptableRenderPass
             tempTexture.Release();
             tempTexture = null;
         }
+        
+        isSetupComplete = false;
     }
 } 
