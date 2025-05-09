@@ -2,145 +2,103 @@ Shader "Custom/WallPaint"
 {
     Properties
     {
-        _MainTex ("Camera Texture", 2D) = "white" {}
-        _MaskTex ("Segmentation Mask", 2D) = "white" {}
-        _PaintColor ("Paint Color", Color) = (1,1,1,1)
+        _MainTex ("Texture", 2D) = "white" {}
+        _PaintColor ("Paint Color", Color) = (1,0,0,1)
         _BlendFactor ("Blend Factor", Range(0,1)) = 0.5
+        _SegmentationMask ("Segmentation Mask", 2D) = "black" {}
     }
-    
     SubShader
     {
-        Tags { "RenderType"="Opaque" }
+        Tags { "RenderType"="Opaque" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
         
+        // Добавляем Cull Off для iOS
+        Cull Off
+        ZWrite On
+        ZTest LEqual
+
         Pass
         {
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #include "UnityCG.cginc"
+            #pragma multi_compile _ USE_MASK
             
-            // Вспомогательные функции для конвертации цветовых пространств вынесены за пределы frag
-            float HueToRGB(float p, float q, float t)
-            {
-                if (t < 0.0) t += 1.0;
-                if (t > 1.0) t -= 1.0;
-                if (t < 1.0/6.0) return p + (q - p) * 6.0 * t;
-                if (t < 1.0/2.0) return q;
-                if (t < 2.0/3.0) return p + (q - p) * (2.0/3.0 - t) * 6.0;
-                return p;
-            }
+            // Добавляем специфичные для платформы прагмы
+            #pragma multi_compile_instancing
+            #pragma prefer_hlslcc gles
+            #pragma exclude_renderers d3d11_9x
+            #pragma target 2.0
 
-            float3 HSLToRGB(float3 hsl)
-            {
-                float3 rgb = float3(0.0, 0.0, 0.0);
-                
-                if (hsl.y == 0.0)
-                {
-                    rgb = float3(hsl.z, hsl.z, hsl.z); // Серый цвет
-                }
-                else
-                {
-                    float q = (hsl.z < 0.5) ? (hsl.z * (1.0 + hsl.y)) : (hsl.z + hsl.y - hsl.z * hsl.y);
-                    float p = 2.0 * hsl.z - q;
-                    
-                    rgb.r = HueToRGB(p, q, hsl.x + 1.0/3.0);
-                    rgb.g = HueToRGB(p, q, hsl.x);
-                    rgb.b = HueToRGB(p, q, hsl.x - 1.0/3.0);
-                }
-                
-                return rgb;
-            }
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-            float3 RGBToHSL(float3 rgb)
+            struct Attributes
             {
-                float3 hsl = float3(0.0, 0.0, 0.0); // h, s, l
-                float minVal = min(min(rgb.r, rgb.g), rgb.b);
-                float maxVal = max(max(rgb.r, rgb.g), rgb.b);
-                float delta = maxVal - minVal;
-                
-                hsl.z = (maxVal + minVal) / 2.0; // Яркость (Luminance)
-                
-                if (delta == 0.0) // Если это серый цвет
-                {
-                    hsl.x = 0.0; // Оттенок (Hue)
-                    hsl.y = 0.0; // Насыщенность (Saturation)
-                }
-                else
-                {
-                    hsl.y = (hsl.z < 0.5) ? (delta / (maxVal + minVal)) : (delta / (2.0 - maxVal - minVal));
-                    
-                    float deltaR = (((maxVal - rgb.r) / 6.0) + (delta / 2.0)) / delta;
-                    float deltaG = (((maxVal - rgb.g) / 6.0) + (delta / 2.0)) / delta;
-                    float deltaB = (((maxVal - rgb.b) / 6.0) + (delta / 2.0)) / delta;
-                    
-                    if (rgb.r == maxVal)
-                        hsl.x = deltaB - deltaG;
-                    else if (rgb.g == maxVal)
-                        hsl.x = (1.0 / 3.0) + deltaR - deltaB;
-                    else // rgb.b == maxVal
-                        hsl.x = (2.0 / 3.0) + deltaG - deltaR;
-                        
-                    if (hsl.x < 0.0)
-                        hsl.x += 1.0;
-                    if (hsl.x > 1.0)
-                        hsl.x -= 1.0;
-                }
-                
-                return hsl;
-            }
-            
-            struct appdata
-            {
-                float4 vertex : POSITION;
+                float4 positionOS : POSITION;
                 float2 uv : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
-            
-            struct v2f
+
+            struct Varyings
             {
                 float2 uv : TEXCOORD0;
-                float4 vertex : SV_POSITION;
+                float4 positionHCS : SV_POSITION;
+                UNITY_VERTEX_OUTPUT_STEREO
             };
+
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
+            TEXTURE2D(_SegmentationMask);
+            SAMPLER(sampler_SegmentationMask);
             
-            sampler2D _MainTex;
-            sampler2D _MaskTex;
-            float4 _PaintColor;
+            half4 _PaintColor;
             float _BlendFactor;
-            
-            v2f vert (appdata v)
-            {
-                v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.uv = v.uv;
-                return o;
-            }
-            
-            float4 frag (v2f i) : SV_Target
-            {
-                // Получаем оригинальный цвет с камеры
-                float4 originalColor = tex2D(_MainTex, i.uv);
-                
-                // Получаем значение маски
-                float maskValue = tex2D(_MaskTex, i.uv).r;
-                
-                // Конвертируем оригинальный цвет в HSL 
-                float3 originalHSL = RGBToHSL(originalColor.rgb);
-                // Конвертируем цвет покраски в HSL
-                float3 paintHSL = RGBToHSL(_PaintColor.rgb);
+            float4 _MainTex_ST;
 
-                // Создаем новый HSL, используя Hue и Saturation от цвета покраски, и Luminance от оригинала
-                float3 newHSL = float3(paintHSL.x, paintHSL.y, originalHSL.z);
+            Varyings vert(Attributes IN)
+            {
+                Varyings OUT;
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
                 
-                // Конвертируем новый HSL обратно в RGB
-                float3 newColorRGB = HSLToRGB(newHSL);
-                
-                // Смешиваем цвета на основе маски и фактора смешивания
-                // BlendFactor определяет, насколько сильно применяется эффект покраски
-                float3 finalColor = lerp(originalColor.rgb, newColorRGB, maskValue * _BlendFactor);
-                
-                return float4(finalColor, originalColor.a); // Сохраняем альфа-канал оригинала
+                OUT.positionHCS = TransformObjectToHClip(IN.positionOS.xyz);
+                OUT.uv = TRANSFORM_TEX(IN.uv, _MainTex);
+                return OUT;
             }
-            ENDCG
+
+            half4 frag(Varyings IN) : SV_Target
+            {
+                UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
+                
+                // Получаем цвет исходного изображения
+                half4 color = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv);
+                
+                #ifdef USE_MASK
+                // Проверяем доступность текстуры маски
+                float mask = 0;
+                
+                // Используем маску сегментации для определения области покраски
+                #if defined(SHADER_API_METAL) || defined(SHADER_API_VULKAN) || defined(SHADER_API_GLES3)
+                    // Осторожное семплирование для мобильных платформ
+                    mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
+                #else
+                    mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
+                #endif
+                
+                // Применяем цвет только в области стен (если маска > 0.1)
+                if (mask > 0.1)
+                {
+                    color = lerp(color, _PaintColor, _BlendFactor * mask);
+                }
+                #else
+                // Без маски - просто смешиваем цвета
+                color = lerp(color, _PaintColor, _BlendFactor);
+                #endif
+                
+                return color;
+            }
+            ENDHLSL
         }
     }
+    FallBack "Hidden/Universal Render Pipeline/FallbackError"
 } 

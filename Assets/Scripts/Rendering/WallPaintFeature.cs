@@ -8,22 +8,63 @@ public class WallPaintFeature : ScriptableRendererFeature
 {
     public Material passMaterial; // Материал, доступный для настройки из редактора
     private WallPaintRenderPass wallPaintPass;
-    
+
     public override void Create()
     {
+        // Проверяем наличие материала и пытаемся загрузить его, если не задан
+        if (passMaterial == null)
+        {
+            LoadDefaultMaterial();
+        }
+
         // Передаем материал в конструктор
         wallPaintPass = new WallPaintRenderPass(passMaterial);
-        wallPaintPass.renderPassEvent = RenderPassEvent.AfterRenderingTransparents; 
+        wallPaintPass.renderPassEvent = RenderPassEvent.AfterRenderingTransparents;
     }
-    
+
+    // Пытаемся загрузить материал по умолчанию
+    private void LoadDefaultMaterial()
+    {
+        // Пробуем найти в Resources
+        passMaterial = Resources.Load<Material>("Materials/WallPaint");
+
+        if (passMaterial == null)
+        {
+            // Пробуем найти по шейдеру
+            Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+            if (wallPaintShader != null)
+            {
+                passMaterial = new Material(wallPaintShader);
+                passMaterial.SetColor("_PaintColor", Color.red);
+                passMaterial.SetFloat("_BlendFactor", 0.7f);
+                Debug.Log("WallPaintFeature: Created default material with Custom/WallPaint shader");
+            }
+            else
+            {
+                Debug.LogWarning("WallPaintFeature: Shader 'Custom/WallPaint' not found. Please create or assign material manually.");
+            }
+        }
+        else
+        {
+            Debug.Log("WallPaintFeature: Loaded default material from Resources/Materials/WallPaint");
+        }
+    }
+
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
     {
-        if (passMaterial == null) 
+        // Еще раз пробуем загрузить материал, если по какой-то причине он не был загружен
+        if (passMaterial == null)
         {
-            Debug.LogWarningFormat("Missing Pass Material for WallPaintFeature. Disabling pass.");
-            return;
+            LoadDefaultMaterial();
+
+            // Если материал все еще не загружен, выходим
+            if (passMaterial == null)
+            {
+                Debug.LogWarningFormat("Missing Pass Material for WallPaintFeature. Disabling pass.");
+                return;
+            }
         }
-        
+
         // Проверяем, что материал содержит необходимые текстуры
         if (passMaterial.HasProperty("_SegmentationMask"))
         {
@@ -34,21 +75,24 @@ public class WallPaintFeature : ScriptableRendererFeature
                 return;
             }
         }
-        
+
         // Устанавливаем renderer для использования в Execute, не вызываем cameraColorTargetHandle здесь
         wallPaintPass.SetRenderer(renderer);
-        
+
         // Добавляем рендер-пасс
         renderer.EnqueuePass(wallPaintPass);
     }
 
     // Метод для обновления материала
-    public void SetPassMaterial(Material material) 
+    public void SetPassMaterial(Material material)
     {
-        this.passMaterial = material;
-        if (wallPaintPass != null) 
+        if (material != null)
         {
-            wallPaintPass.SetMaterial(material);
+            this.passMaterial = material;
+            if (wallPaintPass != null)
+            {
+                wallPaintPass.SetMaterial(material);
+            }
         }
     }
 }
@@ -61,37 +105,37 @@ public class WallPaintRenderPass : ScriptableRenderPass
     private string profilerTag = "WallPaint Pass";
     private ScriptableRenderer renderer;
     private bool isSetupComplete = false;
-    
+
     public WallPaintRenderPass(Material material)
     {
         this.wallPaintMaterial = material;
         profilingSampler = new ProfilingSampler(profilerTag);
     }
 
-    public void SetMaterial(Material material) 
+    public void SetMaterial(Material material)
     {
         this.wallPaintMaterial = material;
     }
-    
+
     public void SetRenderer(ScriptableRenderer renderer)
     {
         this.renderer = renderer;
     }
-    
+
     public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
     {
         isSetupComplete = false;
-        
+
         if (renderer == null || wallPaintMaterial == null)
         {
             return;
         }
-        
+
         // Выделяем временный RTHandle
         var desc = renderingData.cameraData.cameraTargetDescriptor;
         desc.depthBufferBits = 0; // Глубина не нужна для blit эффекта
         RenderingUtils.ReAllocateIfNeeded(ref tempTexture, desc, FilterMode.Bilinear, TextureWrapMode.Clamp, name: "_TempWallPaintTexture");
-        
+
         isSetupComplete = tempTexture != null;
     }
 
@@ -101,7 +145,7 @@ public class WallPaintRenderPass : ScriptableRenderPass
         {
             return;
         }
-        
+
         // Проверяем, что материал содержит все необходимые текстуры и они не null
         if (wallPaintMaterial.HasProperty("_SegmentationMask"))
         {
@@ -111,17 +155,17 @@ public class WallPaintRenderPass : ScriptableRenderPass
                 return;
             }
         }
-        
+
         // Получаем цветовой буфер только внутри метода Execute
         RTHandle source = renderer.cameraColorTargetHandle;
-        
+
         if (source == null || tempTexture == null)
         {
             return;
         }
-        
+
         CommandBuffer cmd = CommandBufferPool.Get(profilerTag);
-        
+
         using (new ProfilingScope(cmd, profilingSampler))
         {
             try
@@ -138,11 +182,11 @@ public class WallPaintRenderPass : ScriptableRenderPass
                 return;
             }
         }
-        
+
         context.ExecuteCommandBuffer(cmd);
         CommandBufferPool.Release(cmd);
     }
-    
+
     // Безопасный метод для Blit с проверками на null
     private void SafeBlitCameraTexture(CommandBuffer cmd, RTHandle source, RTHandle destination, Material material = null, int pass = 0)
     {
@@ -151,7 +195,7 @@ public class WallPaintRenderPass : ScriptableRenderPass
             Debug.LogWarning("Source or destination RTHandle is null in SafeBlitCameraTexture");
             return;
         }
-        
+
         // Используем Blit с RTHandle корректно
         if (material != null)
         {
@@ -162,7 +206,7 @@ public class WallPaintRenderPass : ScriptableRenderPass
                 Blit(cmd, source, destination);
                 return;
             }
-            
+
             // Используем метод Blit из класса ScriptableRenderPass вместо прямого вызова cmd.Blit
             Blit(cmd, source, destination, material, pass);
         }
@@ -181,7 +225,7 @@ public class WallPaintRenderPass : ScriptableRenderPass
             tempTexture.Release();
             tempTexture = null;
         }
-        
+
         isSetupComplete = false;
     }
-} 
+}
