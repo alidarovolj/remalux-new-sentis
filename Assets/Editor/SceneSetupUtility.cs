@@ -98,6 +98,23 @@ public class SceneSetupUtility : EditorWindow
 
         EditorGUILayout.Space();
 
+        // Кнопка для диагностики Sentis
+        EditorGUILayout.BeginHorizontal();
+
+        if (GUILayout.Button("Проверить Unity Sentis"))
+        {
+            DiagnoseSentis();
+        }
+
+        if (GUILayout.Button("Переустановить Sentis"))
+        {
+            ReinstallSentis();
+        }
+
+        EditorGUILayout.EndHorizontal();
+
+        EditorGUILayout.Space();
+
         // Чекбоксы для компонентов
         setupAR = EditorGUILayout.Toggle("Настроить AR компоненты", setupAR);
         setupUI = EditorGUILayout.Toggle("Настроить UI", setupUI);
@@ -2018,5 +2035,122 @@ public class SceneSetupUtility : EditorWindow
         initializerObj.AddComponent(uiInitializerType);
 
         Debug.Log("Добавлен UIInitializer для автоматической инициализации UI компонентов");
+    }
+
+    // Добавляем метод для диагностики Sentis
+    private void DiagnoseSentis()
+    {
+        Debug.Log("=== ЗАПУСК ДИАГНОСТИКИ UNITY SENTIS ===");
+
+        // Проверяем наличие Unity Sentis в проекте
+        bool isSentisInstalled = IsSentisInstalled();
+        Debug.Log($"Sentis установлен в проекте: {(isSentisInstalled ? "Да" : "Нет")}");
+
+        // Вызываем диагностику из SafeModelLoader
+        try
+        {
+            var diagMethod = Type.GetType("SafeModelLoader")?.GetMethod("DiagnoseSentisStatus",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+
+            if (diagMethod != null)
+            {
+                diagMethod.Invoke(null, null);
+            }
+            else
+            {
+                Debug.LogWarning("Метод диагностики SafeModelLoader.DiagnoseSentisStatus не найден");
+
+                // Выводим версию Sentis из PackageManager
+                UnityEditor.PackageManager.PackageInfo sentisPackage =
+                    UnityEditor.PackageManager.PackageInfo.FindForAssetPath("Packages/com.unity.sentis");
+
+                if (sentisPackage != null)
+                {
+                    Debug.Log($"Sentis найден через PackageManager: {sentisPackage.version}");
+                    EditorUtility.DisplayDialog("Информация о Unity Sentis",
+                        $"Unity Sentis версии {sentisPackage.version} установлен в проекте.\n\n" +
+                        $"Путь: {sentisPackage.resolvedPath}", "OK");
+                }
+                else
+                {
+                    Debug.LogWarning("Не удалось найти информацию о пакете Sentis через PackageManager API");
+
+                    // Ищем через поисковый запрос
+                    string sentisPath = UnityEditor.AssetDatabase.FindAssets("l:package com.unity.sentis").FirstOrDefault();
+                    Debug.Log($"Результат поиска Sentis через AssetDatabase: {sentisPath}");
+
+                    EditorUtility.DisplayDialog("Проблемы с Unity Sentis",
+                        "Не удалось найти информацию о Unity Sentis через стандартные API.\n\n" +
+                        "Возможные причины:\n" +
+                        "1. Пакет не установлен\n" +
+                        "2. Пакет установлен, но не загружен корректно\n" +
+                        "3. Проблема с версией Unity или API пакетов\n\n" +
+                        "Рекомендации:\n" +
+                        "- Переустановите пакет Unity Sentis через Package Manager\n" +
+                        "- Убедитесь, что версия Unity поддерживает Sentis\n" +
+                        "- Перезапустите Unity", "OK");
+                }
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Ошибка при диагностике Sentis: {e.Message}");
+            if (e.InnerException != null)
+            {
+                Debug.LogError($"Внутреннее исключение: {e.InnerException.Message}");
+            }
+        }
+    }
+
+    // Метод для переустановки Sentis
+    private void ReinstallSentis()
+    {
+        if (EditorUtility.DisplayDialog("Переустановить Unity Sentis",
+            "Это действие удалит и заново установит пакет Unity Sentis.\n\n" +
+            "ВНИМАНИЕ: Unity может перезапуститься после этой операции.\n" +
+            "Сохраните все изменения перед продолжением.\n\n" +
+            "Продолжить?", "Переустановить", "Отмена"))
+        {
+            try
+            {
+                string sentisVersion = "2.1.2"; // Указываем последнюю подтвержденно рабочую версию
+
+                // Получаем текущую версию из PackageManager если возможно
+                UnityEditor.PackageManager.PackageInfo sentisPackage =
+                    UnityEditor.PackageManager.PackageInfo.FindForAssetPath("Packages/com.unity.sentis");
+                if (sentisPackage != null)
+                {
+                    sentisVersion = sentisPackage.version;
+                }
+
+                Debug.Log($"Начинаем переустановку Unity Sentis {sentisVersion}...");
+
+                // Используем PackageManager API для удаления и установки
+                UnityEditor.PackageManager.Client.Remove("com.unity.sentis");
+                Debug.Log("Запрос на удаление отправлен. Ожидаем завершения...");
+
+                // Добавляем небольшую задержку перед установкой
+                EditorApplication.delayCall += () =>
+                {
+                    Debug.Log($"Устанавливаем Sentis {sentisVersion}...");
+                    UnityEditor.PackageManager.Client.Add($"com.unity.sentis@{sentisVersion}");
+
+                    // Показываем сообщение после установки
+                    EditorApplication.delayCall += () =>
+                    {
+                        EditorUtility.DisplayDialog("Переустановка Sentis",
+                            $"Запрос на переустановку Unity Sentis {sentisVersion} выполнен.\n\n" +
+                            "Если Unity не перезапустился автоматически, рекомендуется сделать это вручную для завершения установки.", "OK");
+                    };
+                };
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Ошибка при переустановке Sentis: {e.Message}");
+                EditorUtility.DisplayDialog("Ошибка",
+                    $"Не удалось переустановить Sentis: {e.Message}\n\n" +
+                    "Попробуйте установить пакет вручную через Window > Package Manager.", "OK");
+            }
+        }
     }
 }

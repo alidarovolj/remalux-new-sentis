@@ -110,7 +110,13 @@ public class AppInitializer : MonoBehaviour
 
                   // Показываем предупреждение
                   DialogInitializer.ShowModelLoadError(
-                      "Unity Sentis не обнаружен в проекте. Функции сегментации будут недоступны.");
+                      new ModelErrorInfo(
+                          "Unity Sentis",
+                          "Package",
+                          "Unity Sentis не обнаружен в проекте",
+                          "Функции сегментации будут недоступны. Установите пакет Unity Sentis через Package Manager."
+                      )
+                  );
             }
             else
             {

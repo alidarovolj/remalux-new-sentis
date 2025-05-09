@@ -4,6 +4,7 @@ using UnityEngine.Rendering.Universal;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Collections;
+using System.Linq;
 
 [RequireComponent(typeof(Camera))]
 public class WallPaintEffect : MonoBehaviour
@@ -68,6 +69,13 @@ public class WallPaintEffect : MonoBehaviour
     // Добавляем метод с задержкой для iOS
     private IEnumerator InitializeWithDelay()
     {
+        // Проверяем флаг инициализации
+        if (!shouldInitialize)
+        {
+            Debug.Log("WallPaintEffect: инициализация отложена, так как shouldInitialize = false");
+            yield break;
+        }
+
         // Ждем один кадр, чтобы убедиться что AR сессия инициализирована
         yield return null;
 
@@ -281,85 +289,77 @@ public class WallPaintEffect : MonoBehaviour
 
     private void Update()
     {
-        // Проверяем готовность AR сессии (только для iOS)
-#if UNITY_IOS && !UNITY_EDITOR
-        if (!shouldInitialize && arSessionManager != null)
+        if (!isInitialized) return;
+
+        // Проверяем, что у нас есть сегментация и она готова
+        if (wallSegmentation != null)
         {
-            if (arSessionManager.IsSessionInitialized())
+            if (!isSegmentationReady && wallSegmentation.IsModelInitialized)
             {
-                shouldInitialize = true;
-                if (!isInitialized)
+                // Сегментация только что стала доступна
+                isSegmentationReady = true;
+                Debug.Log("WallPaintEffect: Сегментация стен готова к использованию");
+
+                // Получаем текстуру из сегментации и устанавливаем как параметр материала
+                if (wallSegmentation.segmentationMaskTexture != null && wallPaintMaterial != null)
                 {
-                    StartCoroutine(InitializeWithDelay());
-                }
-            }
-        }
-#endif
+                    // Устанавливаем маску сегментации в материал
+                    wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
 
-        // Если фича не была найдена при старте, попробуем найти ее сейчас
-        if (wallPaintFeature == null)
-        {
-            FindAndSetupWallPaintFeature();
-        }
+                    // Log для отладки
+                    Debug.Log($"WallPaintEffect: Установлена маска сегментации размером {wallSegmentation.segmentationMaskTexture.width}x{wallSegmentation.segmentationMaskTexture.height}");
 
-        // Проверяем готовность сегментации
-        isSegmentationReady = (wallSegmentation != null && wallSegmentation.IsInitialized &&
-                              wallSegmentation.SegmentationMaskTexture != null);
-
-        // Проверяем наличие маски сегментации стен и обновляем материал
-        if (useMask && isSegmentationReady)
-        {
-            if (wallPaintMaterial != null)
-            {
-                // Проверяем, что материал имеет свойство _SegmentationMask
-                if (!wallPaintMaterial.HasProperty("_SegmentationMask"))
-                {
-                    Debug.LogError("WallPaint material doesn't have _SegmentationMask property. Make sure the shader is correct.");
-                    // Пытаемся исправить проблему, переключившись на другой материал
-                    TryRecreateWallPaintMaterial();
-                    return;
-                }
-
-                // Устанавливаем текстуру маски
-                wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.SegmentationMaskTexture);
-                wallPaintMaterial.EnableKeyword("USE_MASK");
-
-                // Дополнительный вывод для отладки
-#if UNITY_IOS && !UNITY_EDITOR
-                // Проверяем, является ли маска валидной
-                RenderTexture mask = wallSegmentation.SegmentationMaskTexture;
-                if (mask != null && mask.IsCreated())
-                {
-                    // Активируем использование маски
-                    Debug.Log("Mask texture set: " + mask.width + "x" + mask.height);
+                    // Проверяем, что материал доступен в WallPaintFeature
+                    if (wallPaintFeature != null && !ReferenceEquals(wallPaintFeature.passMaterial, wallPaintMaterial))
+                    {
+                        wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+                    }
                 }
                 else
                 {
-                    Debug.LogWarning("Segmentation mask texture is not ready or not created");
-                    wallPaintMaterial.DisableKeyword("USE_MASK");
+                    Debug.LogError("WallPaintEffect: Маска сегментации недоступна, хотя сегментация готова");
                 }
-#endif
             }
-        }
-        else
-        {
-            // Если маска не используется или недоступна, отключаем ее
-            if (wallPaintMaterial != null)
+            else if (isSegmentationReady)
             {
-                wallPaintMaterial.DisableKeyword("USE_MASK");
+                // Сегментация уже была готова, проверяем, что маска обновлена в материале
+                if (wallSegmentation.segmentationMaskTexture != null && wallPaintMaterial != null &&
+                    wallPaintMaterial.GetTexture("_SegmentationMask") != wallSegmentation.segmentationMaskTexture)
+                {
+                    // Обновляем маску
+                    wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
+
+                    // Обновляем материал в WallPaintFeature
+                    if (wallPaintFeature != null)
+                    {
+                        wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+                    }
+                }
             }
         }
 
-        // Если у нас есть WallPaintFeature, убедимся, что она использует наш материал
-        if (wallPaintFeature != null && wallPaintMaterial != null)
+        // Устанавливаем значение маски в зависимости от useMask
+        if (wallPaintMaterial != null)
         {
-            if (!ReferenceEquals(wallPaintFeature.passMaterial, wallPaintMaterial))
+            float useMaskValue = useMask ? 1.0f : 0.0f;
+            if (wallPaintMaterial.HasProperty("_UseMask"))
             {
-                wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+                float currentValue = wallPaintMaterial.GetFloat("_UseMask");
+                if (currentValue != useMaskValue)
+                {
+                    wallPaintMaterial.SetFloat("_UseMask", useMaskValue);
+                }
+            }
 
-#if UNITY_IOS && !UNITY_EDITOR
-                Debug.Log("Pass material updated in WallPaintFeature");
-#endif
+            // Устанавливаем значение прозрачности, чтобы избежать черного экрана
+            if (wallPaintMaterial.HasProperty("_BlendFactor"))
+            {
+                float currentBlend = wallPaintMaterial.GetFloat("_BlendFactor");
+                // Если значение нулевое, устанавливаем слабое значение для избежания черного экрана
+                if (currentBlend < 0.01f)
+                {
+                    wallPaintMaterial.SetFloat("_BlendFactor", 0.1f);
+                }
             }
         }
     }
@@ -399,7 +399,7 @@ public class WallPaintEffect : MonoBehaviour
             // Применяем или отключаем маску
             if (isSegmentationReady && useMask)
             {
-                wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.SegmentationMaskTexture);
+                wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
                 wallPaintMaterial.EnableKeyword("USE_MASK");
             }
             else

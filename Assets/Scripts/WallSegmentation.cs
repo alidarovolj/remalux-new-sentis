@@ -1,404 +1,840 @@
-using Unity.Sentis;
 using UnityEngine;
+using System.Collections;
 using UnityEngine.XR.ARFoundation;
+using System;
+using System.IO;
 using UnityEngine.XR.ARSubsystems;
 using Unity.Collections;
-using System;
-using System.Collections;
+using System.Reflection;
+using System.Linq;
 
+/// <summary>
+/// Компонент для сегментации стен с использованием ML модели в Unity Sentis.
+/// Обновлен для безопасной загрузки моделей, предотвращающей краш Unity.
+/// </summary>
 public class WallSegmentation : MonoBehaviour
 {
-    [SerializeField] private ModelAsset modelAsset;
-    [SerializeField] private ARCameraManager arCameraManager;
-    [SerializeField] private RenderTexture segmentationMaskTexture;
-    [SerializeField] private ARSessionManager arSessionManager;
+    [Header("Настройки ML модели")]
+    [Tooltip("ONNX модель для сегментации стен")]
+    public UnityEngine.Object modelAsset;
 
-    // Индекс класса "стена" в модели сегментации
-    [SerializeField] private int wallClassIndex = 0; // В наборе ADE20K "стена" имеет индекс 0
+    // Поле для хранения загруженного экземпляра модели Unity.Sentis.Model
+    // Это поле не сериализуется, но может быть установлено через API/рефлексию
+    [NonSerialized]
+    public object model;
 
-    // Настройки инициализации
-    [SerializeField] private float initDelay = 0.5f; // Задержка инициализации для iOS
-    [SerializeField] private int skipFrames = 6; // Пропуск кадров для производительности
+    [Tooltip("Предпочитаемый бэкенд для исполнения модели (0 = CPU, 1 = GPUCompute)")]
+    [Range(0, 1)]
+    public int preferredBackend = 0;
 
-    private Model runtimeModel;
-    private Worker engine;
-    private Tensor<float> inputTensor;
-    private Texture2D tempTexture;
+    [Tooltip("Использовать безопасную асинхронную загрузку модели")]
+    public bool useSafeLoading = true;
 
-    // Константы для модели
-    private const int INPUT_WIDTH = 320;
-    private const int INPUT_HEIGHT = 320;
-    private const int INPUT_CHANNELS = 3;
-    private const int OUTPUT_WIDTH = 80;
-    private const int OUTPUT_HEIGHT = 80;
-    private const int NUM_CLASSES = 150;
+    [Tooltip("Тайм-аут загрузки модели в секундах")]
+    public float modelLoadTimeout = 30f;
 
-    // Для простой постобработки
-    private Texture2D wallMaskTexture;
-    private Color32[] wallMaskColors;
+    [Header("Настройки сегментации")]
+    [Tooltip("Индекс класса 'стена' в выходе модели")]
+    public int wallClassIndex = 1;
 
-    // Флаг инициализации
-    private bool isInitialized = false;
-    private bool shouldInitialize = false; // Flag to track when AR session is ready
-    private int frameCounter = 0;
+    [Tooltip("Порог вероятности для определения стены")]
+    [Range(0.0f, 1.0f)]
+    public float wallThreshold = 0.5f;
 
-    // Публичное свойство для доступа к маске сегментации стен
-    public RenderTexture SegmentationMaskTexture
-    {
-        get
-        {
-            // Проверяем, что текстура существует и правильно инициализирована
-            if (segmentationMaskTexture == null)
-            {
-                CreateMaskTexture();
-            }
-            else if (!segmentationMaskTexture.IsCreated())
-            {
-                segmentationMaskTexture.Create();
-            }
-            return segmentationMaskTexture;
-        }
-    }
+    [Tooltip("Разрешение входного изображения")]
+    public Vector2Int inputResolution = new Vector2Int(224, 224);
 
-    // Публичное свойство для проверки инициализации компонента
-    public bool IsInitialized => isInitialized && runtimeModel != null && engine != null;
+    [Header("Компоненты")]
+    [Tooltip("Ссылка на ARCameraManager")]
+    public ARCameraManager arCameraManager;
 
-    private void CreateMaskTexture()
-    {
-        if (segmentationMaskTexture != null && segmentationMaskTexture.IsCreated())
-        {
-            segmentationMaskTexture.Release();
-        }
+    [Tooltip("Ссылка на ARSessionManager")]
+    public UnityEngine.Object arSessionManager;
 
-        segmentationMaskTexture = new RenderTexture(OUTPUT_WIDTH, OUTPUT_HEIGHT, 0, RenderTextureFormat.RFloat);
-        segmentationMaskTexture.enableRandomWrite = true;
-        segmentationMaskTexture.Create();
-        Debug.Log("SegmentationMaskTexture created or recreated successfully");
-    }
+    [Tooltip("Текстура для вывода маски сегментации")]
+    public RenderTexture segmentationMaskTexture;
+
+    [Header("Отладка")]
+    [Tooltip("Сохранять маску сегментации в отдельную текстуру")]
+    public bool saveDebugMask = false;
+
+    [Tooltip("Путь для сохранения отладочных изображений")]
+    public string debugSavePath = "SegmentationDebug";
+
+    // Приватные поля для работы с моделью через рефлексию
+    private object engine;
+    private object runtimeModel;
+    private Texture2D cameraTexture;
+    private bool isModelInitialized = false;
+    private bool isInitializing = false;
+    private string lastErrorMessage = null;
+    private bool isInitializationFailed = false;
+
+    // Для связи с WallSegmentationModelLoader
+    public bool IsModelInitialized => isModelInitialized;
+    public bool IsInitializing => isInitializing;
+    public string LastErrorMessage => lastErrorMessage;
+    public bool IsInitializationFailed => isInitializationFailed;
 
     private void Start()
     {
-        // Находим ARSessionManager, если он не задан
-        if (arSessionManager == null)
-        {
-            arSessionManager = FindObjectOfType<ARSessionManager>();
-        }
-
-        // Находим ARCameraManager, если он не задан
+        // Проверяем компоненты
         if (arCameraManager == null)
         {
-            if (Camera.main != null)
-            {
-                arCameraManager = Camera.main.GetComponent<ARCameraManager>();
-            }
-
+            arCameraManager = FindObjectOfType<ARCameraManager>();
             if (arCameraManager == null)
             {
-                var arCameras = FindObjectsOfType<ARCameraManager>();
-                if (arCameras.Length > 0)
-                {
-                    arCameraManager = arCameras[0];
-                    Debug.Log("WallSegmentation: найден ARCameraManager");
-                }
+                Debug.LogError("ARCameraManager не найден в сцене!");
+                return;
             }
         }
 
-        // Проверяем наличие модели
-        if (modelAsset == null)
+        // Создаем сегментационную маску, если она не назначена
+        if (segmentationMaskTexture == null)
         {
-            Debug.LogError("ModelAsset is not assigned in the inspector. Disabling script.");
-            this.enabled = false;
-            return;
+            segmentationMaskTexture = new RenderTexture(inputResolution.x, inputResolution.y, 0, RenderTextureFormat.RFloat);
+            segmentationMaskTexture.enableRandomWrite = true;
+            segmentationMaskTexture.Create();
         }
 
-        // На iOS ждем инициализации AR сессии
-#if UNITY_IOS && !UNITY_EDITOR
-        if (arSessionManager != null && arSessionManager.IsSessionInitialized())
+        // Создаем текстуру для камеры
+        cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
+
+        // Если модель назначена, инициализируем
+        if (modelAsset != null && !useSafeLoading)
         {
-            // Если сессия уже инициализирована
-            shouldInitialize = true;
-            StartCoroutine(InitializeWithDelay());
+            try
+            {
+                InitializeModelDirect();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Ошибка при инициализации модели: {e.Message}");
+                isInitializationFailed = true;
+                lastErrorMessage = e.Message;
+            }
+        }
+        else if (modelAsset != null && useSafeLoading)
+        {
+            // Запускаем безопасную асинхронную загрузку
+            StartCoroutine(SafeInitializeModelCoroutine());
+        }
+    }
+
+    /// <summary>
+    /// Корутина для безопасной асинхронной загрузки и инициализации модели
+    /// </summary>
+    public IEnumerator SafeInitializeModelCoroutine()
+    {
+        if (isModelInitialized || isInitializing) yield break;
+
+        isInitializing = true;
+        lastErrorMessage = null;
+        isInitializationFailed = false;
+
+        Debug.Log("Начинаем безопасную загрузку модели...");
+
+        if (modelAsset == null)
+        {
+            lastErrorMessage = "ModelAsset не назначен!";
+            isInitializationFailed = true;
+            isInitializing = false;
+            Debug.LogError(lastErrorMessage);
+            yield break;
+        }
+
+        // Запускаем загрузку модели через SafeModelLoader
+        yield return StartCoroutine(SafeModelLoader.LoadModelAsync(
+            modelAsset,
+            modelLoadTimeout,
+            (success, loadedModel, errorMessage) =>
+            {
+                if (success && loadedModel != null)
+                {
+                    // Модель загружена успешно
+                    runtimeModel = loadedModel;
+                    model = loadedModel; // Сохраняем также в публичном поле
+
+                    try
+                    {
+                        // Создаем исполнителя
+                        engine = SafeModelLoader.CreateWorkerSafely(loadedModel, preferredBackend);
+
+                        if (engine != null)
+                        {
+                            isModelInitialized = true;
+                            Debug.Log("Модель успешно инициализирована");
+                        }
+                        else
+                        {
+                            lastErrorMessage = "Не удалось создать Worker для модели";
+                            isInitializationFailed = true;
+                            Debug.LogError(lastErrorMessage);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        lastErrorMessage = $"Ошибка при создании Engine: {e.Message}";
+                        isInitializationFailed = true;
+                        Debug.LogError(lastErrorMessage);
+                    }
+                }
+                else
+                {
+                    lastErrorMessage = errorMessage;
+                    isInitializationFailed = true;
+                    Debug.LogError($"Ошибка при загрузке модели: {errorMessage}");
+                }
+
+                isInitializing = false;
+            }
+        ));
+
+        // Показываем сообщение об успехе или сбое
+        if (isModelInitialized)
+        {
+            Debug.Log("Модель успешно загружена и готова к использованию");
         }
         else
         {
-            // Инициализируем после готовности AR сессии
-            shouldInitialize = false;
-            Debug.Log("WallSegmentation ждет инициализации AR сессии");
+            Debug.LogError($"Не удалось инициализировать модель: {lastErrorMessage}");
         }
-#else
-        // В редакторе или на других платформах инициализируем сразу
-        InitializeSentisModel();
-#endif
     }
 
-    // Ответ на сообщение от ARSessionManager
-    public void OnARSessionInitialized()
+    /// <summary>
+    /// Инициализация модели напрямую (может вызвать краш при больших моделях)
+    /// </summary>
+    public void InitializeModelDirect()
     {
-        Debug.Log("WallSegmentation получил уведомление о готовности AR сессии");
-        shouldInitialize = true;
+        if (isModelInitialized) return;
 
-#if UNITY_IOS && !UNITY_EDITOR
-        StartCoroutine(InitializeWithDelay());
-#else
-        if (!isInitialized)
+        Debug.Log("Инициализация модели (синхронно)");
+
+        if (modelAsset == null)
         {
-            InitializeSentisModel();
+            Debug.LogError("ModelAsset не назначен! Сегментация стен не будет работать.");
+            return;
         }
-#endif
-    }
-
-    // Метод с задержкой для iOS
-    private IEnumerator InitializeWithDelay()
-    {
-        // Ждем один кадр, чтобы убедиться что AR сессия инициализирована
-        yield return null;
-
-        // Дополнительная задержка для iOS
-        Debug.Log("WallSegmentation: ожидание перед инициализацией...");
-        yield return new WaitForSeconds(initDelay);
-
-        // Теперь инициализируем модель
-        InitializeSentisModel();
-    }
-
-    private void InitializeSentisModel()
-    {
-        if (isInitialized) return; // Избегаем повторной инициализации
 
         try
         {
-            Debug.Log("WallSegmentation: начало инициализации модели Sentis");
-            // Инициализация модели Sentis
-            runtimeModel = ModelLoader.Load(modelAsset);
-
-            // Предпочитаем GPU для мобильных устройств
-#if UNITY_IOS || UNITY_ANDROID
-            engine = new Worker(runtimeModel, BackendType.GPUCompute);
-#else
-            engine = WorkerFactory.CreateWorker(BackendType.GPUCompute, runtimeModel);
-#endif
-
-            // Создаем входной тензор заранее
-            inputTensor = new Tensor<float>(new TensorShape(1, INPUT_CHANNELS, INPUT_HEIGHT, INPUT_WIDTH));
-
-            // Создаем временную текстуру для преобразования изображения камеры
-            tempTexture = new Texture2D(INPUT_WIDTH, INPUT_HEIGHT, TextureFormat.RGB24, false);
-
-            // Создаем выходную текстуру для маски, если она не назначена
-            if (segmentationMaskTexture == null)
+            // Загружаем модель с помощью рефлексии
+            var modelLoaderType = Type.GetType("Unity.Sentis.ModelLoader, Unity.Sentis");
+            if (modelLoaderType == null)
             {
-                CreateMaskTexture();
-            }
-            else if (!segmentationMaskTexture.IsCreated())
-            {
-                segmentationMaskTexture.Create();
+                throw new Exception("Тип Unity.Sentis.ModelLoader не найден. Проверьте, установлен ли пакет Sentis.");
             }
 
-            // Инициализация маски стен
-            wallMaskTexture = new Texture2D(OUTPUT_WIDTH, OUTPUT_HEIGHT, TextureFormat.R8, false);
-            wallMaskColors = new Color32[OUTPUT_WIDTH * OUTPUT_HEIGHT];
-
-            // Заполняем маску нулями
-            for (int i = 0; i < wallMaskColors.Length; i++)
+            var loadMethod = modelLoaderType.GetMethod("Load", new Type[] { modelAsset.GetType() });
+            if (loadMethod == null)
             {
-                wallMaskColors[i] = new Color32(0, 0, 0, 255);
+                throw new Exception($"Метод Load не найден в ModelLoader для типа {modelAsset.GetType().Name}");
             }
-            wallMaskTexture.SetPixels32(wallMaskColors);
-            wallMaskTexture.Apply();
 
-            // Копируем пустую маску в RenderTexture
-            Graphics.Blit(wallMaskTexture, segmentationMaskTexture);
+            // Загружаем модель и сохраняем в обоих полях
+            object loadedModel = loadMethod.Invoke(null, new object[] { modelAsset });
+            if (loadedModel == null)
+            {
+                throw new Exception("Модель загружена, но результат null");
+            }
 
-            // Устанавливаем флаг инициализации
-            isInitialized = true;
+            // Сохраняем ссылку на модель в обоих полях
+            this.model = loadedModel;
+            this.runtimeModel = loadedModel;
 
-            Debug.Log("WallSegmentation initialized successfully");
+            // Создаем исполнителя с помощью рефлексии
+            var workerFactoryType = Type.GetType("Unity.Sentis.WorkerFactory, Unity.Sentis");
+            if (workerFactoryType == null)
+            {
+                throw new Exception("Тип Unity.Sentis.WorkerFactory не найден");
+            }
+
+            // Пробуем оба порядка параметров (для совместимости с разными версиями Sentis)
+            MethodInfo createMethod = workerFactoryType.GetMethod("CreateWorker",
+                new Type[] { runtimeModel.GetType(), typeof(int) });
+
+            if (createMethod == null)
+            {
+                createMethod = workerFactoryType.GetMethod("CreateWorker",
+                    new Type[] { typeof(int), runtimeModel.GetType() });
+
+                if (createMethod == null)
+                {
+                    throw new Exception("Метод CreateWorker не найден в WorkerFactory");
+                }
+
+                // Вызываем с порядком (backend, model)
+                engine = createMethod.Invoke(null, new object[] { preferredBackend, runtimeModel });
+            }
+            else
+            {
+                // Вызываем с порядком (model, backend)
+                engine = createMethod.Invoke(null, new object[] { runtimeModel, preferredBackend });
+            }
+
+            isModelInitialized = true;
+            Debug.Log("Модель успешно инициализирована");
         }
-        catch (System.Exception e)
+        catch (Exception e)
         {
-            Debug.LogError($"Error initializing WallSegmentation: {e.Message}");
-            this.enabled = false;
+            Debug.LogError($"Ошибка при инициализации модели: {e.Message}");
+            throw; // Пробрасываем исключение для обработки вызывающим кодом
+        }
+    }
+
+    /// <summary>
+    /// Инициализирует сегментацию стен
+    /// </summary>
+    public void InitializeSegmentation(UnityEngine.Object newModelAsset = null)
+    {
+        // Если предоставлена новая модель, обновляем
+        if (newModelAsset != null && newModelAsset != modelAsset)
+        {
+            // Освобождаем текущую модель, если она инициализирована
+            if (isModelInitialized)
+            {
+                DisposeEngine();
+                engine = null;
+                runtimeModel = null;
+                isModelInitialized = false;
+            }
+
+            // Устанавливаем новую модель
+            modelAsset = newModelAsset;
+        }
+
+        // Если модель не инициализирована и не идет процесс инициализации, запускаем
+        if (!isModelInitialized && !isInitializing)
+        {
+            if (useSafeLoading)
+            {
+                StartCoroutine(SafeInitializeModelCoroutine());
+            }
+            else
+            {
+                try
+                {
+                    InitializeModelDirect();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"Ошибка при инициализации модели: {e.Message}");
+                }
+            }
+        }
+    }
+
+    private void Update()
+    {
+        // Если модель не инициализирована, не выполняем сегментацию
+        if (!isModelInitialized || engine == null) return;
+
+        // Получаем изображение с камеры
+        Texture2D cameraTex = GetCameraTexture();
+        if (cameraTex == null) return;
+
+        // Выполняем сегментацию
+        PerformSegmentation(cameraTex);
+    }
+
+    /// <summary>
+    /// Получает текстуру с камеры и преобразует её в нужное разрешение
+    /// </summary>
+    private Texture2D GetCameraTexture()
+    {
+        if (arCameraManager == null || !arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage image))
+        {
+            return null;
+        }
+
+        using (image)
+        {
+            // Преобразуем XRCpuImage в Texture2D с нужным разрешением
+            var conversionParams = new XRCpuImage.ConversionParams
+            {
+                inputRect = new RectInt(0, 0, image.width, image.height),
+                outputDimensions = new Vector2Int(inputResolution.x, inputResolution.y),
+                outputFormat = TextureFormat.RGBA32,
+                transformation = XRCpuImage.Transformation.MirrorY
+            };
+
+            try
+            {
+                // Получаем данные изображения
+                var rawTextureData = new NativeArray<byte>(inputResolution.x * inputResolution.y * 4, Allocator.Temp);
+                image.Convert(conversionParams, rawTextureData);
+                cameraTexture.LoadRawTextureData(rawTextureData);
+                cameraTexture.Apply();
+                rawTextureData.Dispose();
+
+                return cameraTexture;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Ошибка при конвертации изображения с камеры: {e.Message}");
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Выполняет сегментацию с использованием ML модели через рефлексию
+    /// </summary>
+    private void PerformSegmentation(Texture2D inputTexture)
+    {
+        try
+        {
+            // В первую очередь пробуем использовать SentisCompat
+            Type sentisCompatType = null;
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                sentisCompatType = assembly.GetType("SentisCompat");
+                if (sentisCompatType != null) break;
+            }
+
+            if (sentisCompatType != null)
+            {
+                // Если SentisCompat доступен, используем его методы
+                var textureToTensorMethod = sentisCompatType.GetMethod("TextureToTensor",
+                    BindingFlags.Public | BindingFlags.Static,
+                    null,
+                    new Type[] { typeof(Texture2D) },
+                    null);
+
+                if (textureToTensorMethod != null)
+                {
+                    object inputTensor = textureToTensorMethod.Invoke(null, new object[] { inputTexture });
+                    if (inputTensor != null)
+                    {
+                        ExecuteModelAndProcessResult(inputTensor);
+                        return;
+                    }
+                    else
+                    {
+                        Debug.LogWarning("Не удалось создать тензор через SentisCompat");
+                    }
+                }
+            }
+
+            // Если SentisCompat не сработал, пробуем стандартный API
+            Type textureConverterType = Type.GetType("Unity.Sentis.TextureConverter, Unity.Sentis");
+            if (textureConverterType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.TextureConverter не найден");
+                RenderSimpleMask();
+                return;
+            }
+
+            // Пробуем метод ToTensor (существующий в различных версиях Sentis)
+            var toTensorMethod = textureConverterType.GetMethod("ToTensor", new Type[] { typeof(Texture) });
+            if (toTensorMethod != null)
+            {
+                Debug.Log("Используем метод ToTensor с параметром Texture");
+                object inputTensor = toTensorMethod.Invoke(null, new object[] { inputTexture });
+                if (inputTensor != null)
+                {
+                    ExecuteModelAndProcessResult(inputTensor);
+                    return;
+                }
+            }
+
+            // Пробуем метод TextureToTensor (Sentis 2.1.x+)
+            var textureToTensorNewMethod = textureConverterType.GetMethod("TextureToTensor", new Type[] { typeof(Texture) });
+            if (textureToTensorNewMethod != null)
+            {
+                Debug.Log("Используем метод TextureToTensor с параметром Texture");
+                object inputTensor = textureToTensorNewMethod.Invoke(null, new object[] { inputTexture });
+                if (inputTensor != null)
+                {
+                    ExecuteModelAndProcessResult(inputTensor);
+                    return;
+                }
+            }
+
+            // Если не удалось создать тензор ни одним из методов, используем заглушку
+            Debug.LogWarning("Не удалось создать тензор ни одним из доступных методов, используем заглушку");
+            RenderSimpleMask();
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Ошибка при выполнении сегментации: {e.Message}\nStackTrace: {e.StackTrace}");
+            RenderSimpleMask();
+        }
+    }
+
+    /// <summary>
+    /// Отрисовывает простую заглушку для маски сегментации
+    /// </summary>
+    private void RenderSimpleMask()
+    {
+        // Если есть маска сегментации, заполняем её простыми данными
+        if (segmentationMaskTexture != null)
+        {
+            Debug.Log("Создаем заглушку для маски сегментации");
+
+            try
+            {
+                // Создаем пустую текстуру для рендеринга
+                Texture2D simpleMask = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height, TextureFormat.RGBA32, false);
+
+                // Заполняем текстуру
+                Color32[] pixels = new Color32[simpleMask.width * simpleMask.height];
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    // Заполняем середину экрана "стеной" для визуализации
+                    int x = i % simpleMask.width;
+                    int y = i / simpleMask.width;
+
+                    // Определяем, находится ли пиксель в центральной области
+                    bool isCenter =
+                        x > simpleMask.width * 0.3f &&
+                        x < simpleMask.width * 0.7f &&
+                        y > simpleMask.height * 0.3f &&
+                        y < simpleMask.height * 0.7f;
+
+                    // Если в центре - это "стена", иначе фон, делаем обе области полупрозрачными
+                    pixels[i] = isCenter ? new Color32(255, 255, 255, 100) : new Color32(0, 0, 0, 0);
+                }
+
+                simpleMask.SetPixels32(pixels);
+                simpleMask.Apply();
+
+                // Копируем в RenderTexture
+                RenderTexture previousRT = RenderTexture.active;
+                RenderTexture.active = segmentationMaskTexture;
+                GL.Clear(true, true, Color.clear); // Используем прозрачный цвет
+                Graphics.Blit(simpleMask, segmentationMaskTexture);
+                RenderTexture.active = previousRT;
+
+                // Уничтожаем временный объект
+                Destroy(simpleMask);
+
+                Debug.Log("Заглушка маски отрисована с прозрачностью");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Ошибка при создании заглушки маски: {e.Message}");
+
+                // Резервный вариант - попытка сгенерировать маску графически
+                try
+                {
+                    RenderTexture previousRT = RenderTexture.active;
+                    RenderTexture.active = segmentationMaskTexture;
+                    GL.Clear(true, true, Color.clear);
+
+                    // Создаем простой материал для рисования
+                    Material simpleMaterial = new Material(Shader.Find("Unlit/Transparent"));
+                    if (simpleMaterial != null)
+                    {
+                        simpleMaterial.color = new Color(1f, 1f, 1f, 0.5f);
+
+                        // Используем простой Graphics.DrawTexture
+                        float centerWidth = segmentationMaskTexture.width * 0.4f;
+                        float centerHeight = segmentationMaskTexture.height * 0.4f;
+                        float centerX = (segmentationMaskTexture.width - centerWidth) / 2;
+                        float centerY = (segmentationMaskTexture.height - centerHeight) / 2;
+
+                        Graphics.DrawTexture(
+                            new Rect(centerX, centerY, centerWidth, centerHeight),
+                            Texture2D.whiteTexture,
+                            simpleMaterial);
+                    }
+                    else
+                    {
+                        // Если не удалось создать материал, рисуем просто белый центр
+                        GL.PushMatrix();
+                        GL.LoadOrtho();
+                        GL.Begin(GL.QUADS);
+                        GL.Color(new Color(1f, 1f, 1f, 0.5f));
+                        GL.Vertex3(0.3f, 0.3f, 0);
+                        GL.Vertex3(0.7f, 0.3f, 0);
+                        GL.Vertex3(0.7f, 0.7f, 0);
+                        GL.Vertex3(0.3f, 0.7f, 0);
+                        GL.End();
+                        GL.PopMatrix();
+                    }
+
+                    RenderTexture.active = previousRT;
+
+                    Debug.Log("Простая заглушка маски создана через графический API");
+                }
+                catch (Exception finalError)
+                {
+                    Debug.LogError($"Критическая ошибка при создании маски сегментации: {finalError.Message}");
+                }
+            }
+        }
+        else
+        {
+            Debug.LogError("Маска сегментации не определена (segmentationMaskTexture == null)");
+        }
+    }
+
+    /// <summary>
+    /// Выполняет модель и обрабатывает результат
+    /// </summary>
+    private void ExecuteModelAndProcessResult(object inputTensor)
+    {
+        if (inputTensor == null) return;
+
+        try
+        {
+            // Находим метод Execute в IWorker
+            var executeMethod = engine.GetType().GetMethod("Execute");
+            if (executeMethod == null)
+            {
+                Debug.LogError("Метод Execute не найден в IWorker");
+                return;
+            }
+
+            // Выполняем модель
+            executeMethod.Invoke(engine, new object[] { inputTensor });
+
+            // Получаем результат
+            var peekOutputMethod = engine.GetType().GetMethod("PeekOutput");
+            if (peekOutputMethod == null)
+            {
+                Debug.LogError("Метод PeekOutput не найден в IWorker");
+                return;
+            }
+
+            object outputTensor = peekOutputMethod.Invoke(engine, null);
+            if (outputTensor == null)
+            {
+                Debug.LogError("Выходной тензор не был получен");
+                return;
+            }
+
+            // Обрабатываем результат
+            ProcessSegmentationResult(outputTensor);
+
+            // Освобождаем входной тензор, если он реализует IDisposable
+            if (inputTensor is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Ошибка при обработке модели: {e.Message}\nStackTrace: {e.StackTrace}");
+        }
+    }
+
+    /// <summary>
+    /// Обрабатывает результат сегментации и обновляет маску, используя рефлексию
+    /// </summary>
+    private void ProcessSegmentationResult(object outputTensor)
+    {
+        try
+        {
+            // Получаем ранг тензора через рефлексию
+            var tensorType = outputTensor.GetType();
+            var shapeProperty = tensorType.GetProperty("shape");
+            if (shapeProperty == null)
+            {
+                Debug.LogError("Свойство shape не найдено в Tensor");
+                return;
+            }
+
+            var shape = shapeProperty.GetValue(outputTensor);
+            var rankProperty = shape.GetType().GetProperty("rank");
+            if (rankProperty == null)
+            {
+                Debug.LogError("Свойство rank не найдено в TensorShape");
+                return;
+            }
+
+            int outputRank = (int)rankProperty.GetValue(shape);
+            Debug.Log($"Обработка тензора с рангом {outputRank}");
+
+            // Находим тип TextureConverter
+            Type textureConverterType = Type.GetType("Unity.Sentis.TextureConverter, Unity.Sentis");
+            if (textureConverterType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.TextureConverter не найден");
+                return;
+            }
+
+            // Попытка использовать SentisCompat для оптимизации для конкретной версии
+            bool renderedUsingCompat = false;
+            Type sentisCompatType = null;
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                sentisCompatType = assembly.GetType("SentisCompat");
+                if (sentisCompatType != null) break;
+            }
+
+            if (sentisCompatType != null)
+            {
+                var renderToTextureMethod = sentisCompatType.GetMethod("RenderTensorToTexture",
+                    BindingFlags.Public | BindingFlags.Static);
+
+                if (renderToTextureMethod != null)
+                {
+                    try
+                    {
+                        bool success = (bool)renderToTextureMethod.Invoke(null, new object[] { outputTensor, segmentationMaskTexture });
+                        renderedUsingCompat = success;
+
+                        if (success)
+                        {
+                            Debug.Log("Маска успешно отрисована через SentisCompat");
+                            return;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"Ошибка при попытке рендеринга через SentisCompat: {e.Message}");
+                        // Продолжаем стандартными методами при ошибке
+                    }
+                }
+            }
+
+            // Если не получилось через SentisCompat, пробуем стандартные методы
+            if (!renderedUsingCompat)
+            {
+                // Находим метод RenderToTexture для текущей версии Sentis
+                var methods = textureConverterType.GetMethods()
+                    .Where(m => m.Name == "RenderToTexture" && m.GetParameters().Length >= 2)
+                    .ToArray();
+
+                if (methods.Length > 0)
+                {
+                    Debug.Log($"Найдено {methods.Length} методов RenderToTexture");
+
+                    bool rendered = false;
+                    foreach (var method in methods)
+                    {
+                        try
+                        {
+                            var parameters = method.GetParameters();
+
+                            // Проверяем сигнатуру
+                            string parameterTypes = string.Join(", ", parameters.Select(p => p.ParameterType.Name));
+                            Debug.Log($"Пробуем метод RenderToTexture({parameterTypes})");
+
+                            if (parameters.Length == 2)
+                            {
+                                // RenderToTexture(tensor, texture)
+                                method.Invoke(null, new object[] { outputTensor, segmentationMaskTexture });
+                                rendered = true;
+                                Debug.Log("Маска успешно отрисована через RenderToTexture (2 параметра)");
+                                break;
+                            }
+                            else if (parameters.Length == 3)
+                            {
+                                // Создаем TextureTransform (default)
+                                Type textureTransformType = Type.GetType("Unity.Sentis.TextureTransform, Unity.Sentis");
+                                if (textureTransformType == null)
+                                {
+                                    Debug.LogError("Тип Unity.Sentis.TextureTransform не найден");
+                                    continue;
+                                }
+
+                                object textureTransform = Activator.CreateInstance(textureTransformType);
+                                method.Invoke(null, new object[] { outputTensor, segmentationMaskTexture, textureTransform });
+                                rendered = true;
+                                Debug.Log("Маска успешно отрисована через RenderToTexture (3 параметра)");
+                                break;
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogWarning($"Ошибка при вызове метода RenderToTexture: {e.Message}");
+                        }
+                    }
+
+                    if (!rendered)
+                    {
+                        Debug.LogError("Не удалось отрисовать маску через имеющиеся методы RenderToTexture");
+                        // Здесь можно добавить ручное копирование данных из тензора в текстуру при необходимости
+                    }
+                }
+                else
+                {
+                    Debug.LogError("Методы RenderToTexture не найдены в TextureConverter");
+                }
+            }
+
+            // Отладочное сохранение маски, если включено
+            if (saveDebugMask)
+            {
+                SaveDebugMask();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Ошибка при обработке результата сегментации: {e.Message}\nStackTrace: {e.StackTrace}");
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет текущую маску сегментации для отладки
+    /// </summary>
+    private void SaveDebugMask()
+    {
+        // Реализация сохранения отладочной текстуры
+    }
+
+    /// <summary>
+    /// Безопасно освобождает ресурсы движка через рефлексию
+    /// </summary>
+    private void DisposeEngine()
+    {
+        if (engine != null)
+        {
+            try
+            {
+                // Проверяем, реализует ли engine интерфейс IDisposable
+                if (engine is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+                else
+                {
+                    // Пытаемся найти метод Dispose через рефлексию
+                    var disposeMethod = engine.GetType().GetMethod("Dispose");
+                    if (disposeMethod != null)
+                    {
+                        disposeMethod.Invoke(engine, null);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Ошибка при освобождении ресурсов Engine: {e.Message}");
+            }
         }
     }
 
     private void OnDestroy()
     {
-        engine?.Dispose();
-        inputTensor?.Dispose();
-
-        if (tempTexture != null)
-        {
-            Destroy(tempTexture);
-        }
-
-        if (segmentationMaskTexture != null)
-        {
-            if (segmentationMaskTexture.IsCreated()) segmentationMaskTexture.Release();
-            Destroy(segmentationMaskTexture);
-        }
-
-        if (wallMaskTexture != null)
-        {
-            Destroy(wallMaskTexture);
-        }
+        // Освобождаем ресурсы
+        DisposeEngine();
+        engine = null;
+        runtimeModel = null;
     }
 
-    void Update()
+    /// <summary>
+    /// Публичный метод для назначения модели из внешнего кода
+    /// </summary>
+    public void SetModel(UnityEngine.Object newModel)
     {
-        // Проверяем готовность AR сессии (только для iOS)
-#if UNITY_IOS && !UNITY_EDITOR
-        if (!shouldInitialize && arSessionManager != null)
+        if (newModel != modelAsset)
         {
-            if (arSessionManager.IsSessionInitialized())
-            {
-                shouldInitialize = true;
-                if (!isInitialized)
-                {
-                    StartCoroutine(InitializeWithDelay());
-                }
-            }
-            return; // Не продолжаем выполнение Update, пока AR сессия не готова
-        }
-#endif
+            modelAsset = newModel;
 
-        if (!isInitialized || engine == null) return;
-
-        // Пропускаем кадры для производительности
-        frameCounter++;
-        if (frameCounter % skipFrames != 0) return;
-
-        // Проверяем наличие ARCameraManager
-        if (arCameraManager == null)
-        {
-            // Пытаемся найти ARCameraManager
-            if (Camera.main != null)
+            // Если мы уже проинициализированы, перезагружаем модель
+            if (isModelInitialized)
             {
-                arCameraManager = Camera.main.GetComponent<ARCameraManager>();
-                if (arCameraManager == null) return;
-            }
-            else
-            {
-                return;
+                DisposeEngine();
+                engine = null;
+                runtimeModel = null;
+                isModelInitialized = false;
+
+                // Запускаем инициализацию с новой моделью
+                InitializeSegmentation();
             }
         }
-
-        // Пытаемся получить изображение с камеры
-        if (!arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage cpuImage))
-        {
-            return;
-        }
-
-        using (cpuImage)
-        {
-            // Конвертируем XRCpuImage в формат, совместимый с моделью
-            var conversionParams = new XRCpuImage.ConversionParams
-            {
-                inputRect = new RectInt(0, 0, cpuImage.width, cpuImage.height),
-                outputDimensions = new Vector2Int(INPUT_WIDTH, INPUT_HEIGHT),
-                outputFormat = TextureFormat.RGB24,
-                transformation = XRCpuImage.Transformation.MirrorY
-            };
-
-            // Выделяем массив для данных изображения
-            var rawTextureData = new NativeArray<byte>(INPUT_WIDTH * INPUT_HEIGHT * 3, Allocator.Temp);
-
-            // Конвертируем изображение
-            cpuImage.Convert(conversionParams, rawTextureData);
-
-            // Загружаем данные в текстуру
-            tempTexture.LoadRawTextureData(rawTextureData);
-            tempTexture.Apply();
-            rawTextureData.Dispose();
-
-            // Преобразуем текстуру в тензор для входа модели, используя актуальный API
-            var transform = new TextureTransform()
-                .SetDimensions(INPUT_WIDTH, INPUT_HEIGHT, INPUT_CHANNELS);
-            TextureConverter.ToTensor(tempTexture, inputTensor, transform);
-
-            // Создаем нормализованный тензор
-            using (var normalizedTensor = new Tensor<float>(inputTensor.shape))
-            {
-                // Создаем тензор с нормализованными значениями (деление на 255)
-                for (int b = 0; b < 1; b++) // batch size = 1
-                {
-                    for (int c = 0; c < INPUT_CHANNELS; c++)
-                    {
-                        for (int h = 0; h < INPUT_HEIGHT; h++)
-                        {
-                            for (int w = 0; w < INPUT_WIDTH; w++)
-                            {
-                                // Нормализуем значения, деля на 255
-                                // Используем ReadbackAndClone для получения тензора с CPU-данными
-                                float value = inputTensor.ReadbackAndClone()[b, c, h, w];
-                                normalizedTensor[b, c, h, w] = value / 255.0f;
-                            }
-                        }
-                    }
-                }
-
-                // Запускаем инференс
-                engine.Schedule(normalizedTensor);
-
-                // Получаем выходной тензор
-                var outputTensor = engine.PeekOutput("logits") as Tensor<float>;
-
-                if (outputTensor != null)
-                {
-                    // Обрабатываем выходной тензор для получения маски сегментации стен
-                    ProcessSegmentationOutput(outputTensor);
-                }
-            }
-        }
-    }
-
-    private void ProcessSegmentationOutput(Tensor<float> outputTensor)
-    {
-        // Загружаем данные тензора на CPU для обработки
-        var outputCPU = outputTensor.ReadbackAndClone();
-        var shape = outputCPU.shape;
-
-        // Проверка формы тензора
-        if (shape.rank != 4 || shape[0] != 1 || shape[1] != NUM_CLASSES ||
-            shape[2] != OUTPUT_HEIGHT || shape[3] != OUTPUT_WIDTH)
-        {
-            Debug.LogError($"Неожиданная форма выходного тензора: {shape}");
-            return;
-        }
-
-        // Находим argmax и создаем бинарную маску стен
-        for (int y = 0; y < OUTPUT_HEIGHT; y++)
-        {
-            for (int x = 0; x < OUTPUT_WIDTH; x++)
-            {
-                int maxClass = 0;
-                float maxValue = outputCPU[0, 0, y, x];
-
-                // Находим класс с максимальным значением (argmax)
-                for (int c = 1; c < NUM_CLASSES; c++)
-                {
-                    float value = outputCPU[0, c, y, x];
-                    if (value > maxValue)
-                    {
-                        maxValue = value;
-                        maxClass = c;
-                    }
-                }
-
-                // Устанавливаем значение в маске: 255 для стены, 0 для не стены
-                byte maskValue = (byte)((maxClass == wallClassIndex) ? 255 : 0);
-                int pixelIndex = y * OUTPUT_WIDTH + x;
-                wallMaskColors[pixelIndex] = new Color32(maskValue, maskValue, maskValue, 255);
-            }
-        }
-
-        // Очищаем временный тензор
-        outputCPU.Dispose();
-
-        // Обновляем текстуру маски
-        wallMaskTexture.SetPixels32(wallMaskColors);
-        wallMaskTexture.Apply();
-
-        // Копируем в RenderTexture для использования в шейдерах
-        Graphics.Blit(wallMaskTexture, segmentationMaskTexture);
     }
 }

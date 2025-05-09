@@ -1,6 +1,8 @@
 using UnityEngine;
 using System.Collections;
 using System;
+using System.Threading;
+using System.Linq;
 
 /// <summary>
 /// Утилита для безопасной загрузки моделей машинного обучения в рантайме.
@@ -40,95 +42,111 @@ public static class SafeModelLoader
             Exception loadException = null;
             float startTime = Time.time;
 
-            // Создаем отдельный поток для загрузки модели
-            System.Threading.Thread loaderThread = new System.Threading.Thread(() =>
+            // Создаем CancellationTokenSource для безопасного прерывания потока
+            using (CancellationTokenSource cts = new CancellationTokenSource())
             {
-                  try
+                  // Создаем отдельный поток для загрузки модели
+                  System.Threading.Thread loaderThread = new System.Threading.Thread(() =>
                   {
-                        // Пытаемся загрузить модель, используя рефлексию, чтобы не зависеть от конкретного API
-                        // (это позволяет работать с разными версиями Sentis и другими ML фреймворками)
-                        var loaderType = Type.GetType("Unity.Sentis.ModelLoader, Unity.Sentis");
-                        if (loaderType != null)
+                        try
                         {
-                              var loadMethod = loaderType.GetMethod("Load", new Type[] { modelAsset.GetType() });
-                              if (loadMethod != null)
+                              // Проверка отмены операции
+                              if (cts.Token.IsCancellationRequested)
                               {
-                                    loadedModel = loadMethod.Invoke(null, new object[] { modelAsset });
-                                    Debug.Log("Модель успешно загружена через рефлексию");
+                                    loadException = new OperationCanceledException("Операция загрузки модели была отменена");
+                                    isComplete = true;
+                                    return;
+                              }
+
+                              // Пытаемся загрузить модель, используя рефлексию, чтобы не зависеть от конкретного API
+                              // (это позволяет работать с разными версиями Sentis и другими ML фреймворками)
+                              var loaderType = Type.GetType("Unity.Sentis.ModelLoader, Unity.Sentis");
+                              if (loaderType != null)
+                              {
+                                    var loadMethod = loaderType.GetMethod("Load", new Type[] { modelAsset.GetType() });
+                                    if (loadMethod != null)
+                                    {
+                                          loadedModel = loadMethod.Invoke(null, new object[] { modelAsset });
+                                          Debug.Log("Модель успешно загружена через рефлексию");
+                                    }
+                                    else
+                                    {
+                                          loadException = new Exception($"Метод Load не найден в ModelLoader для типа {modelAsset.GetType().Name}");
+                                    }
                               }
                               else
                               {
-                                    loadException = new Exception($"Метод Load не найден в ModelLoader для типа {modelAsset.GetType().Name}");
+                                    loadException = new Exception("Тип Unity.Sentis.ModelLoader не найден. Убедитесь, что Unity Sentis установлен");
                               }
                         }
-                        else
+                        catch (Exception ex)
                         {
-                              loadException = new Exception("Тип Unity.Sentis.ModelLoader не найден. Убедитесь, что Unity Sentis установлен");
+                              // Сохраняем исключение для обработки в основном потоке
+                              loadException = ex;
+                              Debug.LogError($"Ошибка при загрузке модели: {ex.Message}");
                         }
-                  }
-                  catch (Exception ex)
-                  {
-                        // Сохраняем исключение для обработки в основном потоке
-                        loadException = ex;
-                        Debug.LogError($"Ошибка при загрузке модели: {ex.Message}");
-                  }
-                  finally
-                  {
-                        isComplete = true;
-                  }
-            });
+                        finally
+                        {
+                              isComplete = true;
+                        }
+                  });
+                  loaderThread.IsBackground = true; // Устанавливаем фоновый поток, чтобы он завершался при выходе из приложения
 
-            // Запускаем поток загрузки
-            try
-            {
-                  loaderThread.Start();
-            }
-            catch (Exception e)
-            {
-                  Debug.LogError($"Ошибка при запуске потока загрузки: {e.Message}");
-                  callback?.Invoke(false, null, $"Ошибка при запуске потока загрузки: {e.Message}");
-                  yield break;
-            }
-
-            // Ждем завершения загрузки с учетом тайм-аута
-            while (!isComplete && Time.time - startTime < timeoutSeconds)
-            {
-                  yield return null;
-            }
-
-            // Проверяем результат загрузки
-            if (!isComplete)
-            {
-                  // Загрузка не завершилась вовремя, прерываем поток
+                  // Запускаем поток загрузки
                   try
                   {
-                        loaderThread.Abort();
+                        loaderThread.Start();
                   }
                   catch (Exception e)
                   {
-                        Debug.LogError($"Ошибка при прерывании потока загрузки: {e.Message}");
+                        Debug.LogError($"Ошибка при запуске потока загрузки: {e.Message}");
+                        callback?.Invoke(false, null, $"Ошибка при запуске потока загрузки: {e.Message}");
+                        yield break;
                   }
 
-                  callback?.Invoke(false, null, $"Превышен тайм-аут загрузки модели ({timeoutSeconds} сек)");
-                  yield break;
-            }
+                  // Ждем завершения с тайм-аутом
+                  while (!isComplete && Time.time - startTime < timeoutSeconds)
+                  {
+                        yield return null;
+                  }
 
-            // Проверяем наличие ошибок
+                  // Обрабатываем результаты
+                  if (!isComplete)
+                  {
+                        // Если превышен тайм-аут, отменяем операцию через CancellationToken
+                        cts.Cancel();
+
+                        // Ждем небольшой промежуток времени, чтобы дать потоку возможность корректно завершиться
+                        float waitStartTime = Time.time;
+                        while (!isComplete && Time.time - waitStartTime < 1.0f) // Ждем максимум 1 секунду
+                        {
+                              yield return null;
+                        }
+
+                        // Если поток все еще не завершился, создаем сообщение о тайм-ауте
+                        if (!isComplete)
+                        {
+                              Debug.LogWarning($"Поток загрузки не ответил на запрос отмены в течение 1 секунды");
+                              // Не используем Thread.Abort(), вместо этого просто считаем операцию отмененной
+                        }
+
+                        loadException = new TimeoutException($"Загрузка модели превысила тайм-аут {timeoutSeconds}с");
+                  }
+            } // Конец using для CancellationTokenSource
+
+            // Формируем результат
             if (loadException != null)
             {
                   callback?.Invoke(false, null, $"Ошибка при загрузке модели: {loadException.Message}");
-                  yield break;
             }
-
-            // Проверяем, что модель была успешно загружена
-            if (loadedModel == null)
+            else if (loadedModel == null)
             {
                   callback?.Invoke(false, null, "Модель загружена, но результат null");
-                  yield break;
             }
-
-            // Успешная загрузка
-            callback?.Invoke(true, loadedModel, null);
+            else
+            {
+                  callback?.Invoke(true, loadedModel, null);
+            }
       }
 
       /// <summary>
@@ -141,39 +159,163 @@ public static class SafeModelLoader
       {
             try
             {
+                  // Проверяем наличие Sentis в первую очередь
+                  if (!IsSentisAvailable())
+                  {
+                        Debug.LogError("Unity Sentis не установлен или не инициализирован корректно");
+                        return null;
+                  }
+
                   // Определяем оптимальный бэкенд
                   int actualBackend = DetermineOptimalBackend(preferredBackend);
                   Debug.Log($"Используем бэкенд с индексом: {actualBackend}");
 
-                  // Используем рефлексию для создания Worker
-                  var workerFactoryType = Type.GetType("Unity.Sentis.WorkerFactory, Unity.Sentis");
-                  if (workerFactoryType != null)
+                  // Находим Assembly с Sentis
+                  System.Reflection.Assembly sentisAssembly = null;
+                  foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                   {
-                        var createMethod = workerFactoryType.GetMethod("CreateWorker",
-                              new Type[] { model.GetType(), typeof(int) });
-
-                        if (createMethod != null)
+                        if (assembly.GetName().Name == "Unity.Sentis")
                         {
-                              var worker = createMethod.Invoke(null, new object[] { model, actualBackend });
-                              Debug.Log("Worker успешно создан");
+                              sentisAssembly = assembly;
+                              break;
+                        }
+                  }
+
+                  if (sentisAssembly == null)
+                  {
+                        Debug.LogError("Сборка Unity.Sentis не найдена");
+                        return null;
+                  }
+
+                  // Сначала проверяем наличие Worker (новая версия API 2.1.x)
+                  var workerType = sentisAssembly.GetType("Unity.Sentis.Worker");
+                  if (workerType != null)
+                  {
+                        Debug.Log("Обнаружен новый API Unity.Sentis.Worker (версия 2.1.x)");
+
+                        // Находим тип BackendType для передачи в конструктор
+                        var backendType = sentisAssembly.GetType("Unity.Sentis.BackendType");
+                        if (backendType == null)
+                        {
+                              Debug.LogError("Тип Unity.Sentis.BackendType не найден");
+                              return null;
+                        }
+
+                        // Создаем параметр BackendType из int
+                        object backendEnum = Enum.ToObject(backendType, actualBackend);
+
+                        // Ищем конструктор Worker с двумя параметрами (модель и бэкенд)
+                        var constructor = workerType.GetConstructor(new[] { model.GetType(), backendType });
+                        if (constructor != null)
+                        {
+                              var worker = constructor.Invoke(new[] { model, backendEnum });
+                              Debug.Log($"Worker создан с новым API: {worker.GetType().Name}");
                               return worker;
                         }
                         else
                         {
-                              Debug.LogError("Метод CreateWorker не найден в WorkerFactory");
+                              Debug.LogError($"Не найден подходящий конструктор Worker({model.GetType().Name}, {backendType.Name})");
                         }
                   }
-                  else
+
+                  // Проверяем наличие WorkerFactory (старая версия API до 2.1.x)
+                  var workerFactoryType = sentisAssembly.GetType("Unity.Sentis.WorkerFactory");
+                  if (workerFactoryType == null)
                   {
-                        Debug.LogError("Тип Unity.Sentis.WorkerFactory не найден");
+                        // Вывод диагностики, что не найден ни Worker, ни WorkerFactory
+                        Debug.LogError("Не найдены ни Unity.Sentis.Worker, ни Unity.Sentis.WorkerFactory");
+
+                        // Попробуем найти альтернативные реализации Worker
+                        var workerImplementations = sentisAssembly.GetTypes()
+                              .Where(t => t.Name.Contains("Worker") && !t.IsInterface && !t.IsAbstract)
+                              .ToArray();
+
+                        if (workerImplementations.Length > 0)
+                        {
+                              Debug.LogWarning($"Найдены альтернативные типы Worker: {string.Join(", ", workerImplementations.Select(t => t.Name))}");
+
+                              // Выводим информацию о конструкторах
+                              foreach (var type in workerImplementations)
+                              {
+                                    var constructors = type.GetConstructors();
+                                    Debug.Log($"Конструкторы {type.Name}: {constructors.Length}");
+                                    foreach (var ctor in constructors)
+                                    {
+                                          var parameters = ctor.GetParameters();
+                                          Debug.Log($"- Конструктор с параметрами: {string.Join(", ", parameters.Select(p => $"{p.ParameterType.Name} {p.Name}"))}");
+                                    }
+                              }
+                        }
+                        return null;
                   }
+
+                  // Стандартный сценарий для WorkerFactory (старая версия API)
+                  var workerFactoryMethods = workerFactoryType.GetMethods()
+                        .Where(m => m.Name == "CreateWorker")
+                        .ToArray();
+
+                  if (workerFactoryMethods.Length == 0)
+                  {
+                        Debug.LogError("Методы CreateWorker не найдены в WorkerFactory");
+                        return null;
+                  }
+
+                  Debug.Log($"Найдено методов CreateWorker: {workerFactoryMethods.Length}");
+
+                  // Сначала пробуем вызвать наиболее подходящий метод с заданным бэкендом
+                  foreach (var method in workerFactoryMethods)
+                  {
+                        var parameters = method.GetParameters();
+                        if (parameters.Length == 2 &&
+                            parameters[0].ParameterType.IsAssignableFrom(model.GetType()) &&
+                            parameters[1].ParameterType.IsEnum)
+                        {
+                              try
+                              {
+                                    // Создаем параметр для бэкенда
+                                    object backendEnum = Enum.ToObject(parameters[1].ParameterType, actualBackend);
+                                    var worker = method.Invoke(null, new[] { model, backendEnum });
+                                    Debug.Log($"Worker создан с методом CreateWorker: {worker?.GetType()?.Name ?? "null"}");
+                                    return worker;
+                              }
+                              catch (Exception e)
+                              {
+                                    Debug.LogWarning($"Не удалось создать Worker с заданным бэкендом: {e.Message}");
+                              }
+                        }
+                  }
+
+                  // Если не удалось создать с заданным бэкендом, пробуем без указания бэкенда
+                  foreach (var method in workerFactoryMethods)
+                  {
+                        var parameters = method.GetParameters();
+                        if (parameters.Length == 1 && parameters[0].ParameterType.IsAssignableFrom(model.GetType()))
+                        {
+                              try
+                              {
+                                    var worker = method.Invoke(null, new[] { model });
+                                    Debug.Log($"Worker создан с методом CreateWorker (без бэкенда): {worker?.GetType()?.Name ?? "null"}");
+                                    return worker;
+                              }
+                              catch (Exception e)
+                              {
+                                    Debug.LogError($"Не удалось создать Worker: {e.Message}");
+                              }
+                        }
+                  }
+
+                  Debug.LogError("Не удалось найти подходящий метод CreateWorker");
+                  return null;
             }
             catch (Exception e)
             {
                   Debug.LogError($"Ошибка при создании Worker: {e.Message}");
+                  if (e.InnerException != null)
+                  {
+                        Debug.LogError($"Внутреннее исключение: {e.InnerException.Message}");
+                  }
+                  return null;
             }
-
-            return null;
       }
 
       /// <summary>
@@ -266,13 +408,35 @@ public static class SafeModelLoader
       }
 
       /// <summary>
-      /// Проверяет, установлен ли Unity Sentis
+      /// Проверяет, доступен ли пакет Unity Sentis в проекте
       /// </summary>
-      /// <returns>true, если Unity Sentis доступен</returns>
       public static bool IsSentisAvailable()
       {
-            var modelLoaderType = Type.GetType("Unity.Sentis.ModelLoader, Unity.Sentis");
-            return modelLoaderType != null;
+            try
+            {
+                  // Проверяем наличие Assembly Unity.Sentis
+                  var sentisAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+                  if (sentisAssembly == null)
+                  {
+                        Debug.LogWarning("Сборка Unity.Sentis не найдена");
+
+                        // Попробуем найти через Type.GetType
+                        var modelType = Type.GetType("Unity.Sentis.Model, Unity.Sentis");
+                        if (modelType == null)
+                        {
+                              Debug.LogWarning("Тип Unity.Sentis.Model не найден");
+                              return false;
+                        }
+                  }
+
+                  return true;
+            }
+            catch
+            {
+                  return false;
+            }
       }
 
       /// <summary>
@@ -289,5 +453,119 @@ public static class SafeModelLoader
             if (sentisModelAssetType == null) return false;
 
             return sentisModelAssetType.IsAssignableFrom(modelAsset.GetType());
+      }
+
+      /// <summary>
+      /// Выводит диагностическую информацию о состоянии Unity Sentis
+      /// </summary>
+      public static void DiagnoseSentisStatus()
+      {
+            Debug.Log("=== ДИАГНОСТИКА UNITY SENTIS ===");
+
+            try
+            {
+                  // Проверяем наличие Assembly Unity.Sentis
+                  var sentisAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+                  if (sentisAssembly != null)
+                  {
+                        Debug.Log($"✅ Сборка Unity.Sentis найдена: {sentisAssembly.GetName().Version}");
+
+                        // Проверяем наличие основных типов
+                        var modelType = sentisAssembly.GetType("Unity.Sentis.Model");
+                        var modelLoaderType = sentisAssembly.GetType("Unity.Sentis.ModelLoader");
+                        var workerFactoryType = sentisAssembly.GetType("Unity.Sentis.WorkerFactory");
+
+                        Debug.Log($"Тип Model найден: {(modelType != null ? "✅ Да" : "❌ Нет")}");
+                        Debug.Log($"Тип ModelLoader найден: {(modelLoaderType != null ? "✅ Да" : "❌ Нет")}");
+                        Debug.Log($"Тип WorkerFactory найден: {(workerFactoryType != null ? "✅ Да" : "❌ Нет")}");
+
+                        // Если WorkerFactory найден, изучаем его методы
+                        if (workerFactoryType != null)
+                        {
+                              var createWorkerMethods = workerFactoryType.GetMethods()
+                                    .Where(m => m.Name == "CreateWorker")
+                                    .ToArray();
+
+                              Debug.Log($"Методов CreateWorker: {createWorkerMethods.Length}");
+
+                              foreach (var method in createWorkerMethods)
+                              {
+                                    var parameters = method.GetParameters();
+                                    Debug.Log($"- Метод с параметрами: {string.Join(", ", parameters.Select(p => p.ParameterType.Name))}");
+                              }
+                        }
+
+                        // Ищем другие интересные типы
+                        var workerTypes = sentisAssembly.GetTypes()
+                              .Where(t => t.Name.Contains("Worker") && !t.IsInterface && !t.IsAbstract)
+                              .ToArray();
+
+                        Debug.Log($"Найдено конкретных типов Worker: {workerTypes.Length}");
+                        if (workerTypes.Length > 0)
+                        {
+                              foreach (var worker in workerTypes)
+                              {
+                                    Debug.Log($"- {worker.Name}");
+                              }
+                        }
+                  }
+                  else
+                  {
+                        Debug.LogError("❌ Сборка Unity.Sentis не найдена");
+
+                        // Пробуем через Type.GetType
+                        var modelType = Type.GetType("Unity.Sentis.Model, Unity.Sentis");
+                        Debug.Log($"Поиск через Type.GetType: {(modelType != null ? "✅ Успешно" : "❌ Не найден")}");
+                  }
+
+                  // Проверяем версию в package.json
+                  Debug.Log("Поиск информации в package.json...");
+                  string packageManifestPath = "Packages/manifest.json";
+                  if (System.IO.File.Exists(packageManifestPath))
+                  {
+                        string manifest = System.IO.File.ReadAllText(packageManifestPath);
+                        if (manifest.Contains("com.unity.sentis"))
+                        {
+                              int index = manifest.IndexOf("com.unity.sentis");
+                              int versionStart = manifest.IndexOf(":", index) + 1;
+                              int versionEnd = manifest.IndexOf(",", versionStart);
+                              if (versionEnd == -1) versionEnd = manifest.IndexOf("}", versionStart);
+
+                              if (versionStart > 0 && versionEnd > versionStart)
+                              {
+                                    string version = manifest.Substring(versionStart, versionEnd - versionStart).Trim();
+                                    Debug.Log($"✅ Sentis в manifest.json: {version}");
+                              }
+                        }
+                        else
+                        {
+                              Debug.LogError("❌ Sentis не найден в manifest.json");
+                        }
+                  }
+                  else
+                  {
+                        Debug.LogWarning("⚠️ Файл manifest.json не найден");
+                  }
+
+                  // Проверяем системные требования
+                  Debug.Log($"Compute Shaders поддерживаются: {(SystemInfo.supportsComputeShaders ? "✅ Да" : "❌ Нет")}");
+                  Debug.Log($"Доступная системная память: {SystemInfo.systemMemorySize} MB");
+                  Debug.Log($"Архитектура процессора: {SystemInfo.processorType}");
+                  Debug.Log($"Количество ядер процессора: {SystemInfo.processorCount}");
+                  Debug.Log($"Платформа: {Application.platform}");
+                  Debug.Log($"Версия Unity: {Application.unityVersion}");
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"❌ Ошибка при диагностике Sentis: {e.Message}");
+                  if (e.InnerException != null)
+                  {
+                        Debug.LogError($"Внутреннее исключение: {e.InnerException.Message}");
+                  }
+            }
+
+            Debug.Log("=== ДИАГНОСТИКА ЗАВЕРШЕНА ===");
       }
 }

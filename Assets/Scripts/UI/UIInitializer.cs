@@ -16,6 +16,14 @@ public class UIInitializer : MonoBehaviour
             if (instance == null)
             {
                   instance = this;
+
+                  // Проверяем, является ли объект корневым
+                  if (transform.parent != null)
+                  {
+                        // Отсоединяем от родителя перед вызовом DontDestroyOnLoad
+                        transform.SetParent(null);
+                  }
+
                   DontDestroyOnLoad(gameObject);
             }
             else if (instance != this)

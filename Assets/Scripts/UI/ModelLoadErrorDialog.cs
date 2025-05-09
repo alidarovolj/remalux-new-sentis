@@ -124,7 +124,7 @@ public class ModelLoadErrorDialog : MonoBehaviour
       /// Показывает сообщение об ошибке загрузки модели с информацией о модели
       /// </summary>
       /// <param name="modelInfo">Информация о модели и ошибке</param>
-      public void ShowModelLoadError(ModelLoadErrorInfo modelInfo)
+      public void ShowModelLoadError(ModelErrorInfo modelInfo)
       {
             if (modelInfo == null)
             {
@@ -170,14 +170,14 @@ public class ModelLoadErrorDialog : MonoBehaviour
       /// <summary>
       /// Запасной вариант отображения ошибки с помощью OnGUI
       /// </summary>
-      private IEnumerator ShowFallbackErrorDialog(ModelLoadErrorInfo modelInfo)
+      private IEnumerator ShowFallbackErrorDialog(ModelErrorInfo modelInfo)
       {
             // Флаг для отслеживания состояния диалога
             bool isDialogOpen = true;
-            ModelLoadErrorInfo currentInfo = modelInfo;
+            ModelErrorInfo currentInfo = modelInfo;
 
             // Сохраняем кешированную версию OnGUI делегата
-            System.Action<ModelLoadErrorInfo, bool> drawDialogAction = DrawErrorDialog;
+            System.Action<ModelErrorInfo, bool> drawDialogAction = DrawErrorDialog;
 
             // Включаем отображение
             showGUIDialog = true;
@@ -196,7 +196,7 @@ public class ModelLoadErrorDialog : MonoBehaviour
 
       // Флаги и данные для OnGUI отображения
       private bool showGUIDialog = false;
-      private ModelLoadErrorInfo errorDialogInfo = null;
+      private ModelErrorInfo errorDialogInfo = null;
 
       private void OnGUI()
       {
@@ -206,7 +206,7 @@ public class ModelLoadErrorDialog : MonoBehaviour
             }
       }
 
-      private void DrawErrorDialog(ModelLoadErrorInfo info, bool showCloseButton)
+      private void DrawErrorDialog(ModelErrorInfo info, bool showCloseButton)
       {
             // Стиль для окна ошибки
             GUIStyle windowStyle = new GUIStyle(GUI.skin.window);
@@ -268,7 +268,7 @@ public class ModelLoadErrorDialog : MonoBehaviour
       /// </summary>
       public void ShowError(string errorMessage)
       {
-            ModelLoadErrorInfo info = new ModelLoadErrorInfo(
+            ModelErrorInfo info = new ModelErrorInfo(
                 "Неизвестная модель",
                 "Неизвестный тип",
                 errorMessage,
