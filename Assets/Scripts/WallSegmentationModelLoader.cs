@@ -3,87 +3,70 @@ using System.Collections;
 using System;
 
 /// <summary>
-/// Вспомогательный класс для WallSegmentation, который поможет безопасно загружать модели
-/// и предотвращать краши Unity при работе с несовместимыми моделями.
+/// Компонент для безопасной загрузки моделей WallSegmentation.
+/// Предотвращает краш Unity, который может произойти при прямом назначении модели.
 /// </summary>
+[RequireComponent(typeof(WallSegmentation))]
 public class WallSegmentationModelLoader : MonoBehaviour
 {
-      // Ссылка на исходный WallSegmentation компонент
-      private Component wallSegmentation;
+      [Tooltip("Объект модели ONNX для сегментации стен")]
+      public UnityEngine.Object modelAsset;
 
-      // Последняя ошибка при загрузке модели
-      private string lastErrorMessage = "";
+      [Tooltip("Максимальное время ожидания загрузки модели в секундах")]
+      public float loadTimeout = 30f;
 
-      // Статус загрузки модели
+      [Tooltip("Автоматически загружать модель при старте")]
+      public bool loadOnStart = true;
+
+      [Tooltip("Предпочитаемый бэкенд (0 = CPU, 1 = GPUCompute)")]
+      public int preferredBackend = 0;
+
+      private WallSegmentation wallSegmentation;
       private bool isModelLoading = false;
       private bool isModelLoaded = false;
-
-      // Максимальное время загрузки в секундах
-      [SerializeField] private float loadingTimeout = 10f;
-
-      private void Awake()
-      {
-            // Находим компонент WallSegmentation на том же объекте
-            wallSegmentation = GetComponent(FindTypeByName("WallSegmentation"));
-
-            if (wallSegmentation == null)
-            {
-                  Debug.LogError("WallSegmentationModelLoader должен быть прикреплен к тому же GameObject, что и WallSegmentation");
-                  this.enabled = false;
-                  return;
-            }
-      }
+      private string lastErrorMessage = null;
 
       private void Start()
       {
-            // Начинаем безопасную загрузку модели
-            StartCoroutine(SafeLoadModel());
-      }
-
-      private System.Type FindTypeByName(string typeName)
-      {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            // Получаем ссылку на компонент WallSegmentation
+            wallSegmentation = GetComponent<WallSegmentation>();
+            if (wallSegmentation == null)
             {
-                  var type = assembly.GetType(typeName);
-                  if (type != null) return type;
-
-                  foreach (var t in assembly.GetTypes())
-                  {
-                        if (t.Name == typeName) return t;
-                  }
-            }
-            return null;
-      }
-
-      private IEnumerator SafeLoadModel()
-      {
-            // Получаем поле modelAsset из WallSegmentation
-            var modelAssetField = wallSegmentation.GetType().GetField("modelAsset",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            if (modelAssetField == null)
-            {
-                  Debug.LogError("Не удалось найти поле modelAsset в WallSegmentation");
-                  yield break;
+                  Debug.LogError("WallSegmentationModelLoader: Компонент WallSegmentation не найден на этом объекте.");
+                  return;
             }
 
-            // Получаем текущую модель
-            var modelAsset = modelAssetField.GetValue(wallSegmentation) as UnityEngine.Object;
+            // Автоматически загружаем модель при старте
+            if (loadOnStart && modelAsset != null)
+            {
+                  StartCoroutine(LoadModel());
+            }
+      }
+
+      /// <summary>
+      /// Загружает модель асинхронно и безопасно
+      /// </summary>
+      public IEnumerator LoadModel()
+      {
+            if (isModelLoading) yield break;
+            if (isModelLoaded) yield break;
+
             if (modelAsset == null)
             {
-                  Debug.LogError("ModelAsset не назначен в WallSegmentation");
+                  Debug.LogError("WallSegmentationModelLoader: Модель не назначена.");
                   yield break;
             }
 
-            Debug.Log($"WallSegmentationModelLoader: Начинаем безопасную загрузку модели {modelAsset.name}");
-
-            // Устанавливаем статус загрузки
             isModelLoading = true;
-            isModelLoaded = false;
-            lastErrorMessage = "";
+            lastErrorMessage = null;
 
-            // Пытаемся загрузить модель в отдельном потоке
-            yield return StartCoroutine(SafeModelLoader.LoadModelAsync(modelAsset, OnModelLoaded));
+            Debug.Log($"WallSegmentationModelLoader: Начинаем загрузку модели {modelAsset.name}");
+
+            // Используем SafeModelLoader для безопасной загрузки
+            yield return StartCoroutine(SafeModelLoader.LoadModelAsync(
+                modelAsset,
+                loadTimeout,
+                OnModelLoaded));
       }
 
       private void OnModelLoaded(bool success, object model, string errorMessage)
@@ -101,184 +84,124 @@ public class WallSegmentationModelLoader : MonoBehaviour
 
                   if (initMethod != null)
                   {
-                        try
+                        // Создаем исполнитель через безопасную обертку
+                        var worker = SafeModelLoader.CreateWorkerSafely(model, preferredBackend);
+
+                        if (worker != null)
                         {
-                              // Вызываем метод инициализации, передавая загруженную модель
-                              initMethod.Invoke(wallSegmentation, new object[] { model });
-                              Debug.Log("WallSegmentationModelLoader: Инициализация модели выполнена успешно");
+                              // Устанавливаем модель в компонент WallSegmentation
+                              SetPrivateField(wallSegmentation, "runtimeModel", model);
+                              SetPrivateField(wallSegmentation, "engine", worker);
+                              SetPrivateField(wallSegmentation, "isModelInitialized", true);
+
+                              Debug.Log("WallSegmentation успешно инициализирован с моделью");
                         }
-                        catch (Exception e)
+                        else
                         {
-                              Debug.LogError($"WallSegmentationModelLoader: Ошибка при инициализации модели: {e.Message}");
-                              isModelLoaded = false;
-                              lastErrorMessage = $"Ошибка инициализации: {e.Message}";
-
-                              // Получаем модель для передачи информации о ней
-                              var modelAsset = GetModelAsset();
-
-                              // Отображаем ошибку в UI с информацией о модели
-                              ShowErrorUI($"Не удалось инициализировать модель: {e.Message}", modelAsset);
+                              Debug.LogError("Не удалось создать Worker для модели");
+                              ShowErrorInDialog("Не удалось создать Worker для модели. Возможно, выбран неподдерживаемый бэкенд или недостаточно памяти.");
                         }
                   }
                   else
                   {
-                        Debug.LogWarning("WallSegmentationModelLoader: Не удалось найти метод InitializeSegmentation");
+                        Debug.LogError("Метод InitializeSegmentation не найден в WallSegmentation");
                   }
             }
             else
             {
-                  // Логируем ошибку
+                  lastErrorMessage = errorMessage;
                   Debug.LogError($"WallSegmentationModelLoader: Ошибка загрузки модели: {errorMessage}");
-                  lastErrorMessage = errorMessage;
 
-                  // Получаем моделассет для передачи информации о нем
-                  var modelAsset = GetModelAsset();
-
-                  // Отображаем ошибку в UI с передачей информации о модели
-                  ShowErrorUI(errorMessage, modelAsset);
+                  // Покажем понятное сообщение пользователю
+                  ShowErrorInDialog(errorMessage);
             }
       }
 
       /// <summary>
-      /// Получает модель из WallSegmentation компонента
+      /// Устанавливает значение приватного поля объекта через рефлексию
       /// </summary>
-      private UnityEngine.Object GetModelAsset()
+      private void SetPrivateField(object target, string fieldName, object value)
       {
-            if (wallSegmentation == null) return null;
+            var field = target.GetType().GetField(fieldName,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
 
-            try
+            if (field != null)
             {
-                  var modelAssetField = wallSegmentation.GetType().GetField("modelAsset",
-                      System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
-                      System.Reflection.BindingFlags.Instance);
-
-                  if (modelAssetField != null)
-                  {
-                        return modelAssetField.GetValue(wallSegmentation) as UnityEngine.Object;
-                  }
+                  field.SetValue(target, value);
             }
-            catch (Exception ex)
+            else
             {
-                  Debug.LogError($"WallSegmentationModelLoader: Ошибка при получении модели: {ex.Message}");
+                  Debug.LogError($"Поле '{fieldName}' не найдено в типе {target.GetType().Name}");
             }
-
-            return null;
       }
 
       /// <summary>
-      /// Отображает ошибку загрузки модели с дополнительной информацией о модели
+      /// Показывает сообщение об ошибке в диалоговом окне
       /// </summary>
-      private void ShowErrorUI(string errorMessage, UnityEngine.Object modelAsset = null)
+      private void ShowErrorInDialog(string errorMessage)
       {
-            try
+            // Проверяем есть ли класс DialogInitializer
+            if (DialogInitializer.instance != null)
             {
-                  // Пытаемся найти DialogInitializer и показать ошибку
-                  if (DialogInitializer.instance != null)
+                  // Вызываем статический метод через рефлексию для показа ошибки
+                  var showErrorMethod = typeof(DialogInitializer).GetMethod("ShowModelLoadError",
+                      System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+
+                  if (showErrorMethod != null)
                   {
-                        DialogInitializer.ShowModelLoadError(errorMessage, modelAsset);
-                        return;
-                  }
+                        // Получаем информацию о модели
+                        string modelName = modelAsset != null ? modelAsset.name : "неизвестная модель";
+                        string modelType = modelAsset != null ? modelAsset.GetType().Name : "неизвестный тип";
 
-                  // Если DialogInitializer не найден, пробуем использовать прямой вызов
-                  var dialogType = FindTypeByName("ModelLoadErrorDialog");
-                  if (dialogType != null)
+                        // Подготавливаем данные о модели
+                        var modelInfo = new ModelLoadErrorInfo(
+                            modelName,
+                            modelType,
+                            errorMessage,
+                            "Убедитесь, что модель совместима с Unity Sentis. Рекомендуется использовать модели ONNX размером до 50МБ."
+                        );
+
+                        // Вызываем метод показа ошибки
+                        showErrorMethod.Invoke(null, new object[] { modelInfo });
+                  }
+                  else
                   {
-                        var instanceProperty = dialogType.GetProperty("Instance",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-
-                        if (instanceProperty != null)
-                        {
-                              var dialogInstance = instanceProperty.GetValue(null);
-                              if (dialogInstance != null)
-                              {
-                                    var showErrorMethod = dialogType.GetMethod("ShowError");
-                                    if (showErrorMethod != null)
-                                    {
-                                          string enhancedError = errorMessage;
-                                          if (modelAsset != null)
-                                          {
-                                                enhancedError += "\n\nИнформация о модели: " +
-                                                      SafeModelLoader.GetRuntimeModelInfo(modelAsset);
-                                          }
-
-                                          showErrorMethod.Invoke(dialogInstance, new object[] { enhancedError });
-                                          return;
-                                    }
-                              }
-                        }
+                        Debug.LogError("Метод ShowModelLoadError не найден в DialogInitializer");
                   }
-
-                  // Крайний случай: используем стандартный редакторский диалог в редакторе Unity
-#if UNITY_EDITOR
-                  UnityEditor.EditorUtility.DisplayDialog("Ошибка загрузки модели",
-                        $"{errorMessage}\n\n" +
-                        "Возможные причины:\n" +
-                        "- Модель слишком большая\n" +
-                        "- Неподдерживаемый формат модели\n" +
-                        "- Отсутствует Unity Sentis или другая ML библиотека\n\n" +
-                        "Рекомендации:\n" +
-                        "- Используйте модели размером до 50MB\n" +
-                        "- Убедитесь, что установлен пакет Unity Sentis\n" +
-                        "- Проверьте формат модели (ONNX opset 7-15)",
-                        "OK");
-#endif
             }
-            catch (System.Exception e)
+            else
             {
-                  Debug.LogError($"Ошибка при показе UI: {e.Message}");
-
-                  // Используем OnGUI как крайнюю меру
-                  lastErrorMessage = errorMessage;
+                  Debug.LogWarning("DialogInitializer не найден в сцене. Сообщение об ошибке не будет показано.");
             }
       }
 
-      private void OnGUI()
+      /// <summary>
+      /// Публичный метод для проверки состояния загрузки
+      /// </summary>
+      public bool IsModelLoaded => isModelLoaded;
+
+      /// <summary>
+      /// Публичный метод для получения последней ошибки
+      /// </summary>
+      public string LastErrorMessage => lastErrorMessage;
+}
+
+/// <summary>
+/// Структура для хранения информации об ошибке загрузки модели
+/// </summary>
+[System.Serializable]
+public class ModelLoadErrorInfo
+{
+      public string modelName;
+      public string modelType;
+      public string errorMessage;
+      public string recommendation;
+
+      public ModelLoadErrorInfo(string modelName, string modelType, string errorMessage, string recommendation)
       {
-            // Отображаем ошибку загрузки модели, если она есть
-            if (!string.IsNullOrEmpty(lastErrorMessage) && !isModelLoaded)
-            {
-                  // Стиль для окна ошибки
-                  GUIStyle windowStyle = new GUIStyle(GUI.skin.window);
-                  windowStyle.normal.textColor = Color.white;
-                  windowStyle.fontSize = 14;
-
-                  // Стиль для текста
-                  GUIStyle textStyle = new GUIStyle(GUI.skin.label);
-                  textStyle.normal.textColor = Color.white;
-                  textStyle.fontSize = 14;
-                  textStyle.wordWrap = true;
-
-                  // Стиль для кнопки
-                  GUIStyle buttonStyle = new GUIStyle(GUI.skin.button);
-                  buttonStyle.fontSize = 14;
-
-                  // Размеры окна
-                  int windowWidth = 500;
-                  int windowHeight = 300;
-
-                  // Рассчитываем центр экрана
-                  int x = (Screen.width - windowWidth) / 2;
-                  int y = (Screen.height - windowHeight) / 2;
-
-                  // Рисуем окно
-                  GUI.Box(new Rect(x, y, windowWidth, windowHeight), "Ошибка загрузки модели", windowStyle);
-
-                  // Отображаем сообщение об ошибке
-                  GUI.Label(new Rect(x + 20, y + 40, windowWidth - 40, 60), lastErrorMessage, textStyle);
-
-                  // Отображаем возможные причины
-                  GUI.Label(new Rect(x + 20, y + 100, windowWidth - 40, 30), "Возможные причины:", textStyle);
-                  GUI.Label(new Rect(x + 20, y + 130, windowWidth - 40, 80),
-                        "- Модель слишком большая\n" +
-                        "- Неподдерживаемый формат модели\n" +
-                        "- Отсутствует Unity Sentis", textStyle);
-
-                  // Кнопка ОК
-                  if (GUI.Button(new Rect(x + (windowWidth - 100) / 2, y + windowHeight - 50, 100, 30), "OK", buttonStyle))
-                  {
-                        // Очищаем сообщение об ошибке, чтобы скрыть окно
-                        lastErrorMessage = null;
-                  }
-            }
+            this.modelName = modelName;
+            this.modelType = modelType;
+            this.errorMessage = errorMessage;
+            this.recommendation = recommendation;
       }
 }

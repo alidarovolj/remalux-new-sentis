@@ -3,147 +3,277 @@ using UnityEngine.UI;
 using System.Collections;
 
 /// <summary>
-/// Упрощенный компонент для отображения ошибок загрузки модели
+/// Диалоговое окно для отображения ошибок при загрузке моделей машинного обучения
 /// </summary>
 public class ModelLoadErrorDialog : MonoBehaviour
 {
-      // Текстовые сообщения по умолчанию
-      private const string DEFAULT_TITLE = "Ошибка загрузки модели";
-      private const string DEFAULT_REASONS = "- Модель слишком большая\n- Неподдерживаемый формат модели\n- Отсутствует Unity Sentis или другая ML библиотека";
-      private const string DEFAULT_RECOMMENDATIONS = "- Используйте модели размером до 50MB\n- Убедитесь, что установлен пакет Unity Sentis\n- Проверьте формат модели (ONNX opset 7-15)";
+      [Header("UI Компоненты")]
+      [SerializeField] private Text titleText;
+      [SerializeField] private Text errorMessageText;
+      [SerializeField] private Text modelInfoText;
+      [SerializeField] private Text recommendationText;
+      [SerializeField] private Button closeButton;
+      [SerializeField] private GameObject dialogPanel;
 
-      private static ModelLoadErrorDialog instance;
-      private GUIStyle titleStyle;
-      private GUIStyle textStyle;
-      private GUIStyle buttonStyle;
-      private Texture2D iconTexture;
-      private bool isVisible = false;
-      private string errorMessage = "";
+      [Header("Тексты")]
+      [SerializeField] private string defaultTitle = "Ошибка загрузки модели";
+      [SerializeField]
+      private string defaultRecommendation =
+          "Рекомендации:\n" +
+          "- Используйте модели меньшего размера (до 50МБ)\n" +
+          "- Убедитесь, что установлен пакет Unity Sentis\n" +
+          "- Проверьте формат ONNX (поддерживаются opset 7-15)";
 
-      // Singleton доступ
+      // Синглтон для простого доступа
+      private static ModelLoadErrorDialog _instance;
       public static ModelLoadErrorDialog Instance
       {
             get
             {
-                  if (instance == null)
+                  if (_instance == null)
                   {
-                        GameObject obj = new GameObject("ModelLoadErrorDialog");
-                        instance = obj.AddComponent<ModelLoadErrorDialog>();
-                        DontDestroyOnLoad(obj);
+                        _instance = FindObjectOfType<ModelLoadErrorDialog>();
+
+                        if (_instance == null)
+                        {
+                              GameObject obj = new GameObject("ModelLoadErrorDialog");
+                              _instance = obj.AddComponent<ModelLoadErrorDialog>();
+                              DontDestroyOnLoad(obj);
+                        }
                   }
-                  return instance;
+                  return _instance;
             }
       }
 
       private void Awake()
       {
-            if (instance == null)
+            // Инициализация синглтона
+            if (_instance == null)
             {
-                  instance = this;
+                  _instance = this;
                   DontDestroyOnLoad(gameObject);
-                  InitStyles();
             }
-            else if (instance != this)
+            else if (_instance != this)
             {
                   Destroy(gameObject);
+                  return;
+            }
+
+            // Начальная настройка
+            if (dialogPanel != null)
+            {
+                  dialogPanel.SetActive(false);
+            }
+
+            // Настройка кнопки закрытия
+            if (closeButton != null)
+            {
+                  closeButton.onClick.AddListener(CloseDialog);
             }
       }
 
-      private void InitStyles()
+      private void Start()
       {
-            // Создаем стили для GUI
-            titleStyle = new GUIStyle();
-            titleStyle.fontSize = 24;
-            titleStyle.normal.textColor = Color.white;
-            titleStyle.alignment = TextAnchor.MiddleCenter;
-            titleStyle.fontStyle = FontStyle.Bold;
+            // Если компоненты не заданы в инспекторе, пытаемся найти их автоматически
+            if (dialogPanel == null)
+            {
+                  dialogPanel = transform.Find("DialogPanel")?.gameObject;
+                  if (dialogPanel == null && transform.childCount > 0)
+                  {
+                        dialogPanel = transform.GetChild(0).gameObject;
+                  }
+            }
 
-            textStyle = new GUIStyle();
-            textStyle.fontSize = 18;
-            textStyle.normal.textColor = Color.white;
-            textStyle.alignment = TextAnchor.MiddleLeft;
-            textStyle.wordWrap = true;
+            if (titleText == null && dialogPanel != null)
+            {
+                  titleText = dialogPanel.transform.Find("TitleText")?.GetComponent<Text>();
+            }
 
-            buttonStyle = new GUIStyle(GUI.skin.button);
-            buttonStyle.fontSize = 18;
-            buttonStyle.normal.textColor = Color.white;
+            if (errorMessageText == null && dialogPanel != null)
+            {
+                  errorMessageText = dialogPanel.transform.Find("ErrorMessageText")?.GetComponent<Text>();
+            }
 
-            // Создаем иконку
-            iconTexture = ErrorIconProvider.GetErrorIcon().texture;
+            if (modelInfoText == null && dialogPanel != null)
+            {
+                  modelInfoText = dialogPanel.transform.Find("ModelInfoText")?.GetComponent<Text>();
+            }
+
+            if (recommendationText == null && dialogPanel != null)
+            {
+                  recommendationText = dialogPanel.transform.Find("RecommendationText")?.GetComponent<Text>();
+            }
+
+            if (closeButton == null && dialogPanel != null)
+            {
+                  closeButton = dialogPanel.transform.Find("CloseButton")?.GetComponent<Button>();
+                  if (closeButton != null)
+                  {
+                        closeButton.onClick.AddListener(CloseDialog);
+                  }
+            }
+
+            // Скрываем диалог при старте
+            if (dialogPanel != null)
+            {
+                  dialogPanel.SetActive(false);
+            }
       }
 
       /// <summary>
-      /// Показывает диалог ошибки
+      /// Показывает сообщение об ошибке загрузки модели с информацией о модели
       /// </summary>
-      /// <param name="message">Сообщение об ошибке</param>
-      public void ShowError(string message)
+      /// <param name="modelInfo">Информация о модели и ошибке</param>
+      public void ShowModelLoadError(ModelLoadErrorInfo modelInfo)
       {
-            errorMessage = message;
-            isVisible = true;
+            if (modelInfo == null)
+            {
+                  Debug.LogError("ModelInfo не может быть null");
+                  return;
+            }
+
+            // Устанавливаем тексты
+            if (titleText != null)
+            {
+                  titleText.text = defaultTitle;
+            }
+
+            if (errorMessageText != null)
+            {
+                  errorMessageText.text = modelInfo.errorMessage;
+            }
+
+            if (modelInfoText != null)
+            {
+                  modelInfoText.text = $"Модель: {modelInfo.modelName}\nТип: {modelInfo.modelType}";
+            }
+
+            if (recommendationText != null)
+            {
+                  recommendationText.text = string.IsNullOrEmpty(modelInfo.recommendation)
+                      ? defaultRecommendation
+                      : modelInfo.recommendation;
+            }
+
+            // Показываем диалог
+            if (dialogPanel != null)
+            {
+                  dialogPanel.SetActive(true);
+            }
+            else
+            {
+                  // Если нет UI, используем OnGUI
+                  StartCoroutine(ShowFallbackErrorDialog(modelInfo));
+            }
       }
 
       /// <summary>
-      /// Скрывает диалог ошибки
+      /// Запасной вариант отображения ошибки с помощью OnGUI
       /// </summary>
-      public void HideError()
+      private IEnumerator ShowFallbackErrorDialog(ModelLoadErrorInfo modelInfo)
       {
-            isVisible = false;
+            // Флаг для отслеживания состояния диалога
+            bool isDialogOpen = true;
+            ModelLoadErrorInfo currentInfo = modelInfo;
+
+            // Сохраняем кешированную версию OnGUI делегата
+            System.Action<ModelLoadErrorInfo, bool> drawDialogAction = DrawErrorDialog;
+
+            // Включаем отображение
+            showGUIDialog = true;
+            errorDialogInfo = currentInfo;
+
+            // Ожидаем закрытия диалога
+            while (showGUIDialog && isDialogOpen)
+            {
+                  yield return null;
+            }
+
+            // Выключаем отображение
+            showGUIDialog = false;
+            errorDialogInfo = null;
       }
+
+      // Флаги и данные для OnGUI отображения
+      private bool showGUIDialog = false;
+      private ModelLoadErrorInfo errorDialogInfo = null;
 
       private void OnGUI()
       {
-            if (!isVisible) return;
-
-            // Размеры диалога
-            float dialogWidth = 600;
-            float dialogHeight = 500;
-
-            // Позиция диалога по центру экрана
-            float x = (Screen.width - dialogWidth) / 2;
-            float y = (Screen.height - dialogHeight) / 2;
-
-            // Рисуем фон диалога
-            Rect dialogRect = new Rect(x, y, dialogWidth, dialogHeight);
-            GUI.Box(dialogRect, "");
-            GUI.color = new Color(0.1f, 0.1f, 0.1f, 0.95f);
-            GUI.DrawTexture(dialogRect, Texture2D.whiteTexture);
-            GUI.color = Color.white;
-
-            // Рисуем иконку
-            float iconSize = 80;
-            Rect iconRect = new Rect(x + (dialogWidth - iconSize) / 2, y + 20, iconSize, iconSize);
-            GUI.DrawTexture(iconRect, iconTexture);
-
-            // Рисуем заголовок
-            Rect titleRect = new Rect(x, y + 110, dialogWidth, 40);
-            GUI.Label(titleRect, DEFAULT_TITLE, titleStyle);
-
-            // Рисуем сообщение об ошибке
-            Rect messageRect = new Rect(x + 20, y + 150, dialogWidth - 40, 60);
-            GUI.Label(messageRect, errorMessage, textStyle);
-
-            // Рисуем заголовок "Возможные причины"
-            Rect reasonsTitleRect = new Rect(x + 20, y + 210, dialogWidth - 40, 30);
-            titleStyle.fontSize = 20;
-            GUI.Label(reasonsTitleRect, "Возможные причины:", titleStyle);
-
-            // Рисуем список причин
-            Rect reasonsRect = new Rect(x + 40, y + 240, dialogWidth - 80, 90);
-            GUI.Label(reasonsRect, DEFAULT_REASONS, textStyle);
-
-            // Рисуем заголовок "Рекомендации"
-            Rect recTitleRect = new Rect(x + 20, y + 330, dialogWidth - 40, 30);
-            GUI.Label(recTitleRect, "Рекомендации:", titleStyle);
-
-            // Рисуем список рекомендаций
-            Rect recRect = new Rect(x + 40, y + 360, dialogWidth - 80, 90);
-            GUI.Label(recRect, DEFAULT_RECOMMENDATIONS, textStyle);
-
-            // Рисуем кнопку OK
-            Rect buttonRect = new Rect(x + (dialogWidth - 200) / 2, y + dialogHeight - 50, 200, 40);
-            if (GUI.Button(buttonRect, "OK", buttonStyle))
+            if (showGUIDialog && errorDialogInfo != null)
             {
-                  HideError();
+                  DrawErrorDialog(errorDialogInfo, true);
             }
+      }
+
+      private void DrawErrorDialog(ModelLoadErrorInfo info, bool showCloseButton)
+      {
+            // Стиль для окна ошибки
+            GUIStyle windowStyle = new GUIStyle(GUI.skin.window);
+            windowStyle.normal.textColor = Color.white;
+            windowStyle.fontSize = 14;
+
+            // Стиль для текста
+            GUIStyle textStyle = new GUIStyle(GUI.skin.label);
+            textStyle.normal.textColor = Color.white;
+            textStyle.fontSize = 14;
+            textStyle.wordWrap = true;
+
+            // Стиль для кнопки
+            GUIStyle buttonStyle = new GUIStyle(GUI.skin.button);
+            buttonStyle.fontSize = 14;
+
+            // Размеры окна
+            int windowWidth = 500;
+            int windowHeight = 300;
+
+            // Рассчитываем центр экрана
+            int x = (Screen.width - windowWidth) / 2;
+            int y = (Screen.height - windowHeight) / 2;
+
+            // Рисуем окно
+            GUI.Box(new Rect(x, y, windowWidth, windowHeight), defaultTitle, windowStyle);
+
+            // Отображаем сообщение об ошибке
+            GUI.Label(new Rect(x + 20, y + 40, windowWidth - 40, 60), info.errorMessage, textStyle);
+
+            // Информация о модели
+            GUI.Label(new Rect(x + 20, y + 100, windowWidth - 40, 40),
+                  $"Модель: {info.modelName}\nТип: {info.modelType}", textStyle);
+
+            // Рекомендации
+            GUI.Label(new Rect(x + 20, y + 150, windowWidth - 40, 100),
+                  string.IsNullOrEmpty(info.recommendation) ? defaultRecommendation : info.recommendation, textStyle);
+
+            // Кнопка OK
+            if (showCloseButton && GUI.Button(new Rect(x + (windowWidth - 100) / 2, y + windowHeight - 50, 100, 30), "OK", buttonStyle))
+            {
+                  showGUIDialog = false;
+            }
+      }
+
+      /// <summary>
+      /// Закрывает диалоговое окно
+      /// </summary>
+      public void CloseDialog()
+      {
+            if (dialogPanel != null)
+            {
+                  dialogPanel.SetActive(false);
+            }
+      }
+
+      /// <summary>
+      /// Показывает простое сообщение об ошибке
+      /// </summary>
+      public void ShowError(string errorMessage)
+      {
+            ModelLoadErrorInfo info = new ModelLoadErrorInfo(
+                "Неизвестная модель",
+                "Неизвестный тип",
+                errorMessage,
+                defaultRecommendation);
+
+            ShowModelLoadError(info);
       }
 }

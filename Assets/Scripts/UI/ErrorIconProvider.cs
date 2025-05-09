@@ -1,115 +1,96 @@
 using UnityEngine;
 
 /// <summary>
-/// Создает и предоставляет иконки для UI ошибок программно
+/// Предоставляет иконки для диалоговых окон ошибок
 /// </summary>
 public static class ErrorIconProvider
 {
-      private static Sprite errorIconSprite;
+      // Кешированная иконка
+      private static Sprite cachedErrorIcon;
 
       /// <summary>
-      /// Генерирует и возвращает иконку ошибки
+      /// Получает иконку ошибки для отображения в диалоге
       /// </summary>
-      /// <returns>Спрайт с иконкой ошибки</returns>
       public static Sprite GetErrorIcon()
       {
-            if (errorIconSprite == null)
+            // Если иконка уже создана, возвращаем её
+            if (cachedErrorIcon != null)
             {
-                  CreateErrorIcon();
+                  return cachedErrorIcon;
             }
-            return errorIconSprite;
-      }
 
-      // Создает иконку ошибки программно
-      private static void CreateErrorIcon()
-      {
-            // Создаем текстуру 128x128 пикселей
-            Texture2D texture = new Texture2D(128, 128, TextureFormat.RGBA32, false);
+            // Пытаемся загрузить иконку из ресурсов
+            cachedErrorIcon = Resources.Load<Sprite>("UI/Icons/ErrorIcon");
 
-            // Заполняем текстуру прозрачным цветом
-            Color[] colors = new Color[128 * 128];
-            for (int i = 0; i < colors.Length; i++)
+            // Если иконки нет в ресурсах, создаем простую иконку программно
+            if (cachedErrorIcon == null)
             {
-                  colors[i] = Color.clear;
-            }
-            texture.SetPixels(colors);
+                  // Создаем текстуру с красным кругом и белым восклицательным знаком
+                  int size = 128;
+                  Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
 
-            // Рисуем иконку ошибки (гексагон с восклицательным знаком)
-            DrawHexagon(texture, new Color(0.6f, 0.6f, 0.6f));
-            DrawExclamationMark(texture, Color.white);
-
-            // Применяем изменения
-            texture.Apply();
-
-            // Создаем спрайт
-            errorIconSprite = Sprite.Create(
-                texture,
-                new Rect(0, 0, texture.width, texture.height),
-                new Vector2(0.5f, 0.5f)
-            );
-      }
-
-      // Рисует гексагон в текстуре
-      private static void DrawHexagon(Texture2D texture, Color color)
-      {
-            int width = texture.width;
-            int height = texture.height;
-            int centerX = width / 2;
-            int centerY = height / 2;
-            int radius = Mathf.Min(width, height) / 2 - 8;
-
-            // Рисуем гексагон
-            for (int x = 0; x < width; x++)
-            {
-                  for (int y = 0; y < height; y++)
+                  // Заполняем текстуру прозрачным цветом
+                  Color[] pixels = new Color[size * size];
+                  for (int i = 0; i < pixels.Length; i++)
                   {
-                        // Рассчитываем расстояние от центра
-                        float dx = (x - centerX) / (float)radius;
-                        float dy = (y - centerY) / (float)radius;
+                        pixels[i] = Color.clear;
+                  }
 
-                        // Формула для гексагона
-                        float hex = Mathf.Max(
-                            Mathf.Abs(dx),
-                            Mathf.Abs(dx * 0.5f + dy * 0.866f),
-                            Mathf.Abs(dx * 0.5f - dy * 0.866f)
-                        );
-
-                        if (hex < 1.0f && hex > 0.8f)
+                  // Рисуем красный круг
+                  Color redColor = new Color(0.9f, 0.2f, 0.2f, 1.0f);
+                  for (int y = 0; y < size; y++)
+                  {
+                        for (int x = 0; x < size; x++)
                         {
-                              texture.SetPixel(x, y, color);
+                              // Вычисляем расстояние от центра
+                              float dx = x - size / 2;
+                              float dy = y - size / 2;
+                              float distance = Mathf.Sqrt(dx * dx + dy * dy);
+
+                              // Если точка внутри круга, закрашиваем её
+                              if (distance < size / 2 - 2)
+                              {
+                                    pixels[y * size + x] = redColor;
+                              }
                         }
                   }
-            }
-      }
 
-      // Рисует восклицательный знак в текстуре
-      private static void DrawExclamationMark(Texture2D texture, Color color)
-      {
-            int width = texture.width;
-            int height = texture.height;
-            int centerX = width / 2;
-            int centerY = height / 2;
+                  // Рисуем белый восклицательный знак
+                  Color whiteColor = Color.white;
 
-            // Верхняя часть восклицательного знака
-            int exclamationWidth = width / 8;
-            int exclamationHeight = height / 2;
-
-            for (int x = centerX - exclamationWidth / 2; x < centerX + exclamationWidth / 2; x++)
-            {
-                  for (int y = centerY - exclamationHeight / 4; y < centerY + exclamationHeight / 2; y++)
+                  // Вертикальная линия восклицательного знака
+                  for (int y = size / 5; y < size * 3 / 5; y++)
                   {
-                        texture.SetPixel(x, y, color);
+                        for (int x = size * 2 / 5; x < size * 3 / 5; x++)
+                        {
+                              pixels[y * size + x] = whiteColor;
+                        }
                   }
+
+                  // Точка восклицательного знака
+                  for (int y = size * 2 / 3; y < size * 3 / 4; y++)
+                  {
+                        for (int x = size * 2 / 5; x < size * 3 / 5; x++)
+                        {
+                              pixels[y * size + x] = whiteColor;
+                        }
+                  }
+
+                  // Применяем пиксели к текстуре
+                  texture.SetPixels(pixels);
+                  texture.Apply();
+
+                  // Создаем спрайт из текстуры
+                  cachedErrorIcon = Sprite.Create(
+                      texture,
+                      new Rect(0, 0, size, size),
+                      new Vector2(0.5f, 0.5f)
+                  );
+
+                  // Задаем имя иконке
+                  cachedErrorIcon.name = "GeneratedErrorIcon";
             }
 
-            // Точка восклицательного знака
-            int dotSize = width / 12;
-            for (int x = centerX - dotSize / 2; x < centerX + dotSize / 2; x++)
-            {
-                  for (int y = centerY - exclamationHeight / 2; y < centerY - exclamationHeight / 3; y++)
-                  {
-                        texture.SetPixel(x, y, color);
-                  }
-            }
+            return cachedErrorIcon;
       }
 }

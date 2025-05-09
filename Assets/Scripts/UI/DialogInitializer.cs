@@ -27,53 +27,18 @@ public class DialogInitializer : MonoBehaviour
       /// <summary>
       /// Отображает ошибку загрузки модели
       /// </summary>
-      public static void ShowModelLoadError(string errorMessage)
+      /// <param name="error">Информация об ошибке</param>
+      public static void ShowModelLoadError(ModelLoadErrorInfo error)
       {
-            // Дополняем сообщение об ошибке проверкой Sentis
-            var enhancedMessage = EnhanceErrorMessage(errorMessage);
-
-            var dialog = ModelLoadErrorDialog.Instance;
-            if (dialog != null)
-            {
-                  dialog.ShowError(enhancedMessage);
-            }
+            ModelLoadErrorDialog.Instance.ShowModelLoadError(error);
       }
 
       /// <summary>
-      /// Отображает ошибку загрузки модели с информацией о модели
+      /// Отображает простое сообщение об ошибке
       /// </summary>
-      public static void ShowModelLoadError(string errorMessage, UnityEngine.Object modelAsset)
+      /// <param name="errorMessage">Текст ошибки</param>
+      public static void ShowError(string errorMessage)
       {
-            // Улучшаем сообщение об ошибке информацией о модели
-            string enhancedMessage = EnhanceErrorMessage(errorMessage);
-
-            // Добавляем информацию о модели
-            if (modelAsset != null)
-            {
-                  enhancedMessage += "\n\nИнформация о модели: " + SafeModelLoader.GetRuntimeModelInfo(modelAsset);
-            }
-
-            var dialog = ModelLoadErrorDialog.Instance;
-            if (dialog != null)
-            {
-                  dialog.ShowError(enhancedMessage);
-            }
-      }
-
-      /// <summary>
-      /// Улучшает сообщение об ошибке дополнительной информацией
-      /// </summary>
-      private static string EnhanceErrorMessage(string originalMessage)
-      {
-            string enhancedMessage = originalMessage;
-
-            // Добавляем информацию о доступности Sentis
-            bool sentisAvailable = SafeModelLoader.IsSentisAvailable();
-            if (!sentisAvailable)
-            {
-                  enhancedMessage += "\n\nПакет Unity Sentis не обнаружен в проекте!";
-            }
-
-            return enhancedMessage;
+            ModelLoadErrorDialog.Instance.ShowError(errorMessage);
       }
 }
