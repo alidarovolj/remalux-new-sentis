@@ -145,7 +145,25 @@ public class SceneSetupUtility : EditorWindow
         // Создаем новую сцену
         if (EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
         {
-            EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects);
+            // Используем EmptyScene вместо DefaultGameObjects, чтобы избежать создания лишних объектов
+            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene);
+
+            // Удаляем дефолтные объекты, если они есть (для надежности)
+            CleanupDefaultObjects();
+
+            // Создаем директории заранее
+            string resourcesDirectory = "Assets/Resources/Materials";
+            if (!Directory.Exists(resourcesDirectory))
+            {
+                Directory.CreateDirectory(resourcesDirectory);
+            }
+
+            // Директория для сцены
+            string scenesDirectory = "Assets/Scenes";
+            if (!Directory.Exists(scenesDirectory))
+            {
+                Directory.CreateDirectory(scenesDirectory);
+            }
 
             // Сначала создаем необходимые ресурсы для шейдеров и материалов
             if (setupWallPainting)
@@ -219,19 +237,44 @@ public class SceneSetupUtility : EditorWindow
             // Сохраняем сцену
             string scenePath = "Assets/Scenes/" + sceneName + ".unity";
 
-            // Создаем директорию, если не существует
-            string directory = Path.GetDirectoryName(scenePath);
-            if (!Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
             EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene(), scenePath);
             Debug.Log("Сцена создана и сохранена: " + scenePath);
 
             // Отображаем информацию о настройке сцены
             ShowSetupSummary();
         }
+    }
+
+    // Метод для удаления дефолтных объектов Unity после создания сцены
+    private void CleanupDefaultObjects()
+    {
+        // Ищем и удаляем дефолтную камеру и источник света
+        Camera defaultCamera = GameObject.FindObjectOfType<Camera>();
+        if (defaultCamera != null && defaultCamera.gameObject.name == "Main Camera")
+        {
+            Debug.Log("Удаляем дефолтную камеру Unity");
+            GameObject.DestroyImmediate(defaultCamera.gameObject);
+        }
+
+        Light defaultLight = GameObject.FindObjectOfType<Light>();
+        if (defaultLight != null && defaultLight.gameObject.name == "Directional Light")
+        {
+            Debug.Log("Удаляем дефолтный источник света Unity");
+            GameObject.DestroyImmediate(defaultLight.gameObject);
+        }
+
+        // Также можно удалить все объекты верхнего уровня для полной очистки
+        // Но это может быть рискованно, если в сцене уже есть важные объекты
+        // Поэтому этот код закомментирован
+        /*
+        GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene()
+            .GetRootGameObjects();
+        
+        foreach (GameObject obj in rootObjects)
+        {
+            GameObject.DestroyImmediate(obj);
+        }
+        */
     }
 
     private void SetupARComponents(GameObject parent)
@@ -413,30 +456,9 @@ public class SceneSetupUtility : EditorWindow
     // Метод для добавления ARManagerInitializer
     private void AddARManagerInitializer(GameObject managersRoot)
     {
-        // Проверяем, существует ли уже ARManagerInitializer
-        System.Type arManagerInitializerType = FindTypeInAllAssemblies("ARManagerInitializer");
-        if (arManagerInitializerType == null)
-        {
-            Debug.LogWarning("Тип ARManagerInitializer не найден. Убедитесь, что скрипт ARManagerInitializer.cs существует в проекте.");
-            return;
-        }
-
-        // Ищем существующий объект
-        var existingObject = FindObjectOfType(arManagerInitializerType);
-        if (existingObject != null)
-        {
-            Debug.Log("ARManagerInitializer уже существует в сцене");
-            return;
-        }
-
-        // Создаем объект для ARManagerInitializer
-        GameObject initializerObj = new GameObject("AR Manager Initializer");
-        initializerObj.transform.SetParent(managersRoot.transform);
-        initializerObj.AddComponent(arManagerInitializerType);
-
-        EditorUtility.SetDirty(initializerObj);
-
-        Debug.Log("Добавлен ARManagerInitializer для автоматической настройки AR компонентов в рантайме");
+        Debug.LogWarning("Метод AddARManagerInitializer устарел и будет удален в будущих версиях. Используйте SetupARManagerInitializer.");
+        // Делегируем вызов новому методу для обеспечения согласованности
+        SetupARManagerInitializer(managersRoot);
     }
 
     // Вспомогательный метод для проверки и исправления ссылок в XROrigin
@@ -1394,8 +1416,8 @@ public class SceneSetupUtility : EditorWindow
             return;
         }
 
-        // Ищем существующий объект
-        var existingObject = FindObjectOfType(arManagerInitializerType);
+        // Используем стандартный FindObjectOfType для большей надежности
+        var existingObject = GameObject.FindObjectOfType(arManagerInitializerType);
         if (existingObject != null)
         {
             Debug.Log("ARManagerInitializer уже существует в сцене");
@@ -1520,8 +1542,18 @@ public class SceneSetupUtility : EditorWindow
                     offsetObj.transform.SetParent(xrOrigin.transform, false);
                     offsetObj.transform.localPosition = Vector3.zero;
                     cameraOffsetTrans = offsetObj.transform;
-                    xrOrigin.CameraFloorOffsetObject = offsetObj;
-                    Debug.Log("Создан новый Camera Offset для XROrigin");
+                    // Исправляем проблему - проверяем, не установлен ли уже CameraFloorOffsetObject
+                    if (xrOrigin.CameraFloorOffsetObject == null)
+                    {
+                        xrOrigin.CameraFloorOffsetObject = offsetObj;
+                        Debug.Log("Создан новый Camera Offset для XROrigin");
+                    }
+                    else
+                    {
+                        Debug.LogWarning("Обнаружен объект Camera Offset, несовпадающий с CameraFloorOffsetObject. Используем существующий CameraFloorOffsetObject.");
+                        DestroyImmediate(offsetObj);
+                        cameraOffsetTrans = xrOrigin.CameraFloorOffsetObject.transform;
+                    }
                 }
             }
 
