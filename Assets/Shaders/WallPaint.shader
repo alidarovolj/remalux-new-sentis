@@ -6,25 +6,32 @@ Shader "Custom/WallPaint"
         _PaintColor ("Paint Color", Color) = (1,0,0,1)
         _BlendFactor ("Blend Factor", Range(0,1)) = 0.5
         _SegmentationMask ("Segmentation Mask", 2D) = "black" {}
+        [Toggle(USE_MASK)] _UseMask ("Use Segmentation Mask", Float) = 1
+        [Toggle(DEBUG_OVERLAY)] _DebugOverlay ("Debug Overlay", Float) = 0
+        _DebugGrid ("Debug Grid Size", Range(5, 30)) = 10
     }
     SubShader
     {
-        Tags { "RenderType"="Opaque" "RenderPipeline" = "UniversalPipeline" }
+        Tags { "RenderType"="Transparent" "Queue"="Transparent" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
         
-        // Добавляем Cull Off для iOS
+        // Transparent blending setup
+        Blend SrcAlpha OneMinusSrcAlpha
         Cull Off
-        ZWrite On
-        ZTest LEqual
+        ZWrite Off
+        ZTest Always
 
         Pass
         {
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #pragma multi_compile _ USE_MASK
             
-            // Добавляем специфичные для платформы прагмы
+            // Feature toggles
+            #pragma multi_compile _ USE_MASK
+            #pragma multi_compile _ DEBUG_OVERLAY
+            
+            // Platform specifics
             #pragma multi_compile_instancing
             #pragma prefer_hlslcc gles
             #pragma exclude_renderers d3d11_9x
@@ -54,6 +61,7 @@ Shader "Custom/WallPaint"
             half4 _PaintColor;
             float _BlendFactor;
             float4 _MainTex_ST;
+            float _DebugGrid;
 
             Varyings vert(Attributes IN)
             {
@@ -70,32 +78,42 @@ Shader "Custom/WallPaint"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
                 
-                // Получаем цвет исходного изображения
+                // Sample base texture
                 half4 color = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv);
                 
+                // Debug overlay mode - show checkerboard pattern
+                #ifdef DEBUG_OVERLAY
+                    float checker = (fmod(floor(IN.uv.x * _DebugGrid), 2) == 0) ^ (fmod(floor(IN.uv.y * _DebugGrid), 2) == 0);
+                    half4 debugColor = lerp(half4(1,0,0,0.5), half4(0,1,0,0.5), checker);
+                    return debugColor;
+                #endif
+                
                 #ifdef USE_MASK
-                // Проверяем доступность текстуры маски
-                float mask = 0;
-                
-                // Используем маску сегментации для определения области покраски
-                #if defined(SHADER_API_METAL) || defined(SHADER_API_VULKAN) || defined(SHADER_API_GLES3)
-                    // Осторожное семплирование для мобильных платформ
-                    mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
+                    // Sample segmentation mask
+                    float mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
+                    
+                    // Apply color only in wall areas (mask > 0.1)
+                    if (mask > 0.1)
+                    {
+                        // Blend with original color
+                        half3 blendedColor = lerp(color.rgb, _PaintColor.rgb, _BlendFactor * mask);
+                        
+                        // Calculate alpha based on blend factor and mask
+                        half blendedAlpha = lerp(0.0, _PaintColor.a, _BlendFactor * mask);
+                        
+                        return half4(blendedColor, blendedAlpha);
+                    }
+                    else
+                    {
+                        // Return transparent for non-wall areas
+                        return half4(0, 0, 0, 0);
+                    }
                 #else
-                    mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
+                    // Without mask - apply paint across the entire view with controlled opacity
+                    half3 blendedColor = lerp(color.rgb, _PaintColor.rgb, _BlendFactor);
+                    half blendedAlpha = _BlendFactor * _PaintColor.a;
+                    return half4(blendedColor, blendedAlpha);
                 #endif
-                
-                // Применяем цвет только в области стен (если маска > 0.1)
-                if (mask > 0.1)
-                {
-                    color = lerp(color, _PaintColor, _BlendFactor * mask);
-                }
-                #else
-                // Без маски - просто смешиваем цвета
-                color = lerp(color, _PaintColor, _BlendFactor);
-                #endif
-                
-                return color;
             }
             ENDHLSL
         }

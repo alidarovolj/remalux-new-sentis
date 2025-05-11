@@ -6,35 +6,48 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "ARSceneConfig", menuName = "Remalux/AR Scene Configuration")]
 public class ARSceneConfig : ScriptableObject
 {
-    [Header("AR Компоненты")]
     [Tooltip("Префаб AR Session")]
     public GameObject arSessionPrefab;
-    
+
     [Tooltip("Префаб XR Origin")]
     public GameObject xrOriginPrefab;
-    
-    [Tooltip("Префаб для визуализации AR плоскостей")]
+
+    [Tooltip("Префаб плоскости AR")]
     public GameObject arPlanePrefab;
-    
-    [Header("Настройки сегментации стен")]
-    [Tooltip("Модель ONNX для сегментации стен")]
-    public Object wallSegmentationModel;
-    
-    [Tooltip("Разрешение текстуры маски сегментации")]
-    public Vector2Int segmentationMaskResolution = new Vector2Int(256, 256);
-    
-    [Header("Настройки перекраски")]
-    [Tooltip("Материал для шейдера перекраски стен")]
+
+    [Tooltip("Префаб пользовательского интерфейса")]
+    public GameObject uiPrefab;
+
+    [Tooltip("Модель для сегментации стен")]
+    public UnityEngine.Object wallSegmentationModel;
+
+    [Tooltip("Материал для перекраски стен")]
     public Material wallPaintMaterial;
-    
+
+    [Tooltip("Разрешение маски сегментации")]
+    public Vector2Int segmentationMaskResolution = new Vector2Int(256, 256);
+
     [Tooltip("Цвет перекраски по умолчанию")]
     public Color defaultPaintColor = Color.red;
-    
+
     [Tooltip("Коэффициент смешивания по умолчанию")]
     [Range(0f, 1f)]
     public float defaultBlendFactor = 0.7f;
-    
-    [Header("UI Настройки")]
-    [Tooltip("Префаб UI элементов")]
-    public GameObject uiPrefab;
-} 
+
+    [Header("Настройки симуляции AR")]
+    [Tooltip("Включить симуляцию AR в редакторе")]
+    public bool enableARSimulation = true;
+
+    [Tooltip("Префаб среды симуляции AR")]
+    public GameObject simulationEnvironmentPrefab;
+
+    [Tooltip("Показывать тестовый объект для проверки рендеринга")]
+    public bool showTestObject = true;
+
+    [Header("Настройки камеры AR")]
+    [Tooltip("Материал для фона AR камеры (опционально)")]
+    public Material arCameraBackgroundMaterial;
+
+    [Tooltip("Использовать пользовательский материал для фона AR камеры")]
+    public bool useCustomARCameraBackground = false;
+}

@@ -7,6 +7,8 @@ using UnityEngine.XR.ARSubsystems;
 using Unity.Collections;
 using System.Reflection;
 using System.Linq;
+using UnityEngine.Networking;
+using Unity.Sentis;
 
 /// <summary>
 /// Компонент для сегментации стен с использованием ML модели в Unity Sentis.
@@ -64,11 +66,16 @@ public class WallSegmentation : MonoBehaviour
     // Приватные поля для работы с моделью через рефлексию
     private object engine;
     private object runtimeModel;
+    private Worker worker;
     private Texture2D cameraTexture;
     private bool isModelInitialized = false;
     private bool isInitializing = false;
     private string lastErrorMessage = null;
     private bool isInitializationFailed = false;
+
+    // Делегат для события инициализации модели
+    public delegate void ModelInitializedHandler();
+    public event ModelInitializedHandler OnModelInitialized;
 
     // Для связи с WallSegmentationModelLoader
     public bool IsModelInitialized => isModelInitialized;
@@ -100,104 +107,273 @@ public class WallSegmentation : MonoBehaviour
         // Создаем текстуру для камеры
         cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
 
-        // Если модель назначена, инициализируем
-        if (modelAsset != null && !useSafeLoading)
+        if (useSafeLoading)
         {
-            try
-            {
-                InitializeModelDirect();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Ошибка при инициализации модели: {e.Message}");
-                isInitializationFailed = true;
-                lastErrorMessage = e.Message;
-            }
+            StartCoroutine(InitializeSegmentation());
         }
-        else if (modelAsset != null && useSafeLoading)
+        else
         {
-            // Запускаем безопасную асинхронную загрузку
-            StartCoroutine(SafeInitializeModelCoroutine());
+            InitializeModelDirect();
         }
     }
 
-    /// <summary>
-    /// Корутина для безопасной асинхронной загрузки и инициализации модели
-    /// </summary>
-    public IEnumerator SafeInitializeModelCoroutine()
+    private IEnumerator InitializeSegmentation()
     {
-        if (isModelInitialized || isInitializing) yield break;
-
-        isInitializing = true;
-        lastErrorMessage = null;
-        isInitializationFailed = false;
-
         Debug.Log("Начинаем безопасную загрузку модели...");
 
-        if (modelAsset == null)
+        // Проверяем, инициализирован ли Sentis
+        if (!SentisInitializer.IsInitialized)
         {
-            lastErrorMessage = "ModelAsset не назначен!";
-            isInitializationFailed = true;
-            isInitializing = false;
-            Debug.LogError(lastErrorMessage);
-            yield break;
+            Debug.Log("Инициализируем Unity Sentis...");
+            var sentisInitializer = FindObjectOfType<SentisInitializer>();
+            if (sentisInitializer == null)
+            {
+                sentisInitializer = gameObject.AddComponent<SentisInitializer>();
+            }
+            var initAsync = sentisInitializer.InitializeAsync();
+            yield return initAsync;
         }
 
-        // Запускаем загрузку модели через SafeModelLoader
-        yield return StartCoroutine(SafeModelLoader.LoadModelAsync(
-            modelAsset,
-            modelLoadTimeout,
-            (success, loadedModel, errorMessage) =>
+        // Проверяем, есть ли уже загруженная модель в ModelLoader
+        var modelLoader = FindObjectOfType<WallSegmentationModelLoader>();
+        if (modelLoader != null && modelLoader.IsModelLoaded)
+        {
+            model = modelLoader.GetLoadedModel();
+            if (model != null)
             {
-                if (success && loadedModel != null)
-                {
-                    // Модель загружена успешно
-                    runtimeModel = loadedModel;
-                    model = loadedModel; // Сохраняем также в публичном поле
+                Debug.Log("Использую модель, уже загруженную в WallSegmentationModelLoader");
+                isModelInitialized = true;
+                if (OnModelInitialized != null) OnModelInitialized.Invoke();
+                yield break;
+            }
+        }
 
+        // Пробуем загрузить модель самостоятельно
+        // Пробуем оба формата (.sentis и .onnx)
+        string[] fileExtensionsToTry = new string[] { ".sentis", ".onnx" };
+        bool modelLoaded = false;
+
+        foreach (string extension in fileExtensionsToTry)
+        {
+            string fileName = "model" + extension;
+            string modelPath = Path.Combine(Application.streamingAssetsPath, fileName);
+            string modelUrl = extension == ".sentis" ?
+                "file://" + modelPath.Replace('\\', '/') :
+                "file://" + modelPath.Replace('\\', '/');
+
+            Debug.Log($"Загружаем модель из: {modelUrl}");
+
+            // Проверяем существование файла
+            bool fileExists = File.Exists(modelPath);
+            if (!fileExists && !modelUrl.StartsWith("http"))
+            {
+                Debug.LogWarning($"Файл модели не найден: {modelPath}, пропускаем");
+                continue;
+            }
+
+            UnityWebRequest www = UnityWebRequest.Get(modelUrl);
+            yield return www.SendWebRequest();
+
+            if (www.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"Не удалось загрузить {fileName}: {www.error}");
+                continue;
+            }
+
+            byte[] modelData = www.downloadHandler.data;
+            Debug.Log($"Модель успешно загружена, размер: {modelData.Length} байт");
+
+            try
+            {
+                // Загружаем модель в зависимости от типа файла
+                if (extension == ".sentis")
+                {
+                    using (var ms = new MemoryStream(modelData))
+                    {
+                        var loadedModel = ModelLoader.Load(ms);
+                        if (loadedModel != null)
+                        {
+                            model = loadedModel;
+                            Debug.Log("Модель успешно загружена через ModelLoader (.sentis)");
+                            isModelInitialized = true;
+                            modelLoaded = true;
+                            break;
+                        }
+                    }
+                }
+                else // .onnx
+                {
+                    using (var ms = new MemoryStream(modelData))
+                    {
+                        try
+                        {
+                            var loadedModel = ModelLoader.Load(ms);
+                            if (loadedModel != null)
+                            {
+                                model = loadedModel;
+                                Debug.Log("Модель успешно загружена через ModelLoader (.onnx)");
+                                isModelInitialized = true;
+                                modelLoaded = true;
+                                break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"Не удалось загрузить ONNX через Stream: {ex.Message}");
+
+                            // Пробуем через временный файл
+                            string tempFilePath = Path.Combine(Application.temporaryCachePath, "temp_model.onnx");
+                            try
+                            {
+                                File.WriteAllBytes(tempFilePath, modelData);
+                                var tempModel = ModelLoader.Load(tempFilePath);
+                                if (tempModel != null)
+                                {
+                                    model = tempModel;
+                                    Debug.Log("Модель успешно загружена через временный файл");
+                                    isModelInitialized = true;
+                                    modelLoaded = true;
+                                    break;
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Debug.LogWarning($"Ошибка загрузки через временный файл: {e.Message}");
+                            }
+                            finally
+                            {
+                                if (File.Exists(tempFilePath))
+                                {
+                                    File.Delete(tempFilePath);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Исключение при загрузке модели {extension}: {e.Message}");
+            }
+        }
+
+        // Если модель все еще не загружена, пробуем создать ее
+        if (!modelLoaded)
+        {
+            Debug.LogWarning("Не удалось загрузить модель ни в одном формате. Пробуем создать и сериализовать модель...");
+
+            // Создаем экземпляр ModelSerializer для преобразования модели
+            var serializer = gameObject.AddComponent<ModelSerializer>();
+            if (serializer != null)
+            {
+                serializer.onnxModelPath = Path.Combine(Application.streamingAssetsPath, "model.onnx");
+                serializer.outputPath = Path.Combine(Application.streamingAssetsPath, "model.sentis");
+
+                // Запускаем сериализацию и ждем
+                var serializeCoroutine = serializer.SerializeModelWithTimeout();
+                yield return serializeCoroutine;
+
+                yield return new WaitForSeconds(1);
+
+                // Попробуем загрузить свежесозданную модель
+                string sentisPath = Path.Combine(Application.streamingAssetsPath, "model.sentis");
+                if (File.Exists(sentisPath))
+                {
                     try
                     {
-                        // Создаем исполнителя
-                        engine = SafeModelLoader.CreateWorkerSafely(loadedModel, preferredBackend);
-
-                        if (engine != null)
+                        model = ModelLoader.Load(sentisPath);
+                        if (model != null)
                         {
+                            Debug.Log("Модель Sentis успешно создана и загружена!");
                             isModelInitialized = true;
-                            Debug.Log("Модель успешно инициализирована");
-                        }
-                        else
-                        {
-                            lastErrorMessage = "Не удалось создать Worker для модели";
-                            isInitializationFailed = true;
-                            Debug.LogError(lastErrorMessage);
+                            modelLoaded = true;
                         }
                     }
                     catch (Exception e)
                     {
-                        lastErrorMessage = $"Ошибка при создании Engine: {e.Message}";
-                        isInitializationFailed = true;
-                        Debug.LogError(lastErrorMessage);
+                        Debug.LogError($"Не удалось загрузить свежесозданную Sentis модель: {e.Message}");
                     }
+                }
+            }
+        }
+
+        // Инициализируем worker если модель загружена
+        if (isModelInitialized && model != null)
+        {
+            try
+            {
+                // Создаем worker для модели через прямой конструктор Worker
+                Type workerType = Type.GetType("Unity.Sentis.Worker, Unity.Sentis");
+                if (workerType == null)
+                {
+                    Debug.LogError("Тип Unity.Sentis.Worker не найден");
+                    isModelInitialized = false;
+                    yield break;
+                }
+
+                // Получаем BackendType.CPU (0)
+                Type backendType = Type.GetType("Unity.Sentis.BackendType, Unity.Sentis");
+                // Если BackendType не найден, попробуем DeviceType
+                Type deviceType = null;
+                if (backendType == null)
+                {
+                    deviceType = Type.GetType("Unity.Sentis.DeviceType, Unity.Sentis");
+                    if (deviceType == null)
+                    {
+                        Debug.LogError("Ни BackendType, ни DeviceType не найдены");
+                        isModelInitialized = false;
+                        yield break;
+                    }
+                }
+
+                // Проверяем есть ли конструктор с Model и BackendType
+                ConstructorInfo constructor = null;
+                object typeEnum = null;
+
+                if (backendType != null)
+                {
+                    constructor = workerType.GetConstructor(new Type[] { model.GetType(), backendType });
+                    typeEnum = Enum.ToObject(backendType, preferredBackend); // используем preferredBackend
+                }
+
+                // Если конструктор с BackendType не найден, пробуем с DeviceType
+                if (constructor == null && deviceType != null)
+                {
+                    constructor = workerType.GetConstructor(new Type[] { model.GetType(), deviceType });
+                    typeEnum = Enum.ToObject(deviceType, preferredBackend); // используем preferredBackend как DeviceType
+                }
+
+                if (constructor == null)
+                {
+                    Debug.LogError("Подходящий конструктор Worker не найден");
+                    isModelInitialized = false;
+                    yield break;
+                }
+
+                // Создаем worker через найденный конструктор
+                object workerInstance = constructor.Invoke(new object[] { model, typeEnum });
+                worker = workerInstance as Worker;
+
+                if (worker != null)
+                {
+                    Debug.Log("Worker успешно создан через конструктор Worker");
+                    if (OnModelInitialized != null) OnModelInitialized.Invoke();
                 }
                 else
                 {
-                    lastErrorMessage = errorMessage;
-                    isInitializationFailed = true;
-                    Debug.LogError($"Ошибка при загрузке модели: {errorMessage}");
+                    Debug.LogError("Не удалось создать worker для модели");
+                    isModelInitialized = false;
                 }
-
-                isInitializing = false;
             }
-        ));
-
-        // Показываем сообщение об успехе или сбое
-        if (isModelInitialized)
-        {
-            Debug.Log("Модель успешно загружена и готова к использованию");
+            catch (Exception e)
+            {
+                Debug.LogError($"Ошибка при создании worker: {e.Message}");
+                isModelInitialized = false;
+            }
         }
         else
         {
-            Debug.LogError($"Не удалось инициализировать модель: {lastErrorMessage}");
+            Debug.LogError("Не удалось инициализировать модель: Модель не загрузилась ни в одном формате");
         }
     }
 
@@ -308,7 +484,7 @@ public class WallSegmentation : MonoBehaviour
         {
             if (useSafeLoading)
             {
-                StartCoroutine(SafeInitializeModelCoroutine());
+                StartCoroutine(InitializeSegmentation());
             }
             else
             {
@@ -836,5 +1012,69 @@ public class WallSegmentation : MonoBehaviour
                 InitializeSegmentation();
             }
         }
+    }
+
+    // Метод для создания тестовой маски сегментации (для отладки)
+    public void CreateSimulatedSegmentationMask()
+    {
+        Debug.Log("Создание симуляции маски сегментации для тестирования");
+
+        // Создаем или переиспользуем текстуру
+        if (segmentationMaskTexture == null)
+        {
+            segmentationMaskTexture = new RenderTexture(224, 224, 0, RenderTextureFormat.RFloat);
+            segmentationMaskTexture.enableRandomWrite = true;
+            segmentationMaskTexture.Create();
+            Debug.Log($"Создана новая текстура для симуляции {segmentationMaskTexture.width}x{segmentationMaskTexture.height}");
+        }
+
+        // Создаем временную текстуру для рисования
+        Texture2D tempTexture = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height,
+            TextureFormat.RGBA32, false);
+
+        // Создаем простой узор для имитации стен
+        Color32[] pixels = new Color32[tempTexture.width * tempTexture.height];
+        for (int y = 0; y < tempTexture.height; y++)
+        {
+            for (int x = 0; x < tempTexture.width; x++)
+            {
+                int index = y * tempTexture.width + x;
+
+                // Создаем маску с рамкой по краям (имитация стен)
+                bool isWall = false;
+
+                // Левая и правая стены
+                if (x < tempTexture.width * 0.2f || x > tempTexture.width * 0.8f)
+                    isWall = true;
+
+                // Верхняя и нижняя стены  
+                if (y < tempTexture.height * 0.2f || y > tempTexture.height * 0.8f)
+                    isWall = true;
+
+                // Добавляем немного случайности для теста
+                if (UnityEngine.Random.value < 0.05f)
+                    isWall = !isWall;
+
+                // Белый для стен, прозрачный для остального
+                pixels[index] = isWall ? new Color32(255, 255, 255, 255) : new Color32(0, 0, 0, 0);
+            }
+        }
+
+        tempTexture.SetPixels32(pixels);
+        tempTexture.Apply();
+
+        // Копируем в RenderTexture
+        RenderTexture previousRT = RenderTexture.active;
+        RenderTexture.active = segmentationMaskTexture;
+        Graphics.Blit(tempTexture, segmentationMaskTexture);
+        RenderTexture.active = previousRT;
+
+        // Помечаем модель как инициализированную
+        isModelInitialized = true;
+
+        // Уничтожаем временную текстуру
+        Destroy(tempTexture);
+
+        Debug.Log("Симуляция маски сегментации успешно создана и активирована");
     }
 }

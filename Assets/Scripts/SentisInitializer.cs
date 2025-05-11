@@ -94,7 +94,7 @@ public class SentisInitializer : MonoBehaviour
       /// <summary>
       /// Асинхронно инициализирует Unity Sentis через корутину
       /// </summary>
-      private IEnumerator InitializeAsync()
+      public IEnumerator InitializeAsync()
       {
             if (_isInitialized)
             {
@@ -102,94 +102,20 @@ public class SentisInitializer : MonoBehaviour
                   yield break;
             }
 
-            if (_isInitializing)
-            {
-                  Debug.Log("SentisInitializer: Unity Sentis уже находится в процессе инициализации");
-                  yield break;
-            }
+            Debug.Log("SentisInitializer: Запуск асинхронной инициализации...");
 
-            _isInitializing = true;
-            _initStartTime = Time.realtimeSinceStartup;
+            // Отложенная инициализация для предотвращения блокировки UI
+            yield return new WaitForSeconds(0.1f);
 
-            Debug.Log("SentisInitializer: Начинаю асинхронную инициализацию Unity Sentis...");
-
-            // Основная инициализация
-            bool success = false;
-            Exception lastException = null;
-
-            // Попытка 1: Стандартная инициализация
             try
             {
                   Initialize();
-                  success = _isInitialized;
+                  _isInitialized = true;
+                  Debug.Log("SentisInitializer: Асинхронная инициализация завершена успешно");
             }
             catch (Exception e)
             {
-                  lastException = e;
-                  Debug.LogWarning($"SentisInitializer: Первая попытка инициализации не удалась: {e.Message}");
-            }
-
-            // Если не удалось инициализировать с первой попытки,
-            // пробуем альтернативные методы с небольшими паузами
-            if (!success)
-            {
-                  // Попытка 2: Ждем кадр и пробуем снова
-                  yield return null;
-
-                  try
-                  {
-                        Initialize();
-                        success = _isInitialized;
-                  }
-                  catch (Exception e)
-                  {
-                        lastException = e;
-                        Debug.LogWarning($"SentisInitializer: Вторая попытка инициализации не удалась: {e.Message}");
-                  }
-
-                  // Попытка 3: Ждем немного дольше и пробуем еще раз
-                  if (!success)
-                  {
-                        yield return new WaitForSeconds(0.5f);
-
-                        try
-                        {
-                              // Ранее вызывали PreloadSentisAssemblies и yield return null внутри try-catch
-                              // что вызывало ошибку CS1626
-                              PreloadSentisAssemblies();
-
-                              // Вызываем Initialize вне yield
-                              Initialize();
-                              success = _isInitialized;
-                        }
-                        catch (Exception e)
-                        {
-                              lastException = e;
-                              Debug.LogWarning($"SentisInitializer: Третья попытка инициализации не удалась: {e.Message}");
-                        }
-
-                        // Yield вынесен за пределы try-catch
-                        yield return null;
-                  }
-            }
-
-            _isInitializing = false;
-
-            if (!success)
-            {
-                  Debug.LogError("SentisInitializer: Не удалось инициализировать Unity Sentis асинхронно после нескольких попыток");
-                  if (lastException != null)
-                  {
-                        Debug.LogError($"SentisInitializer: Последнее исключение: {lastException.Message}");
-                        if (lastException.InnerException != null)
-                        {
-                              Debug.LogError($"SentisInitializer: Внутреннее исключение: {lastException.InnerException.Message}");
-                        }
-                  }
-            }
-            else
-            {
-                  Debug.Log("SentisInitializer: Unity Sentis успешно инициализирован асинхронно");
+                  Debug.LogError($"SentisInitializer: Ошибка асинхронной инициализации: {e.Message}");
             }
       }
 

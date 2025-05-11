@@ -4,6 +4,9 @@ using System;
 using System.Linq;
 using System.Reflection;
 using UnityEngine.UI; // Для доступа к компонентам UI
+using UnityEngine.Networking;
+using System.IO;
+using Unity.Sentis;
 
 /// <summary>
 /// Компонент для безопасной загрузки моделей WallSegmentation.
@@ -12,9 +15,6 @@ using UnityEngine.UI; // Для доступа к компонентам UI
 [RequireComponent(typeof(WallSegmentation))]
 public class WallSegmentationModelLoader : MonoBehaviour
 {
-      [Tooltip("Объект модели ONNX для сегментации стен")]
-      public UnityEngine.Object modelAsset;
-
       [Tooltip("Максимальное время ожидания загрузки модели в секундах")]
       public float loadTimeout = 30f;
 
@@ -31,64 +31,37 @@ public class WallSegmentationModelLoader : MonoBehaviour
       private bool isModelLoading = false;
       private bool isModelLoaded = false;
       private string lastErrorMessage = null;
-      private object loadedModelInstance = null; // Здесь будем хранить экземпляр загруженной модели
+      private object loadedModelInstance = null;
 
-      // Используем MonoBehaviour вместо конкретного типа, чтобы избежать зависимости
       private MonoBehaviour sentisInitializer;
       private bool triedToInitializeSentis = false;
       private bool isSentisInitialized = false;
 
+      // Создаем делегаты для событий загрузки модели
+      public delegate void ModelLoadedHandler(object model);
+      public delegate void ModelLoadErrorHandler(string errorMessage);
+
+      // События для оповещения о загрузке модели
+      public event ModelLoadedHandler OnModelLoaded;
+      public event ModelLoadErrorHandler OnModelLoadError;
+
       private void Start()
       {
-            // Получаем ссылку на компонент WallSegmentation
             wallSegmentation = GetComponent<WallSegmentation>();
             if (wallSegmentation == null)
             {
-                  Debug.LogError("WallSegmentationModelLoader: Компонент WallSegmentation не найден на этом объекте.");
+                  Debug.LogError("WallSegmentationModelLoader: Не найден компонент WallSegmentation!");
                   return;
             }
 
-            // Явная инициализация Sentis через инициализатор (без прямой зависимости)
+            // Инициализируем Sentis перед загрузкой, если включена опция
             if (initializeSentisBeforeLoading)
             {
-                  // Ищем SentisInitializer в сцене без прямой ссылки
-                  Type sentisInitializerType = null;
-                  foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                  {
-                        sentisInitializerType = assembly.GetType("SentisInitializer");
-                        if (sentisInitializerType != null) break;
-                  }
-
-                  if (sentisInitializerType != null)
-                  {
-                        // Пытаемся получить экземпляр через свойство Instance
-                        PropertyInfo instanceProperty = sentisInitializerType.GetProperty("Instance",
-                              BindingFlags.Public | BindingFlags.Static);
-
-                        if (instanceProperty != null)
-                        {
-                              sentisInitializer = instanceProperty.GetValue(null) as MonoBehaviour;
-
-                              if (sentisInitializer != null)
-                              {
-                                    // Вызываем метод Initialize
-                                    MethodInfo initMethod = sentisInitializerType.GetMethod("Initialize");
-                                    if (initMethod != null)
-                                    {
-                                          initMethod.Invoke(sentisInitializer, null);
-                                          Debug.Log("WallSegmentationModelLoader: Unity Sentis инициализирован через SentisInitializer");
-                                    }
-                              }
-                        }
-                  }
-                  else
-                  {
-                        Debug.LogWarning("WallSegmentationModelLoader: SentisInitializer не найден. Установите SentisInitializer.cs в проект для улучшения стабильности.");
-                  }
+                  StartCoroutine(EnsureSentisInitialized());
             }
 
             // Автоматически загружаем модель при старте
-            if (loadOnStart && modelAsset != null)
+            if (loadOnStart)
             {
                   StartCoroutine(LoadModel());
             }
@@ -101,122 +74,94 @@ public class WallSegmentationModelLoader : MonoBehaviour
       {
             if (triedToInitializeSentis)
             {
-                  // Уже пробовали инициализировать
+                  // Проверяем значение флага и используем его
+                  if (isSentisInitialized)
+                  {
+                        Debug.Log("Unity Sentis уже инициализирован, пропускаем инициализацию");
+                  }
+                  else
+                  {
+                        Debug.LogWarning("Попытка инициализации Unity Sentis уже была выполнена, но закончилась неудачей");
+                  }
                   yield break;
             }
 
             triedToInitializeSentis = true;
             Debug.Log("Инициализация Unity Sentis...");
 
-            // Извлекаем логику инициализации в отдельный метод, чтобы избежать yield внутри try-catch
-            InitializeSentisSafe();
-
-            // Даем время на завершение инициализации
-            yield return new WaitForSeconds(0.5f);
-
-            Debug.Log($"Статус инициализации Sentis: {(isSentisInitialized ? "Успешно" : "Не инициализирован")}");
-      }
-
-      /// <summary>
-      /// Безопасно инициализирует Sentis без использования yield
-      /// </summary>
-      private void InitializeSentisSafe()
-      {
-            try
+            // Ищем SentisInitializer через рефлексию
+            Type sentisInitializerType = Type.GetType("SentisInitializer");
+            if (sentisInitializerType != null)
             {
-                  // Находим тип SentisInitializer через рефлексию
-                  Type sentisInitializerType = null;
-                  foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                  // Пытаемся получить экземпляр через свойство Instance
+                  PropertyInfo instanceProperty = sentisInitializerType.GetProperty("Instance",
+                        BindingFlags.Public | BindingFlags.Static);
+
+                  if (instanceProperty != null)
                   {
-                        sentisInitializerType = assembly.GetType("SentisInitializer");
-                        if (sentisInitializerType != null) break;
+                        sentisInitializer = instanceProperty.GetValue(null) as MonoBehaviour;
+
+                        if (sentisInitializer != null)
+                        {
+                              // Вызываем метод Initialize
+                              MethodInfo initMethod = sentisInitializerType.GetMethod("Initialize");
+                              if (initMethod != null)
+                              {
+                                    initMethod.Invoke(sentisInitializer, null);
+                                    Debug.Log("WallSegmentationModelLoader: Unity Sentis инициализирован через SentisInitializer");
+                                    isSentisInitialized = true;
+                              }
+                        }
                   }
+            }
+            else
+            {
+                  Debug.LogWarning("WallSegmentationModelLoader: SentisInitializer не найден. Установите SentisInitializer.cs в проект для улучшения стабильности.");
+            }
 
-                  // Если тип найден, ищем экземпляр или создаем новый
-                  if (sentisInitializerType != null)
+            // Проверяем успешность инициализации через рефлексию
+            if (!isSentisInitialized)
+            {
+                  // Пробуем проверить статический IsInitialized через рефлексию
+                  try
                   {
-                        // Сначала пытаемся найти существующий экземпляр через статическое свойство Instance
-                        PropertyInfo instanceProperty = sentisInitializerType.GetProperty("Instance",
-                              BindingFlags.Public | BindingFlags.Static);
-
-                        if (instanceProperty != null)
+                        if (sentisInitializerType != null)
                         {
-                              object instance = instanceProperty.GetValue(null);
-                              if (instance != null)
+                              PropertyInfo isInitializedProperty = sentisInitializerType.GetProperty("IsInitialized",
+                                    BindingFlags.Public | BindingFlags.Static);
+
+                              if (isInitializedProperty != null)
                               {
-                                    sentisInitializer = instance as MonoBehaviour;
-                                    Debug.Log("Найден существующий экземпляр SentisInitializer");
-                              }
-                        }
-
-                        // Если не нашли через свойство Instance, ищем через FindObjectOfType
-                        if (sentisInitializer == null)
-                        {
-                              // Используем рефлексию для вызова FindObjectOfType
-                              MethodInfo findObjectMethod = typeof(UnityEngine.Object).GetMethod("FindObjectOfType",
-                                    new Type[] { });
-
-                              if (findObjectMethod != null)
-                              {
-                                    // Создаем обобщенный метод для нужного типа
-                                    MethodInfo genericMethod = findObjectMethod.MakeGenericMethod(sentisInitializerType);
-                                    object found = genericMethod.Invoke(null, null);
-
-                                    if (found != null)
+                                    bool isInitialized = (bool)isInitializedProperty.GetValue(null);
+                                    if (isInitialized)
                                     {
-                                          sentisInitializer = found as MonoBehaviour;
-                                          Debug.Log("Найден SentisInitializer через FindObjectOfType");
-                                    }
-                              }
-                        }
-
-                        // Если всё еще не нашли, создаем новый
-                        if (sentisInitializer == null)
-                        {
-                              GameObject initializerObj = new GameObject("Sentis Initializer");
-                              sentisInitializer = initializerObj.AddComponent(sentisInitializerType) as MonoBehaviour;
-
-                              if (sentisInitializer != null)
-                              {
-                                    Debug.Log("Создан новый экземпляр SentisInitializer");
-                              }
-                        }
-
-                        // Проверяем статус инициализации через свойство IsInitialized
-                        PropertyInfo isInitializedProperty = sentisInitializerType.GetProperty("IsInitialized",
-                              BindingFlags.Public | BindingFlags.Static);
-
-                        if (isInitializedProperty != null)
-                        {
-                              // Проверяем текущее значение
-                              isSentisInitialized = (bool)isInitializedProperty.GetValue(null);
-
-                              // Если не инициализирован, вызываем метод инициализации
-                              if (!isSentisInitialized && sentisInitializer != null)
-                              {
-                                    // Ищем метод Initialize
-                                    MethodInfo initMethod = sentisInitializerType.GetMethod("Initialize");
-                                    if (initMethod != null)
-                                    {
-                                          initMethod.Invoke(sentisInitializer, null);
-                                          Debug.Log("Вызван метод инициализации SentisInitializer");
+                                          Debug.Log("Sentis инициализирован через SentisInitializer.IsInitialized");
+                                          isSentisInitialized = true;
                                     }
                               }
                         }
                   }
-                  else
+                  catch (Exception e)
                   {
-                        Debug.LogWarning("Тип SentisInitializer не найден. Установлен ли SentisInitializer.cs в проекте?");
+                        Debug.LogWarning($"Ошибка при проверке SentisInitializer.IsInitialized: {e.Message}");
                   }
             }
-            catch (Exception e)
+
+            // Если всё ещё не инициализирован, пробуем другие методы
+            if (!isSentisInitialized)
             {
-                  Debug.LogError($"Ошибка при инициализации Sentis: {e.Message}");
-                  if (e.InnerException != null)
+                  Debug.Log("Пробуем альтернативные способы инициализации Sentis...");
+
+                  // Проверяем наличие Unity.Sentis.Model через рефлексию
+                  var sentisModelType = Type.GetType("Unity.Sentis.Model, Unity.Sentis");
+                  if (sentisModelType != null)
                   {
-                        Debug.LogError($"Внутреннее исключение: {e.InnerException.Message}");
+                        Debug.Log("Тип Unity.Sentis.Model найден, считаем Sentis инициализированным");
+                        isSentisInitialized = true;
                   }
             }
+
+            yield return null;
       }
 
       /// <summary>
@@ -224,242 +169,194 @@ public class WallSegmentationModelLoader : MonoBehaviour
       /// </summary>
       public IEnumerator LoadModel()
       {
-            if (isModelLoading) yield break;
-            if (isModelLoaded) yield break;
+            Debug.Log("WallSegmentationModelLoader: Начинаем загрузку модели из StreamingAssets");
 
-            if (modelAsset == null)
+            // Проверяем инициализацию Sentis
+            if (initializeSentisBeforeLoading && !isSentisInitialized && !triedToInitializeSentis)
             {
-                  Debug.LogError("WallSegmentationModelLoader: Модель не назначена.");
-                  yield break;
+                  Debug.Log("Инициализируем Sentis перед загрузкой модели...");
+                  var initCoroutine = EnsureSentisInitialized();
+                  yield return initCoroutine;
             }
 
-            isModelLoading = true;
-            lastErrorMessage = null;
+            // Попробуем загрузить сначала .sentis файл, затем .onnx
+            string[] fileExtensionsToTry = new string[] { ".sentis", ".onnx" };
+            bool modelLoaded = false;
 
-            Debug.Log($"WallSegmentationModelLoader: Начинаем загрузку модели {modelAsset.name}");
-
-            // Инициализируем Sentis перед загрузкой, если включена опция
-            if (initializeSentisBeforeLoading)
+            foreach (string extension in fileExtensionsToTry)
             {
-                  yield return StartCoroutine(EnsureSentisInitialized());
+                  string fileName = "model" + extension;
+                  string modelPath = Path.Combine(Application.streamingAssetsPath, fileName);
+                  string modelUrl = PathToUrl(modelPath);
 
-                  if (!isSentisInitialized)
+                  Debug.Log($"Загружаем модель из: {modelUrl}");
+
+                  // Проверяем существование файла локально - это работает только для некоторых платформ
+                  bool fileExists = File.Exists(modelPath);
+                  if (!fileExists && !modelUrl.StartsWith("http"))
                   {
-                        Debug.LogWarning("Sentis не удалось инициализировать, но продолжим загрузку модели");
+                        Debug.LogWarning($"Файл модели не найден: {modelPath}, пропускаем");
+                        continue;
                   }
-            }
 
-            // Проверяем тип модели
-            string modelExtension = "";
-            if (modelAsset.name.Contains("."))
-            {
-                  modelExtension = modelAsset.name.Substring(modelAsset.name.LastIndexOf(".")).ToLower();
-            }
+                  UnityWebRequest www = UnityWebRequest.Get(modelUrl);
+                  yield return www.SendWebRequest();
 
-            // Для диагностики выводим информацию о типе модели
-            Debug.Log($"WallSegmentationModelLoader: Тип модели {modelAsset.GetType().Name}, расширение: {modelExtension}");
-
-            // Запускаем диагностику Sentis
-            RunSentisDiagnostics();
-
-            // Указываем, что начинаем загрузку модели
-            yield return null; // Ждем один кадр, чтобы интерфейс мог обновиться
-
-            object model = null;
-            bool success = false;
-            string errorMessage = "";
-
-            try
-            {
-                  // Загружаем модель с помощью SentisCompat
-                  Type sentisCompatType = Type.GetType("SentisCompat");
-
-                  if (sentisCompatType != null)
+                  if (www.result != UnityWebRequest.Result.Success)
                   {
-                        // Загружаем через SentisCompat
-                        MethodInfo loadModelMethod = sentisCompatType.GetMethod("LoadModel");
-                        if (loadModelMethod != null)
-                        {
-                              Debug.Log($"WallSegmentationModelLoader: Загружаем модель через SentisCompat.LoadModel()");
-                              model = loadModelMethod.Invoke(null, new object[] { modelAsset });
+                        Debug.LogWarning($"Не удалось загрузить {fileName}: {www.error}");
+                        continue;
+                  }
 
-                              if (model != null)
+                  byte[] modelData = www.downloadHandler.data;
+                  Debug.Log($"Модель успешно загружена, размер: {modelData.Length} байт");
+
+                  try
+                  {
+                        Model model = null;
+
+                        // Выбираем метод загрузки в зависимости от расширения
+                        if (extension == ".sentis")
+                        {
+                              // Пробуем напрямую через ModelLoader для .sentis
+                              using (var ms = new MemoryStream(modelData))
                               {
-                                    Debug.Log($"WallSegmentationModelLoader: Модель успешно загружена через SentisCompat.LoadModel()");
-                                    success = true;
-                                    loadedModelInstance = model; // Сохраняем экземпляр модели
+                                    model = ModelLoader.Load(ms);
                               }
-                              else
+                        }
+                        else // .onnx
+                        {
+                              // Пробуем разные методы для загрузки ONNX
+                              using (var ms = new MemoryStream(modelData))
                               {
-                                    errorMessage = "Ошибка загрузки модели через SentisCompat.LoadModel() - вернулся null";
-                                    Debug.LogError(errorMessage);
+                                    try
+                                    {
+                                          model = ModelLoader.Load(ms);
+                                          if (model != null)
+                                          {
+                                                Debug.Log("ONNX модель успешно загружена через ModelLoader.Load(Stream)");
+                                          }
+                                    }
+                                    catch (Exception e)
+                                    {
+                                          Debug.LogWarning($"Не удалось загрузить ONNX через ModelLoader.Load(Stream): {e.Message}");
+
+                                          // Пробуем сначала сохранить во временный файл
+                                          string tempFilePath = Path.Combine(Application.temporaryCachePath, "temp_model.onnx");
+                                          try
+                                          {
+                                                File.WriteAllBytes(tempFilePath, modelData);
+                                                model = ModelLoader.Load(tempFilePath);
+                                                if (model != null)
+                                                {
+                                                      Debug.Log("ONNX модель успешно загружена через временный файл");
+                                                }
+                                          }
+                                          catch (Exception e2)
+                                          {
+                                                Debug.LogWarning($"Не удалось загрузить ONNX через временный файл: {e2.Message}");
+                                          }
+                                          finally
+                                          {
+                                                // Удаляем временный файл
+                                                if (File.Exists(tempFilePath))
+                                                {
+                                                      File.Delete(tempFilePath);
+                                                }
+                                          }
+                                    }
                               }
+                        }
+
+                        if (model != null)
+                        {
+                              loadedModelInstance = model;
+                              Debug.Log($"Модель успешно загружена через ModelLoader в формате {extension}");
+                              isModelLoaded = true;
+                              modelLoaded = true;
+                              break; // Выходим из цикла, модель загружена
                         }
                         else
                         {
-                              errorMessage = "Метод SentisCompat.LoadModel не найден";
-                              Debug.LogError(errorMessage);
+                              Debug.LogError($"Ошибка загрузки модели через ModelLoader - вернулся null для {extension}");
                         }
                   }
-                  else
+                  catch (Exception e)
                   {
-                        // Альтернативный способ, поиск ModelLoader напрямую
-                        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                        {
-                              if (assembly.GetName().Name == "Unity.Sentis")
-                              {
-                                    Type modelLoaderType = assembly.GetType("Unity.Sentis.ModelLoader");
-
-                                    if (modelLoaderType != null)
-                                    {
-                                          // Пробуем загрузить модель через ModelLoader.Load
-                                          Debug.Log($"WallSegmentationModelLoader: Загружаем модель через Unity.Sentis.ModelLoader.Load()");
-
-                                          var loadMethod = modelLoaderType.GetMethod("Load", new Type[] { modelAsset.GetType() });
-                                          if (loadMethod != null)
-                                          {
-                                                model = loadMethod.Invoke(null, new object[] { modelAsset });
-
-                                                if (model != null)
-                                                {
-                                                      Debug.Log($"WallSegmentationModelLoader: Модель успешно загружена через Unity.Sentis.ModelLoader.Load()");
-                                                      success = true;
-                                                      loadedModelInstance = model; // Сохраняем экземпляр модели
-                                                }
-                                                else
-                                                {
-                                                      errorMessage = "Ошибка загрузки модели через Unity.Sentis.ModelLoader.Load() - вернулся null";
-                                                      Debug.LogError(errorMessage);
-                                                }
-                                          }
-                                          else
-                                          {
-                                                errorMessage = "Метод Unity.Sentis.ModelLoader.Load не найден для типа " + modelAsset.GetType().Name;
-                                                Debug.LogError(errorMessage);
-                                          }
-                                    }
-                                    else
-                                    {
-                                          errorMessage = "Тип Unity.Sentis.ModelLoader не найден";
-                                          Debug.LogError(errorMessage);
-                                    }
-
-                                    break;
-                              }
-                        }
-                  }
-
-                  // Проверяем результат
-                  if (success && model != null)
-                  {
-                        // Если у нас активирован компонент WallSegmentation, обновляем его
-                        if (wallSegmentation != null)
-                        {
-                              // Важное изменение: НЕ устанавливаем напрямую modelAsset, а вместо этого используем
-                              // поле model в компоненте WallSegmentation, если оно существует
-                              Debug.Log("WallSegmentationModelLoader: Устанавливаем загруженную модель в WallSegmentation");
-
-                              // Ищем поле 'model' в WallSegmentation (не modelAsset)
-                              var modelField = wallSegmentation.GetType().GetField("model",
-                                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-
-                              if (modelField != null)
-                              {
-                                    // Устанавливаем загруженную модель напрямую в поле 'model'
-                                    modelField.SetValue(wallSegmentation, model);
-                                    Debug.Log("WallSegmentationModelLoader: Модель успешно установлена в поле 'model'");
-                              }
-                              else
-                              {
-                                    // Если поле 'model' не найдено, используем альтернативные методы
-                                    Debug.LogWarning("WallSegmentationModelLoader: Поле 'model' не найдено, пробуем альтернативные подходы");
-
-                                    // Пробуем найти свойство для установки модели
-                                    var modelProperty = wallSegmentation.GetType().GetProperty("Model",
-                                          BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-
-                                    if (modelProperty != null && modelProperty.CanWrite)
-                                    {
-                                          modelProperty.SetValue(wallSegmentation, model);
-                                          Debug.Log("WallSegmentationModelLoader: Модель успешно установлена через свойство 'Model'");
-                                    }
-                                    else
-                                    {
-                                          // Если нет прямого способа установить модель, ищем метод для ее назначения
-                                          var setModelMethod = wallSegmentation.GetType().GetMethod("SetModel",
-                                                BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-
-                                          if (setModelMethod != null)
-                                          {
-                                                setModelMethod.Invoke(wallSegmentation, new[] { model });
-                                                Debug.Log("WallSegmentationModelLoader: Модель успешно установлена через метод 'SetModel'");
-                                          }
-                                          else
-                                          {
-                                                Debug.LogWarning("WallSegmentationModelLoader: Не найден способ установить модель. WallSegmentation должен иметь поле 'model', свойство 'Model' или метод 'SetModel'");
-                                          }
-                                    }
-                              }
-
-                              // Обновляем бэкенд
-                              SetPrivateField(wallSegmentation, "preferredBackend", preferredBackend);
-
-                              // Вызываем метод инициализации модели, если такой есть
-                              MethodInfo initMethod = wallSegmentation.GetType().GetMethod("InitializeModel",
-                                    BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
-
-                              if (initMethod != null)
-                              {
-                                    Debug.Log("WallSegmentationModelLoader: Вызываем метод InitializeModel");
-                                    initMethod.Invoke(wallSegmentation, null);
-                              }
-                              else
-                              {
-                                    Debug.Log("WallSegmentationModelLoader: Метод InitializeModel не найден, устанавливаем только модель");
-                              }
-
-                              // Вызываем отложенное создание Worker, если есть такой метод
-                              MethodInfo createWorkerMethod = wallSegmentation.GetType().GetMethod("CreateWorkerDelayed",
-                                    BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
-
-                              if (createWorkerMethod != null)
-                              {
-                                    Debug.Log("WallSegmentationModelLoader: Запускаем отложенное создание Worker");
-                                    createWorkerMethod.Invoke(wallSegmentation, null);
-                              }
-                        }
-
-                        isModelLoaded = true;
-                        OnModelLoaded(true, model, null);
-                  }
-                  else
-                  {
-                        if (string.IsNullOrEmpty(errorMessage))
-                        {
-                              errorMessage = "Не удалось загрузить модель по неизвестной причине";
-                        }
-
-                        OnModelLoaded(false, null, errorMessage);
+                        Debug.LogError($"Исключение при загрузке модели {extension}: {e.Message}");
                   }
             }
-            catch (Exception e)
+
+            if (!modelLoaded)
             {
-                  string exceptionMessage = e.Message;
-                  if (e.InnerException != null)
+                  Debug.LogError("WallSegmentationModelLoader: Не удалось загрузить модель ни в одном формате");
+
+                  // Создаем экземпляр ModelSerializer для преобразования модели
+                  var serializer = gameObject.AddComponent<ModelSerializer>();
+                  serializer.onnxModelPath = Path.Combine(Application.streamingAssetsPath, "model.onnx");
+                  serializer.outputPath = Path.Combine(Application.streamingAssetsPath, "model.sentis");
+                  serializer.SerializeModel();
+
+                  yield return new WaitForSeconds(1); // Ждем немного для завершения сериализации
+
+                  // Пробуем загрузить заново
+                  string sentisPath = Path.Combine(Application.streamingAssetsPath, "model.sentis");
+                  if (File.Exists(sentisPath))
                   {
-                        exceptionMessage += " | Inner: " + e.InnerException.Message;
+                        try
+                        {
+                              Debug.Log("Пробуем загрузить свежесозданную Sentis модель...");
+                              var model = ModelLoader.Load(sentisPath);
+                              if (model != null)
+                              {
+                                    loadedModelInstance = model;
+                                    Debug.Log("Sentis модель успешно создана и загружена!");
+                                    isModelLoaded = true;
+                              }
+                        }
+                        catch (Exception e)
+                        {
+                              Debug.LogError($"Не удалось загрузить свежесозданную Sentis модель: {e.Message}");
+                        }
                   }
-
-                  Debug.LogError($"WallSegmentationModelLoader: Исключение при загрузке модели: {exceptionMessage}");
-
-                  // Показываем подробное сообщение об ошибке в диалоге
-                  errorMessage = $"Ошибка при загрузке модели: {exceptionMessage}";
-                  OnModelLoaded(false, null, errorMessage);
             }
-            finally
+
+            // Финализируем операцию загрузки
+            if (isModelLoaded)
             {
-                  isModelLoading = false;
+                  Debug.Log("WallSegmentationModelLoader: Модель успешно загружена и готова к использованию");
+                  if (OnModelLoaded != null) OnModelLoaded.Invoke(loadedModelInstance);
             }
+            else
+            {
+                  string error = "Ошибка загрузки модели: не удалось загрузить ни в одном формате";
+                  Debug.LogError($"WallSegmentationModelLoader: {error}");
+                  if (OnModelLoadError != null) OnModelLoadError.Invoke(error);
+            }
+      }
+
+      // Вспомогательная функция для преобразования пути в URL
+      private string PathToUrl(string path)
+      {
+            if (path.StartsWith("http://") || path.StartsWith("https://") || path.StartsWith("file://"))
+            {
+                  return path;
+            }
+
+            // Для пути, начинающегося с буквы диска на Windows (например, C:/)
+            if (path.Length > 2 && path[1] == ':' && path[2] == '/')
+            {
+                  return "file:///" + path.Replace('\\', '/');
+            }
+
+            // Для Unix-подобных путей (/path/to/file)
+            if (path.StartsWith("/"))
+            {
+                  return "file://" + path;
+            }
+
+            // Для относительных путей (встречается редко в этом контексте)
+            return "file://" + Path.GetFullPath(path).Replace('\\', '/');
       }
 
       /// <summary>
@@ -540,7 +437,7 @@ public class WallSegmentationModelLoader : MonoBehaviour
       /// <param name="success">Успешно ли загружена модель</param>
       /// <param name="model">Загруженная модель или null</param>
       /// <param name="errorMessage">Сообщение об ошибке или null</param>
-      private void OnModelLoaded(bool success, object model, string errorMessage)
+      private void HandleModelLoaded(bool success, object model, string errorMessage)
       {
             isModelLoaded = success;
 
@@ -572,7 +469,7 @@ public class WallSegmentationModelLoader : MonoBehaviour
             if (dialogManager != null)
             {
                   // Получаем информацию о модели
-                  string modelName = modelAsset != null ? modelAsset.name : "неизвестная модель";
+                  string modelName = loadedModelInstance != null ? loadedModelInstance.GetType().Name : "неизвестная модель";
 
                   // Вызываем метод показа ошибки
                   dialogManager.ShowModelLoadError(modelName, errorMessage);
@@ -586,8 +483,8 @@ public class WallSegmentationModelLoader : MonoBehaviour
                   {
                         // Создаем объект с информацией об ошибке, используя полное имя класса
                         var errorInfo = new ModelErrorInfo(
-                            modelAsset != null ? modelAsset.name : "неизвестная модель",
-                            modelAsset != null ? modelAsset.GetType().Name : "неизвестный тип",
+                            loadedModelInstance != null ? loadedModelInstance.GetType().Name : "неизвестная модель",
+                            loadedModelInstance != null ? loadedModelInstance.GetType().Name : "неизвестный тип",
                             errorMessage,
                             "Убедитесь, что модель совместима с Unity Sentis"
                         );
@@ -636,7 +533,7 @@ public class WallSegmentationModelLoader : MonoBehaviour
       /// </summary>
       public void LoadModelNow()
       {
-            if (!isModelLoading && !isModelLoaded && modelAsset != null)
+            if (!isModelLoading && !isModelLoaded)
             {
                   StartCoroutine(LoadModel());
             }

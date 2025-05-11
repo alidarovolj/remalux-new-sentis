@@ -16,6 +16,55 @@ using System;
 using UnityEngine.XR.ARKit;
 #endif
 
+// Конфигурационный ScriptableObject с настройками AR сцены
+[System.Serializable]
+public class _ARSceneConfig : ScriptableObject
+{
+    [Tooltip("Префаб AR Session")]
+    public GameObject arSessionPrefab;
+
+    [Tooltip("Префаб XR Origin")]
+    public GameObject xrOriginPrefab;
+
+    [Tooltip("Префаб плоскости AR")]
+    public GameObject arPlanePrefab;
+
+    [Tooltip("Префаб пользовательского интерфейса")]
+    public GameObject uiPrefab;
+
+    [Tooltip("Модель для сегментации стен")]
+    public UnityEngine.Object wallSegmentationModel;
+
+    [Tooltip("Материал для перекраски стен")]
+    public Material wallPaintMaterial;
+
+    [Tooltip("Разрешение маски сегментации")]
+    public Vector2Int segmentationMaskResolution = new Vector2Int(256, 256);
+
+    [Tooltip("Цвет перекраски по умолчанию")]
+    public Color defaultPaintColor = Color.red;
+
+    [Tooltip("Коэффициент смешивания по умолчанию")]
+    public float defaultBlendFactor = 0.7f;
+
+    [Header("Настройки симуляции AR")]
+    [Tooltip("Включить симуляцию AR в редакторе")]
+    public bool enableARSimulation = true;
+
+    [Tooltip("Префаб среды симуляции AR")]
+    public GameObject simulationEnvironmentPrefab;
+
+    [Tooltip("Показывать тестовый объект для проверки рендеринга")]
+    public bool showTestObject = true;
+
+    [Header("Настройки камеры AR")]
+    [Tooltip("Материал для фона AR камеры (опционально)")]
+    public Material arCameraBackgroundMaterial;
+
+    [Tooltip("Использовать пользовательский материал для фона AR камеры")]
+    public bool useCustomARCameraBackground = false;
+}
+
 /// <summary>
 /// Утилита для быстрого создания и настройки сцены с AR/ML функциональностью.
 /// Улучшена в соответствии с рекомендациями по организации иерархии сцены.
@@ -32,7 +81,7 @@ public class SceneSetupUtility : EditorWindow
     private string sceneName = "AR_WallPainting";
 
     // Конфигурационный ScriptableObject для настроек
-    private ARSceneConfig sceneConfig;
+    private _ARSceneConfig sceneConfig;
 
     [MenuItem("Remalux/Создать AR сцену")]
     public static void ShowWindow()
@@ -43,9 +92,9 @@ public class SceneSetupUtility : EditorWindow
     private void OnEnable()
     {
         // Ищем существующую конфигурацию или создаем новую
-        sceneConfig = AssetDatabase.FindAssets("t:ARSceneConfig")
+        sceneConfig = AssetDatabase.FindAssets("t:_ARSceneConfig")
             .Select(AssetDatabase.GUIDToAssetPath)
-            .Select(AssetDatabase.LoadAssetAtPath<ARSceneConfig>)
+            .Select(AssetDatabase.LoadAssetAtPath<_ARSceneConfig>)
             .FirstOrDefault();
 
         if (sceneConfig == null)
@@ -57,8 +106,17 @@ public class SceneSetupUtility : EditorWindow
     private void CreateDefaultConfig()
     {
         // Создаем конфигурацию по умолчанию
-        sceneConfig = ScriptableObject.CreateInstance<ARSceneConfig>();
-        string configPath = "Assets/Config/ARSceneConfig.asset";
+        sceneConfig = ScriptableObject.CreateInstance<_ARSceneConfig>();
+
+        // Устанавливаем значения по умолчанию
+        sceneConfig.segmentationMaskResolution = new Vector2Int(256, 256);
+        sceneConfig.defaultPaintColor = Color.red;
+        sceneConfig.defaultBlendFactor = 0.7f;
+        sceneConfig.enableARSimulation = true;
+        sceneConfig.showTestObject = true;
+        sceneConfig.useCustomARCameraBackground = false;
+
+        string configPath = "Assets/Config/_ARSceneConfig.asset";
         string directory = Path.GetDirectoryName(configPath);
 
         if (!Directory.Exists(directory))
@@ -78,7 +136,7 @@ public class SceneSetupUtility : EditorWindow
 
         // Отображаем поле для ScriptableObject конфигурации
         EditorGUI.BeginChangeCheck();
-        sceneConfig = (ARSceneConfig)EditorGUILayout.ObjectField("Конфигурация", sceneConfig, typeof(ARSceneConfig), false);
+        sceneConfig = (_ARSceneConfig)EditorGUILayout.ObjectField("Конфигурация", sceneConfig, typeof(_ARSceneConfig), false);
         if (EditorGUI.EndChangeCheck() && sceneConfig == null)
         {
             CreateDefaultConfig();
@@ -309,6 +367,9 @@ public class SceneSetupUtility : EditorWindow
             // Проверяем и исправляем ссылки в XROrigin
             FixXROriginReferences(xrOriginObj);
 
+            // Проверяем и настраиваем ARCameraBackground
+            FixARCameraBackground(xrOriginObj);
+
             // Явная инициализация AR сессии
             var sessionComponent = arSessionObj.GetComponent<ARSession>();
             if (sessionComponent != null)
@@ -316,6 +377,9 @@ public class SceneSetupUtility : EditorWindow
                 sessionComponent.enabled = true;
                 Debug.Log("AR сессия включена явно.");
             }
+
+            // Добавляем поддержку симуляции AR в редакторе
+            SetupARSimulation(arSessionObj);
 
             Debug.Log("AR компоненты настроены из префабов.");
 
@@ -444,6 +508,9 @@ public class SceneSetupUtility : EditorWindow
         // Активируем все компоненты
         arSessionObj.SetActive(true);
         xrOriginObj.SetActive(true);
+
+        // Настраиваем симуляцию AR для тестирования в редакторе
+        SetupARSimulation(arSessionObj);
 
         // Сохраняем компоненты как префабы для дальнейшего использования
         if (sceneConfig != null && sceneConfig.arSessionPrefab == null)
@@ -762,6 +829,9 @@ public class SceneSetupUtility : EditorWindow
 
         // Применяем изменения
         EditorUtility.SetDirty(xrOrigin);
+
+        // Добавляем вызов проверки ARCameraBackground
+        FixARCameraBackground(xrOriginObj);
     }
 
     // Метод для настройки URP Renderer Feature
@@ -2000,12 +2070,42 @@ public class SceneSetupUtility : EditorWindow
     {
         try
         {
-            // Попытка найти типы из Unity Sentis
-            var modelLoaderType = System.Type.GetType("Unity.Sentis.ModelLoader, Unity.Sentis");
-            return modelLoaderType != null;
+            // Проверка с использованием нескольких подходов
+
+            // 1. Проверка наличия типа Model из Unity.Sentis
+            var modelType = System.Type.GetType("Unity.Sentis.Model, Unity.Sentis");
+            if (modelType != null)
+            {
+                Debug.Log("Sentis найден через Type.GetType (Unity.Sentis.Model)");
+                return true;
+            }
+
+            // 2. Поиск в загруженных сборках
+            var sentisAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+            if (sentisAssembly != null)
+            {
+                Debug.Log($"Sentis найден как загруженная сборка: {sentisAssembly.GetName().Version}");
+                return true;
+            }
+
+            // 3. Проверка через PackageManager
+            UnityEditor.PackageManager.PackageInfo sentisPackage =
+                UnityEditor.PackageManager.PackageInfo.FindForAssetPath("Packages/com.unity.sentis");
+
+            if (sentisPackage != null)
+            {
+                Debug.Log($"Sentis найден через PackageManager: {sentisPackage.version}");
+                return true;
+            }
+
+            Debug.LogWarning("Unity Sentis не найден в проекте");
+            return false;
         }
-        catch
+        catch (System.Exception e)
         {
+            Debug.LogError($"Ошибка при проверке наличия Sentis: {e.Message}");
             return false;
         }
     }
@@ -2037,7 +2137,7 @@ public class SceneSetupUtility : EditorWindow
         Debug.Log("Добавлен UIInitializer для автоматической инициализации UI компонентов");
     }
 
-    // Добавляем метод для диагностики Sentis
+    // Метод для диагностики Sentis
     private void DiagnoseSentis()
     {
         Debug.Log("=== ЗАПУСК ДИАГНОСТИКИ UNITY SENTIS ===");
@@ -2046,59 +2146,518 @@ public class SceneSetupUtility : EditorWindow
         bool isSentisInstalled = IsSentisInstalled();
         Debug.Log($"Sentis установлен в проекте: {(isSentisInstalled ? "Да" : "Нет")}");
 
-        // Вызываем диагностику из SafeModelLoader
-        try
+        if (isSentisInstalled)
         {
-            var diagMethod = Type.GetType("SafeModelLoader")?.GetMethod("DiagnoseSentisStatus",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-
-            if (diagMethod != null)
+            // Проверяем доступные типы и методы в Sentis
+            try
             {
-                diagMethod.Invoke(null, null);
-            }
-            else
-            {
-                Debug.LogWarning("Метод диагностики SafeModelLoader.DiagnoseSentisStatus не найден");
+                // Объявляем переменные для основных типов
+                System.Type modelType = null;
+                System.Type modelLoaderType = null;
+                System.Type workerFactoryType = null;
 
-                // Выводим версию Sentis из PackageManager
+                // Получаем основные типы Sentis
+                var assemblyNames = System.AppDomain.CurrentDomain.GetAssemblies()
+                    .Where(a => a.GetName().Name.Contains("Sentis"))
+                    .Select(a => a.GetName().Name)
+                    .ToArray();
+
+                Debug.Log($"Найдены сборки Sentis: {string.Join(", ", assemblyNames)}");
+
+                var sentisAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+                if (sentisAssembly != null)
+                {
+                    Debug.Log($"Сборка Unity.Sentis найдена: {sentisAssembly.GetName().Version}");
+
+                    // Проверяем наличие основных типов
+                    modelType = sentisAssembly.GetType("Unity.Sentis.Model");
+                    modelLoaderType = sentisAssembly.GetType("Unity.Sentis.ModelLoader");
+                    workerFactoryType = sentisAssembly.GetType("Unity.Sentis.WorkerFactory");
+
+                    Debug.Log($"Model тип найден: {modelType != null}");
+                    Debug.Log($"ModelLoader тип найден: {modelLoaderType != null}");
+                    Debug.Log($"WorkerFactory тип найден: {workerFactoryType != null}");
+
+                    // Проверяем методы ModelLoader
+                    if (modelLoaderType != null)
+                    {
+                        var methods = modelLoaderType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                            .Select(m => m.Name)
+                            .Distinct()
+                            .ToArray();
+
+                        Debug.Log($"Публичные методы ModelLoader: {string.Join(", ", methods)}");
+
+                        // Конкретно проверяем метод Load
+                        var loadMethods = modelLoaderType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                            .Where(m => m.Name == "Load")
+                            .Select(m =>
+                            {
+                                var parameters = m.GetParameters();
+                                return $"Load({string.Join(", ", parameters.Select(p => p.ParameterType.Name))})";
+                            })
+                            .ToArray();
+
+                        Debug.Log($"Load методы: {string.Join(", ", loadMethods)}");
+                    }
+
+                    // Проверяем методы WorkerFactory
+                    if (workerFactoryType != null)
+                    {
+                        var methods = workerFactoryType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                            .Select(m => m.Name)
+                            .Distinct()
+                            .ToArray();
+
+                        Debug.Log($"Публичные методы WorkerFactory: {string.Join(", ", methods)}");
+
+                        // Конкретно проверяем методы создания Worker
+                        var createMethods = workerFactoryType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                            .Where(m => m.Name.Contains("Create"))
+                            .Select(m =>
+                            {
+                                var parameters = m.GetParameters();
+                                return $"{m.Name}({string.Join(", ", parameters.Select(p => p.ParameterType.Name))})";
+                            })
+                            .ToArray();
+
+                        Debug.Log($"Create методы: {string.Join(", ", createMethods)}");
+                    }
+
+                    // Проверяем наличие BackendType
+                    var backendType = sentisAssembly.GetType("Unity.Sentis.BackendType");
+                    if (backendType != null && backendType.IsEnum)
+                    {
+                        var backendValues = System.Enum.GetNames(backendType);
+                        Debug.Log($"BackendType значения: {string.Join(", ", backendValues)}");
+                    }
+
+                    // Проверка ModelLoader.Save
+                    if (modelLoaderType != null)
+                    {
+                        var saveMethod = modelLoaderType.GetMethod("Save", BindingFlags.Public | BindingFlags.Static);
+                        Debug.Log($"ModelLoader.Save метод найден: {saveMethod != null}");
+
+                        if (saveMethod != null)
+                        {
+                            var parameters = saveMethod.GetParameters();
+                            Debug.Log($"ModelLoader.Save параметры: {string.Join(", ", parameters.Select(p => $"{p.ParameterType.Name} {p.Name}"))}");
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.LogError("Сборка Unity.Sentis не найдена");
+                }
+
+                // Получаем версию Sentis из PackageManager
                 UnityEditor.PackageManager.PackageInfo sentisPackage =
                     UnityEditor.PackageManager.PackageInfo.FindForAssetPath("Packages/com.unity.sentis");
 
                 if (sentisPackage != null)
                 {
-                    Debug.Log($"Sentis найден через PackageManager: {sentisPackage.version}");
+                    Debug.Log($"Sentis найден через PackageManager: версия {sentisPackage.version}");
                     EditorUtility.DisplayDialog("Информация о Unity Sentis",
                         $"Unity Sentis версии {sentisPackage.version} установлен в проекте.\n\n" +
-                        $"Путь: {sentisPackage.resolvedPath}", "OK");
+                        $"Путь: {sentisPackage.resolvedPath}\n\n" +
+                        $"Основные типы: {(modelType != null ? "OK" : "ОШИБКА")}\n" +
+                        $"ModelLoader: {(modelLoaderType != null ? "OK" : "ОШИБКА")}\n" +
+                        $"WorkerFactory: {(workerFactoryType != null ? "OK" : "ОШИБКА")}",
+                        "OK");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Ошибка при анализе Sentis API: {e.Message}");
+                Debug.LogException(e);
+            }
+        }
+        else
+        {
+            // Если Sentis не установлен, предлагаем установить
+            EditorUtility.DisplayDialog("Unity Sentis не найден",
+                "Пакет Unity Sentis не установлен в проекте.\n\n" +
+                "Установите пакет Unity Sentis 2.1.2 через Package Manager:\n" +
+                "Window > Package Manager > + > Add package from git URL...\n" +
+                "com.unity.sentis@2.1.2", "OK");
+        }
+    }
+
+    // Вспомогательный метод для сохранения моделей Sentis в файл (совместимый с 2.1.2)
+    public static bool SaveSentisModelToFile(UnityEngine.Object modelAsset, string filePath)
+    {
+        if (modelAsset == null)
+        {
+            Debug.LogError("Модель не указана для сохранения");
+            return false;
+        }
+
+        try
+        {
+            // Находим сборку Unity.Sentis
+            var sentisAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+            if (sentisAssembly == null)
+            {
+                Debug.LogError("Сборка Unity.Sentis не найдена");
+                return false;
+            }
+
+            // Находим тип Model
+            var modelType = sentisAssembly.GetType("Unity.Sentis.Model");
+            if (modelType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.Model не найден");
+                return false;
+            }
+
+            // Находим тип ModelLoader
+            var modelLoaderType = sentisAssembly.GetType("Unity.Sentis.ModelLoader");
+            if (modelLoaderType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.ModelLoader не найден");
+                return false;
+            }
+
+            // Проверяем, что modelAsset является экземпляром Model или ModelAsset
+            bool isCorrectType = modelType.IsInstanceOfType(modelAsset);
+
+            if (!isCorrectType)
+            {
+                // Возможно это ModelAsset
+                var modelAssetType = sentisAssembly.GetType("Unity.Sentis.ModelAsset");
+                if (modelAssetType != null && modelAssetType.IsInstanceOfType(modelAsset))
+                {
+                    isCorrectType = true;
+
+                    // Преобразуем ModelAsset в Model с помощью LoadModelFromAsset
+                    var loadModelMethod = modelLoaderType.GetMethod("LoadModelFromAsset",
+                        BindingFlags.Public | BindingFlags.Static,
+                        null,
+                        new[] { modelAssetType },
+                        null);
+
+                    if (loadModelMethod != null)
+                    {
+                        try
+                        {
+                            // Загружаем модель из ModelAsset
+                            object loadedModel = loadModelMethod.Invoke(null, new object[] { modelAsset });
+                            Debug.Log($"Модель успешно загружена из ModelAsset: {loadedModel}");
+
+                            // Сохраняем значение модели, но не присваиваем его modelAsset
+                            // так как это не UnityEngine.Object
+                            if (loadedModel != null)
+                            {
+                                // Используем полученную модель непосредственно для Save
+                                var innerSaveMethod = modelLoaderType.GetMethod("Save",
+                                    BindingFlags.Public | BindingFlags.Static,
+                                    null,
+                                    new[] { modelType, typeof(string) },
+                                    null);
+
+                                if (innerSaveMethod != null)
+                                {
+                                    // Вызываем метод Save
+                                    object[] parameters = new object[] { loadedModel, filePath };
+                                    innerSaveMethod.Invoke(null, parameters);
+                                    Debug.Log($"Модель успешно сохранена в файл: {filePath}");
+                                    return true;
+                                }
+                                else
+                                {
+                                    Debug.LogError("Метод Save не найден в ModelLoader");
+                                    return false;
+                                }
+                            }
+                            else
+                            {
+                                Debug.LogError("Загруженная модель равна null");
+                                return false;
+                            }
+                        }
+                        catch (System.Exception e)
+                        {
+                            Debug.LogError($"Ошибка при загрузке модели из ModelAsset: {e.Message}");
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        Debug.LogError("Метод LoadModelFromAsset не найден");
+                        return false;
+                    }
                 }
                 else
                 {
-                    Debug.LogWarning("Не удалось найти информацию о пакете Sentis через PackageManager API");
-
-                    // Ищем через поисковый запрос
-                    string sentisPath = UnityEditor.AssetDatabase.FindAssets("l:package com.unity.sentis").FirstOrDefault();
-                    Debug.Log($"Результат поиска Sentis через AssetDatabase: {sentisPath}");
-
-                    EditorUtility.DisplayDialog("Проблемы с Unity Sentis",
-                        "Не удалось найти информацию о Unity Sentis через стандартные API.\n\n" +
-                        "Возможные причины:\n" +
-                        "1. Пакет не установлен\n" +
-                        "2. Пакет установлен, но не загружен корректно\n" +
-                        "3. Проблема с версией Unity или API пакетов\n\n" +
-                        "Рекомендации:\n" +
-                        "- Переустановите пакет Unity Sentis через Package Manager\n" +
-                        "- Убедитесь, что версия Unity поддерживает Sentis\n" +
-                        "- Перезапустите Unity", "OK");
+                    Debug.LogError($"Объект не является моделью Sentis. Тип: {modelAsset.GetType().Name}");
+                    return false;
                 }
+            }
+
+            // Ищем метод Save в ModelLoader
+            var saveMethod = modelLoaderType.GetMethod("Save",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { modelType, typeof(string) },
+                null);
+
+            if (saveMethod != null)
+            {
+                // Вызываем метод Save
+                object[] parameters = new object[] { modelAsset, filePath };
+                saveMethod.Invoke(null, parameters);
+                Debug.Log($"Модель успешно сохранена в файл: {filePath}");
+                return true;
+            }
+            else
+            {
+                Debug.LogError("Метод Save не найден в ModelLoader");
+
+                // Проверяем другие варианты метода Save
+                var saveMethods = modelLoaderType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .Where(m => m.Name == "Save")
+                    .ToArray();
+
+                if (saveMethods.Length > 0)
+                {
+                    Debug.Log($"Найдены альтернативные методы Save ({saveMethods.Length}):");
+                    foreach (var method in saveMethods)
+                    {
+                        var parameters = method.GetParameters();
+                        Debug.Log($"  Save({string.Join(", ", parameters.Select(p => $"{p.ParameterType.Name} {p.Name}"))})");
+                    }
+                }
+
+                return false;
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Ошибка при диагностике Sentis: {e.Message}");
-            if (e.InnerException != null)
+            Debug.LogError($"Ошибка при сохранении модели: {e.Message}");
+            Debug.LogException(e);
+            return false;
+        }
+    }
+
+    // Вспомогательный метод для создания Worker из модели Sentis (совместимый с 2.1.2)
+    public static object CreateSentisWorker(UnityEngine.Object modelAsset, string backendType = "CPU")
+    {
+        if (modelAsset == null)
+        {
+            Debug.LogError("Модель не указана для создания Worker");
+            return null;
+        }
+
+        try
+        {
+            // Находим сборку Unity.Sentis
+            var sentisAssembly = System.AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name == "Unity.Sentis");
+
+            if (sentisAssembly == null)
             {
-                Debug.LogError($"Внутреннее исключение: {e.InnerException.Message}");
+                Debug.LogError("Сборка Unity.Sentis не найдена");
+                return null;
             }
+
+            // Находим тип Model
+            var modelType = sentisAssembly.GetType("Unity.Sentis.Model");
+            if (modelType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.Model не найден");
+                return null;
+            }
+
+            // Находим тип WorkerFactory
+            var workerFactoryType = sentisAssembly.GetType("Unity.Sentis.WorkerFactory");
+            if (workerFactoryType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.WorkerFactory не найден");
+                return null;
+            }
+
+            // Находим тип IWorker
+            var iWorkerType = sentisAssembly.GetType("Unity.Sentis.IWorker");
+            if (iWorkerType == null)
+            {
+                Debug.LogError("Тип Unity.Sentis.IWorker не найден");
+                return null;
+            }
+
+            // Находим enum BackendType
+            var backendTypeEnum = sentisAssembly.GetType("Unity.Sentis.BackendType");
+            if (backendTypeEnum == null || !backendTypeEnum.IsEnum)
+            {
+                Debug.LogError("Тип Unity.Sentis.BackendType не найден или не является перечислением");
+                return null;
+            }
+
+            // Преобразуем строковое значение backendType в соответствующее значение перечисления
+            object backendTypeValue = null;
+            try
+            {
+                backendTypeValue = System.Enum.Parse(backendTypeEnum, backendType, true);
+                Debug.Log($"Выбран бэкенд: {backendType}");
+            }
+            catch (System.Exception)
+            {
+                // Если не удалось получить указанный тип, используем CPU
+                backendTypeValue = System.Enum.GetValues(backendTypeEnum).GetValue(0); // Берем первое значение (обычно CPU)
+                Debug.LogWarning($"Бэкенд {backendType} не найден, используем значение по умолчанию: {backendTypeValue}");
+            }
+
+            // Проверяем, что modelAsset является экземпляром Model
+            bool isModel = modelType.IsInstanceOfType(modelAsset);
+            object model = modelAsset;
+
+            if (!isModel)
+            {
+                // Возможно это ModelAsset, пробуем загрузить из него Model
+                var modelAssetType = sentisAssembly.GetType("Unity.Sentis.ModelAsset");
+
+                if (modelAssetType != null && modelAssetType.IsInstanceOfType(modelAsset))
+                {
+                    Debug.Log("Обнаружен ModelAsset, загружаем модель");
+
+                    // Находим ModelLoader
+                    var modelLoaderType = sentisAssembly.GetType("Unity.Sentis.ModelLoader");
+                    if (modelLoaderType == null)
+                    {
+                        Debug.LogError("Тип Unity.Sentis.ModelLoader не найден");
+                        return null;
+                    }
+
+                    // Ищем метод LoadModelFromAsset
+                    var loadModelMethod = modelLoaderType.GetMethod("LoadModelFromAsset",
+                        BindingFlags.Public | BindingFlags.Static,
+                        null,
+                        new[] { modelAssetType },
+                        null);
+
+                    if (loadModelMethod == null)
+                    {
+                        Debug.LogError("Метод LoadModelFromAsset не найден");
+                        return null;
+                    }
+
+                    try
+                    {
+                        // Загружаем модель из ModelAsset
+                        object[] parameters = new object[] { modelAsset };
+                        model = loadModelMethod.Invoke(null, parameters);
+                        if (model == null)
+                        {
+                            Debug.LogError("Не удалось загрузить модель из ModelAsset");
+                            return null;
+                        }
+                        Debug.Log("Модель успешно загружена из ModelAsset");
+                    }
+                    catch (System.Exception e)
+                    {
+                        Debug.LogError($"Ошибка при загрузке модели из ModelAsset: {e.Message}");
+                        return null;
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"Объект не является моделью Sentis. Тип: {modelAsset.GetType().Name}");
+                    return null;
+                }
+            }
+
+            // Находим подходящий метод для создания worker
+            // Пробуем сначала CreateWorker(Model, BackendType)
+            var createWorkerMethod = workerFactoryType.GetMethod("CreateWorker",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { modelType, backendTypeEnum },
+                null);
+
+            if (createWorkerMethod != null)
+            {
+                try
+                {
+                    // Создаем worker через WorkerFactory.CreateWorker
+                    object[] createParameters = new object[] { model, backendTypeValue };
+                    var worker = createWorkerMethod.Invoke(null, createParameters);
+                    if (worker == null)
+                    {
+                        Debug.LogError("Не удалось создать worker, метод вернул null");
+                        return null;
+                    }
+                    Debug.Log($"Worker успешно создан с помощью метода CreateWorker");
+                    return worker;
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError($"Ошибка при создании worker: {e.Message}");
+
+                    // Если произошла ошибка, выводим дополнительную информацию
+                    if (e.InnerException != null)
+                    {
+                        Debug.LogError($"Внутреннее исключение: {e.InnerException.Message}");
+                    }
+
+                    // Ищем альтернативные методы
+                    Debug.Log("Пробуем найти альтернативные методы создания worker...");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("Метод CreateWorker(Model, BackendType) не найден, ищем альтернативы");
+            }
+
+            // Пробуем другие способы создания worker
+            // Показываем доступные методы создания worker в WorkerFactory
+            var createMethods = workerFactoryType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Where(m => m.Name.Contains("Create"))
+                .ToArray();
+
+            if (createMethods.Length > 0)
+            {
+                Debug.Log($"Найдены альтернативные методы создания worker ({createMethods.Length}):");
+                foreach (var method in createMethods)
+                {
+                    var parameters = method.GetParameters();
+                    Debug.Log($"  {method.Name}({string.Join(", ", parameters.Select(p => $"{p.ParameterType.Name} {p.Name}"))})");
+                }
+
+                // Пробуем найти и использовать CreateComputeWorker или другой подходящий метод
+                foreach (var method in createMethods)
+                {
+                    if (method.GetParameters().Length == 1 &&
+                        method.GetParameters()[0].ParameterType == modelType)
+                    {
+                        Debug.Log($"Пробуем использовать метод {method.Name}");
+                        try
+                        {
+                            var worker = method.Invoke(null, new object[] { model });
+                            if (worker != null)
+                            {
+                                Debug.Log($"Worker успешно создан с помощью метода {method.Name}");
+                                return worker;
+                            }
+                        }
+                        catch (System.Exception e)
+                        {
+                            Debug.LogWarning($"Ошибка при попытке использовать {method.Name}: {e.Message}");
+                        }
+                    }
+                }
+            }
+
+            Debug.LogError("Не удалось создать worker, все методы были испробованы");
+            return null;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Общая ошибка при создании Sentis Worker: {e.Message}");
+            Debug.LogException(e);
+            return null;
         }
     }
 
@@ -2140,7 +2699,8 @@ public class SceneSetupUtility : EditorWindow
                     {
                         EditorUtility.DisplayDialog("Переустановка Sentis",
                             $"Запрос на переустановку Unity Sentis {sentisVersion} выполнен.\n\n" +
-                            "Если Unity не перезапустился автоматически, рекомендуется сделать это вручную для завершения установки.", "OK");
+                            "Если Unity не перезапустился автоматически, рекомендуется сделать это вручную для завершения установки.\n\n" +
+                            "После переустановки проверьте наличие сборки Unity.Sentis в проекте.", "OK");
                     };
                 };
             }
@@ -2149,8 +2709,254 @@ public class SceneSetupUtility : EditorWindow
                 Debug.LogError($"Ошибка при переустановке Sentis: {e.Message}");
                 EditorUtility.DisplayDialog("Ошибка",
                     $"Не удалось переустановить Sentis: {e.Message}\n\n" +
-                    "Попробуйте установить пакет вручную через Window > Package Manager.", "OK");
+                    "Попробуйте установить пакет вручную через Window > Package Manager > + > Add package from git URL...\n" +
+                    "com.unity.sentis@2.1.2", "OK");
             }
+        }
+    }
+
+    // Добавляем настройку симуляции AR для тестирования в редакторе
+    private void SetupARSimulation(GameObject arSessionObj)
+    {
+        // Проверяем настройки в конфигурации
+        bool enableSimulation = (sceneConfig != null) ? sceneConfig.enableARSimulation : true;
+        bool showTestObject = (sceneConfig != null) ? sceneConfig.showTestObject : true;
+
+        if (!enableSimulation)
+        {
+            Debug.Log("Симуляция AR отключена в настройках. Включите её в ARSceneConfig для тестирования в редакторе.");
+            return;
+        }
+
+        Debug.Log("Настройка симуляции AR для тестирования в редакторе...");
+
+        // Проверяем наличие AR Session
+        ARSession arSession = arSessionObj.GetComponent<ARSession>();
+        if (arSession == null)
+        {
+            Debug.LogError("ARSession не найден для настройки симуляции");
+            return;
+        }
+
+        // Находим тип ARSessionState через рефлексию (для обратной совместимости с разными версиями)
+        Type arSessionStateType = null;
+        try
+        {
+            arSessionStateType = Type.GetType("UnityEngine.XR.ARFoundation.ARSessionState, Unity.XR.ARFoundation");
+            if (arSessionStateType == null)
+            {
+                // Альтернативные пространства имен
+                arSessionStateType = Type.GetType("UnityEngine.XR.ARFoundation.ARSessionState");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Не удалось найти тип ARSessionState: {ex.Message}");
+        }
+
+        // Ищем типы симуляции в разных версиях AR Foundation
+        // 1. Сначала попробуем найти XR Simulation Manager (AR Foundation 5.0+)
+        Type xrSimulationManagerType = FindTypeInAllAssemblies("XRSimulationManager");
+
+        // 2. Если не найден, ищем ARSimulationManager (более старые версии)
+        Type arSimulationManagerType = xrSimulationManagerType ??
+                                      FindTypeInAllAssemblies("ARSimulationManager");
+
+        // 3. Универсальный подход через настройки AR Session
+        if (xrSimulationManagerType != null || arSimulationManagerType != null)
+        {
+            // Один из типов симуляции найден, добавляем компонент
+            Type simulationType = xrSimulationManagerType ?? arSimulationManagerType;
+            Debug.Log($"Найден тип симуляции: {simulationType.Name}");
+
+            // Проверяем, существует ли уже на объекте
+            Component existingSimulation = arSessionObj.GetComponent(simulationType);
+            if (existingSimulation == null)
+            {
+                Component simulationComponent = arSessionObj.AddComponent(simulationType);
+                Debug.Log($"Добавлен компонент {simulationType.Name} для симуляции AR в редакторе");
+
+                // Устанавливаем свойства для включения симуляции, если они существуют
+                try
+                {
+                    PropertyInfo enabledProperty = simulationType.GetProperty("enabled");
+                    if (enabledProperty != null && enabledProperty.CanWrite)
+                    {
+                        enabledProperty.SetValue(simulationComponent, true);
+                    }
+
+                    PropertyInfo simulateProperty = simulationType.GetProperty("simulateInEditor") ??
+                                                  simulationType.GetProperty("useSimulation");
+                    if (simulateProperty != null && simulateProperty.CanWrite)
+                    {
+                        simulateProperty.SetValue(simulationComponent, true);
+                        Debug.Log("Включена симуляция AR в редакторе");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Не удалось настроить свойства симуляции: {ex.Message}");
+                }
+            }
+            else
+            {
+                Debug.Log($"Компонент {simulationType.Name} уже присутствует");
+            }
+        }
+        else
+        {
+            // Альтернативный подход: пытаемся настроить симуляцию напрямую в AR Session
+            try
+            {
+                PropertyInfo simulateInEditorProperty = typeof(ARSession).GetProperty("simulateInEditor");
+                if (simulateInEditorProperty != null && simulateInEditorProperty.CanWrite)
+                {
+                    simulateInEditorProperty.SetValue(arSession, true);
+                    Debug.Log("Включена опция simulateInEditor для ARSession");
+                }
+
+                // Для новых версий ARFoundation могут быть другие свойства
+                PropertyInfo useSimulationProperty = typeof(ARSession).GetProperty("useSimulation");
+                if (useSimulationProperty != null && useSimulationProperty.CanWrite)
+                {
+                    useSimulationProperty.SetValue(arSession, true);
+                    Debug.Log("Включена опция useSimulation для ARSession");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Не удалось настроить свойства ARSession: {ex.Message}");
+            }
+        }
+
+        // Создаем тестовый объект для проверки рендеринга, если включено в настройках
+        if (showTestObject)
+        {
+            GameObject testObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            testObject.name = "TestCube";
+            testObject.transform.position = new Vector3(0, 0, 2); // 2 метра перед камерой
+            testObject.transform.localScale = new Vector3(0.1f, 0.1f, 0.1f); // маленький куб
+
+            // Делаем куб дочерним для сохранения иерархии
+            testObject.transform.SetParent(arSessionObj.transform);
+
+            // Добавляем материал яркого цвета для лучшей видимости
+            Renderer renderer = testObject.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                renderer.material.color = Color.red;
+            }
+
+            Debug.Log("Добавлен тестовый объект (красный куб) для проверки рендеринга");
+        }
+
+        // Добавляем среду симуляции, если указана в конфигурации
+        if (sceneConfig != null && sceneConfig.simulationEnvironmentPrefab != null)
+        {
+            GameObject simulationEnv = PrefabUtility.InstantiatePrefab(sceneConfig.simulationEnvironmentPrefab) as GameObject;
+            if (simulationEnv != null)
+            {
+                Debug.Log("Добавлена среда симуляции AR из конфигурации");
+            }
+        }
+    }
+
+    // Проверка и исправление настроек ARCameraBackground для решения проблемы с черным экраном
+    private void FixARCameraBackground(GameObject xrOriginObj)
+    {
+        Debug.Log("Проверка и настройка ARCameraBackground...");
+
+        if (xrOriginObj == null)
+        {
+            Debug.LogError("XROrigin не передан для настройки ARCameraBackground");
+            return;
+        }
+
+        // Находим камеру
+        XROrigin xrOrigin = xrOriginObj.GetComponent<XROrigin>();
+        if (xrOrigin == null || xrOrigin.Camera == null)
+        {
+            Debug.LogError("Не найдена камера в XROrigin для настройки ARCameraBackground");
+            return;
+        }
+
+        // Получаем компонент камеры
+        Camera arCamera = xrOrigin.Camera;
+        GameObject cameraObj = arCamera.gameObject;
+
+        // Проверяем ARCameraBackground
+        ARCameraBackground cameraBackground = cameraObj.GetComponent<ARCameraBackground>();
+        if (cameraBackground == null)
+        {
+            // Добавляем ARCameraBackground, если его нет
+            cameraBackground = cameraObj.AddComponent<ARCameraBackground>();
+            Debug.Log("Добавлен компонент ARCameraBackground на камеру");
+        }
+
+        // Настраиваем ARCameraBackground для работы в редакторе
+        cameraBackground.enabled = true;
+
+        // Проверяем режим useCustomMaterial
+        if (cameraBackground.useCustomMaterial)
+        {
+            // Если включен пользовательский материал, проверяем его наличие
+            if (cameraBackground.customMaterial == null)
+            {
+                // Если материал не назначен, выключаем опцию или создаем простой материал
+                Debug.LogWarning("ARCameraBackground: включен режим useCustomMaterial, но материал не назначен. Отключаем эту опцию.");
+                cameraBackground.useCustomMaterial = false;
+            }
+        }
+
+        // Настройка очистки фона камеры
+        arCamera.clearFlags = CameraClearFlags.Skybox; // Вместо SolidColor для проверки рендеринга
+        arCamera.backgroundColor = Color.black; // Черный цвет на всякий случай
+
+        Debug.Log("Настройка камеры: ClearFlags установлены в Skybox для лучшей диагностики");
+
+        // Проверяем нормальную работу рендеринга с помощью фонового цвета
+        GameObject bgQuad = null;
+        Transform existingBg = cameraObj.transform.Find("DiagnosticBackground");
+        if (existingBg != null)
+        {
+            bgQuad = existingBg.gameObject;
+        }
+        else
+        {
+            // Создаем диагностический фоновый примитив
+            bgQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            bgQuad.name = "DiagnosticBackground";
+            bgQuad.transform.SetParent(cameraObj.transform);
+            bgQuad.transform.localPosition = new Vector3(0, 0, 0.5f); // Чуть впереди камеры
+            bgQuad.transform.localRotation = Quaternion.Euler(0, 180, 0); // Развернут к камере
+            bgQuad.transform.localScale = new Vector3(1f, 1f, 1f);
+
+            // Настраиваем полупрозрачность
+            Renderer renderer = bgQuad.GetComponent<Renderer>();
+            if (renderer != null && renderer.material != null)
+            {
+                // Создаем новый материал для фона
+                Material diagMaterial = new Material(Shader.Find("Unlit/Transparent"));
+                if (diagMaterial != null)
+                {
+                    diagMaterial.color = new Color(0.2f, 0.2f, 0.8f, 0.3f); // Полупрозрачный синий
+                    renderer.material = diagMaterial;
+                }
+            }
+        }
+
+        // Настраиваем видимость диагностического фона (по умолчанию отключен)
+        bgQuad.SetActive(false);
+
+        Debug.Log("Добавлен диагностический фон (отключен по умолчанию). Активируйте его через инспектор если AR камера не отображает фон.");
+
+        // Проверяем наличие пользовательского шейдера или материала для ARCameraBackground
+        if (sceneConfig != null && sceneConfig.arCameraBackgroundMaterial != null)
+        {
+            // Если в конфигурации указан материал, используем его
+            cameraBackground.useCustomMaterial = true;
+            cameraBackground.customMaterial = sceneConfig.arCameraBackgroundMaterial;
+            Debug.Log("Установлен пользовательский материал для ARCameraBackground из конфигурации");
         }
     }
 }

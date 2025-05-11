@@ -2,12 +2,243 @@ using UnityEngine;
 using System.Reflection;
 using System;
 using System.Linq;
+using System.IO;
 
 /// <summary>
 /// Адаптер для совместимости с разными версиями Unity Sentis API
 /// </summary>
 public static class SentisCompat
 {
+      private static bool isInitialized = false;
+      private static Type modelLoaderType;
+      private static Type modelType;
+      private static Type workerType;
+      private static Type tensorType;
+      private static Type opsType;
+
+      /// <summary>
+      /// Инициализирует адаптер, находя необходимые типы через рефлексию
+      /// </summary>
+      public static void Initialize()
+      {
+            if (isInitialized) return;
+
+            try
+            {
+                  // Ищем сборку Unity.Sentis
+                  foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                  {
+                        if (assembly.GetName().Name == "Unity.Sentis")
+                        {
+                              // Получаем основные типы
+                              modelLoaderType = assembly.GetType("Unity.Sentis.ModelLoader");
+                              modelType = assembly.GetType("Unity.Sentis.Model");
+                              workerType = assembly.GetType("Unity.Sentis.IWorker");
+                              tensorType = assembly.GetType("Unity.Sentis.Tensor");
+                              opsType = assembly.GetType("Unity.Sentis.Ops");
+
+                              if (modelLoaderType != null && modelType != null && workerType != null && tensorType != null && opsType != null)
+                              {
+                                    Debug.Log("SentisCompat: Все необходимые типы найдены");
+                                    isInitialized = true;
+                                    return;
+                              }
+                        }
+                  }
+
+                  Debug.LogError("SentisCompat: Не удалось найти все необходимые типы Unity.Sentis");
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"SentisCompat: Ошибка при инициализации: {e.Message}");
+            }
+      }
+
+      /// <summary>
+      /// Загружает модель из байтового массива
+      /// </summary>
+      public static object LoadModelFromBytes(byte[] modelData)
+      {
+            if (!isInitialized)
+            {
+                  Initialize();
+            }
+
+            if (modelLoaderType == null)
+            {
+                  Debug.LogError("SentisCompat: ModelLoader не найден");
+                  return null;
+            }
+
+            try
+            {
+                  // Ищем метод Load для byte[]
+                  MethodInfo loadMethod = modelLoaderType.GetMethod("Load", new Type[] { typeof(byte[]) });
+                  if (loadMethod != null)
+                  {
+                        return loadMethod.Invoke(null, new object[] { modelData });
+                  }
+                  else
+                  {
+                        // Пробуем через Stream (MemoryStream)
+                        MethodInfo loadStreamMethod = modelLoaderType.GetMethod("Load", new Type[] { typeof(Stream) });
+                        if (loadStreamMethod != null)
+                        {
+                              using (var ms = new MemoryStream(modelData))
+                              {
+                                    return loadStreamMethod.Invoke(null, new object[] { ms });
+                              }
+                        }
+                        // Диагностика: выведем все методы ModelLoader
+                        var allMethods = modelLoaderType.GetMethods();
+                        foreach (var m in allMethods)
+                        {
+                              Debug.Log($"ModelLoader method: {m.Name} ({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name))})");
+                        }
+                        Debug.LogError("SentisCompat: Метод Load(byte[]) и Load(Stream) не найден");
+                        return null;
+                  }
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"SentisCompat: Ошибка при загрузке модели: {e.Message}");
+                  return null;
+            }
+      }
+
+      /// <summary>
+      /// Создает Worker для модели
+      /// </summary>
+      public static object CreateWorker(object model, int backend = 0)
+      {
+            if (!isInitialized)
+            {
+                  Initialize();
+            }
+
+            if (model == null || workerType == null)
+            {
+                  Debug.LogError("SentisCompat: Модель или Worker не найдены");
+                  return null;
+            }
+
+            try
+            {
+                  // Ищем метод CreateWorker
+                  MethodInfo createWorkerMethod = modelType.GetMethod("CreateWorker");
+                  if (createWorkerMethod != null)
+                  {
+                        return createWorkerMethod.Invoke(model, new object[] { backend });
+                  }
+                  else
+                  {
+                        Debug.LogError("SentisCompat: Метод CreateWorker не найден");
+                        return null;
+                  }
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"SentisCompat: Ошибка при создании Worker: {e.Message}");
+                  return null;
+            }
+      }
+
+      /// <summary>
+      /// Выполняет инференс модели
+      /// </summary>
+      public static object Execute(object worker, object inputTensor)
+      {
+            if (!isInitialized)
+            {
+                  Initialize();
+            }
+
+            if (worker == null || inputTensor == null)
+            {
+                  Debug.LogError("SentisCompat: Worker или входной тензор не найдены");
+                  return null;
+            }
+
+            try
+            {
+                  // Ищем метод Execute
+                  MethodInfo executeMethod = workerType.GetMethod("Execute");
+                  if (executeMethod != null)
+                  {
+                        return executeMethod.Invoke(worker, new object[] { inputTensor });
+                  }
+                  else
+                  {
+                        Debug.LogError("SentisCompat: Метод Execute не найден");
+                        return null;
+                  }
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"SentisCompat: Ошибка при выполнении инференса: {e.Message}");
+                  return null;
+            }
+      }
+
+      /// <summary>
+      /// Создает тензор из текстуры
+      /// </summary>
+      public static object CreateTensorFromTexture(Texture2D texture)
+      {
+            if (!isInitialized)
+            {
+                  Initialize();
+            }
+
+            if (texture == null || tensorType == null)
+            {
+                  Debug.LogError("SentisCompat: Текстура или Tensor не найдены");
+                  return null;
+            }
+
+            try
+            {
+                  // Ищем метод CreateTensor
+                  MethodInfo createTensorMethod = tensorType.GetMethod("CreateTensor");
+                  if (createTensorMethod != null)
+                  {
+                        return createTensorMethod.Invoke(null, new object[] { texture });
+                  }
+                  else
+                  {
+                        Debug.LogError("SentisCompat: Метод CreateTensor не найден");
+                        return null;
+                  }
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"SentisCompat: Ошибка при создании тензора: {e.Message}");
+                  return null;
+            }
+      }
+
+      /// <summary>
+      /// Освобождает ресурсы Worker
+      /// </summary>
+      public static void DisposeWorker(object worker)
+      {
+            if (worker == null) return;
+
+            try
+            {
+                  // Ищем метод Dispose
+                  MethodInfo disposeMethod = workerType.GetMethod("Dispose");
+                  if (disposeMethod != null)
+                  {
+                        disposeMethod.Invoke(worker, null);
+                  }
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"SentisCompat: Ошибка при освобождении Worker: {e.Message}");
+            }
+      }
+
       /// <summary>
       /// Проверяет, использует ли проект новую версию API Sentis (2.1.x+)
       /// </summary>
@@ -27,149 +258,6 @@ public static class SentisCompat
 
             // Проверяем наличие класса Worker
             return workerType != null;
-      }
-
-      /// <summary>
-      /// Создает исполнителя (Worker) для модели, работающий с любой версией Sentis API
-      /// </summary>
-      /// <param name="model">Загруженная модель</param>
-      /// <param name="backend">Индекс бэкенда (0 = CPU, 1 = GPU)</param>
-      /// <returns>Экземпляр Worker или null в случае ошибки</returns>
-      public static object CreateWorker(object model, int backend)
-      {
-            if (model == null)
-            {
-                  Debug.LogError("SentisCompat: Модель не задана (null)");
-                  return null;
-            }
-
-            try
-            {
-                  // Определяем сборку Sentis
-                  Assembly sentisAssembly = null;
-                  foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                  {
-                        if (assembly.GetName().Name == "Unity.Sentis")
-                        {
-                              sentisAssembly = assembly;
-                              break;
-                        }
-                  }
-
-                  if (sentisAssembly == null)
-                  {
-                        Debug.LogError("SentisCompat: Сборка Unity.Sentis не найдена");
-                        return null;
-                  }
-
-                  // Диагностика найденной сборки
-                  Debug.Log($"SentisCompat: Найдена сборка Unity.Sentis версии {sentisAssembly.GetName().Version}");
-
-                  // Проверяем наличие класса Worker (новая версия API 2.1.x)
-                  Type workerType = sentisAssembly.GetType("Unity.Sentis.Worker");
-                  if (workerType != null)
-                  {
-                        Debug.Log("SentisCompat: Используем новый API Unity.Sentis.Worker (2.1.x)");
-
-                        // Находим тип BackendType
-                        Type backendType = sentisAssembly.GetType("Unity.Sentis.BackendType");
-                        if (backendType != null)
-                        {
-                              // Создаем enum-параметр для бэкенда
-                              object backendEnum = Enum.ToObject(backendType, backend);
-
-                              // Находим конструктор, принимающий модель и бэкенд
-                              var constructor = workerType.GetConstructor(new[] { model.GetType(), backendType });
-                              if (constructor != null)
-                              {
-                                    var worker = constructor.Invoke(new[] { model, backendEnum });
-                                    Debug.Log($"SentisCompat: Worker успешно создан через конструктор");
-                                    return worker;
-                              }
-                              else
-                              {
-                                    Debug.LogError($"SentisCompat: Не найден конструктор Worker({model.GetType().Name}, {backendType.Name})");
-                              }
-                        }
-                        else
-                        {
-                              Debug.LogError("SentisCompat: Не найден тип Unity.Sentis.BackendType");
-                        }
-                  }
-
-                  // Проверяем наличие WorkerFactory (старая версия API до 2.1.x)
-                  Type workerFactoryType = sentisAssembly.GetType("Unity.Sentis.WorkerFactory");
-                  if (workerFactoryType != null)
-                  {
-                        Debug.Log("SentisCompat: Используем старый API Unity.Sentis.WorkerFactory");
-
-                        // Находим метод CreateWorker
-                        var createWorkerMethods = workerFactoryType.GetMethods()
-                            .Where(m => m.Name == "CreateWorker")
-                            .ToArray();
-
-                        if (createWorkerMethods.Length > 0)
-                        {
-                              // Находим метод, принимающий модель и бэкенд
-                              foreach (var method in createWorkerMethods)
-                              {
-                                    var parameters = method.GetParameters();
-
-                                    // Проверяем, подходит ли метод для наших параметров
-                                    if (parameters.Length == 2 &&
-                                        parameters[0].ParameterType.IsAssignableFrom(model.GetType()) &&
-                                        parameters[1].ParameterType.IsEnum)
-                                    {
-                                          try
-                                          {
-                                                // Создаем enum-параметр для бэкенда
-                                                object backendEnum = Enum.ToObject(parameters[1].ParameterType, backend);
-                                                var worker = method.Invoke(null, new[] { model, backendEnum });
-
-                                                Debug.Log("SentisCompat: Worker успешно создан через WorkerFactory.CreateWorker");
-                                                return worker;
-                                          }
-                                          catch (Exception e)
-                                          {
-                                                Debug.LogWarning($"SentisCompat: Ошибка при вызове CreateWorker с бэкендом: {e.Message}");
-                                          }
-                                    }
-                              }
-
-                              // Если не удалось создать с бэкендом, попробуем без него
-                              foreach (var method in createWorkerMethods)
-                              {
-                                    var parameters = method.GetParameters();
-                                    if (parameters.Length == 1 && parameters[0].ParameterType.IsAssignableFrom(model.GetType()))
-                                    {
-                                          try
-                                          {
-                                                var worker = method.Invoke(null, new[] { model });
-                                                Debug.Log("SentisCompat: Worker успешно создан через WorkerFactory.CreateWorker (без бэкенда)");
-                                                return worker;
-                                          }
-                                          catch (Exception e)
-                                          {
-                                                Debug.LogWarning($"SentisCompat: Ошибка при вызове CreateWorker: {e.Message}");
-                                          }
-                                    }
-                              }
-                        }
-                        else
-                        {
-                              Debug.LogError("SentisCompat: В WorkerFactory не найдены методы CreateWorker");
-                        }
-                  }
-
-                  // Если не удалось создать Worker ни одним из способов
-                  Debug.LogError("SentisCompat: Не удалось создать Worker ни через Worker, ни через WorkerFactory");
-                  return null;
-            }
-            catch (Exception e)
-            {
-                  Debug.LogError($"SentisCompat: Ошибка при создании Worker: {e.Message}");
-                  return null;
-            }
       }
 
       /// <summary>

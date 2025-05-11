@@ -158,6 +158,34 @@ public class WallPaintEffect : MonoBehaviour
         UpdatePaintParameters();
         isInitialized = true;
         Debug.Log("WallPaintEffect инициализирован успешно");
+
+        // Добавляем автоматический запуск отладки через 1 секунду
+        StartCoroutine(DebugAfterDelay());
+    }
+
+    // Корутина для запуска отладки с задержкой
+    private IEnumerator DebugAfterDelay()
+    {
+        // Ждем 1 секунду для полной инициализации
+        yield return new WaitForSeconds(1.0f);
+
+        // Выводим диагностическую информацию
+        DebugSegmentationStatus();
+
+        // Проверяем режим рендеринга
+        if (wallPaintMaterial != null && !wallPaintMaterial.HasProperty("_DebugOverlay"))
+        {
+            Debug.LogWarning("WallPaintEffect: Материал не содержит свойство _DebugOverlay! Возможно, шейдер не обновлен.");
+        }
+
+        // Исправляем настройки рендеринга
+        FixRenderingMode();
+        Debug.Log("WallPaintEffect: Запущен режим отладки. Проверьте отображение сетки на экране.");
+
+        // Через 5 секунд отключаем режим отладки
+        yield return new WaitForSeconds(5.0f);
+        DisableDebugMode();
+        Debug.Log("WallPaintEffect: Отладочный режим отключен.");
     }
 
     // Метод для поиска WallPaintFeature в URP Renderer
@@ -291,6 +319,12 @@ public class WallPaintEffect : MonoBehaviour
     {
         if (!isInitialized) return;
 
+        // Добавляем периодическую проверку состояния сегментации
+        if (Time.frameCount % 60 == 0) // Каждые ~60 кадров
+        {
+            DebugSegmentationStatus();
+        }
+
         // Проверяем, что у нас есть сегментация и она готова
         if (wallSegmentation != null)
         {
@@ -364,6 +398,64 @@ public class WallPaintEffect : MonoBehaviour
         }
     }
 
+    // Новый метод для отладки состояния сегментации
+    private void DebugSegmentationStatus()
+    {
+        // Состояние сегментации
+        string segmentationState = wallSegmentation != null
+            ? (wallSegmentation.IsModelInitialized ? "Инициализирована" : "Не инициализирована")
+            : "Отсутствует";
+
+        // Информация о текстуре сегментации
+        string maskInfo = "Маска сегментации: ";
+        if (wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
+        {
+            RenderTexture mask = wallSegmentation.segmentationMaskTexture;
+            maskInfo += $"{mask.width}x{mask.height}";
+
+            // Проверяем, используется ли маска в материале
+            if (wallPaintMaterial != null)
+            {
+                Texture usedMask = wallPaintMaterial.GetTexture("_SegmentationMask");
+                if (usedMask == mask)
+                {
+                    maskInfo += " (установлена в материал)";
+                }
+                else
+                {
+                    maskInfo += " (НЕ установлена в материал!)";
+                }
+            }
+        }
+        else
+        {
+            maskInfo += "отсутствует";
+        }
+
+        // Информация о материале
+        string materialInfo = "Материал: ";
+        if (wallPaintMaterial != null)
+        {
+            materialInfo += wallPaintMaterial.shader.name;
+            if (wallPaintMaterial.HasProperty("_BlendFactor"))
+            {
+                materialInfo += $", Blend Factor: {wallPaintMaterial.GetFloat("_BlendFactor")}";
+            }
+            if (wallPaintMaterial.HasProperty("_PaintColor"))
+            {
+                Color color = wallPaintMaterial.GetColor("_PaintColor");
+                materialInfo += $", Color: ({color.r:F2}, {color.g:F2}, {color.b:F2}, {color.a:F2})";
+            }
+        }
+        else
+        {
+            materialInfo += "отсутствует";
+        }
+
+        // Выводим собранную информацию
+        Debug.Log($"[WallPaintEffect] Статус: {segmentationState}\n{maskInfo}\n{materialInfo}");
+    }
+
     // Метод для попытки пересоздания материала стены
     private void TryRecreateWallPaintMaterial()
     {
@@ -406,12 +498,82 @@ public class WallPaintEffect : MonoBehaviour
             {
                 wallPaintMaterial.DisableKeyword("USE_MASK");
             }
+
+            // Ensure _MainTex is set to prevent Blit errors
+            EnsureTexturesInitialized();
         }
 
         if (wallPaintFeature != null && !ReferenceEquals(wallPaintFeature.passMaterial, wallPaintMaterial))
         {
             // Обновляем материал в фиче
             wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+        }
+    }
+
+    // New method to ensure textures are properly initialized
+    private void EnsureTexturesInitialized()
+    {
+        if (wallPaintMaterial == null) return;
+
+        // Check and set _MainTex if missing
+        if (wallPaintMaterial.GetTexture("_MainTex") == null)
+        {
+            // Create a default white texture if necessary
+            Texture2D defaultTexture = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+            Color[] pixels = Enumerable.Repeat(Color.white, 16).ToArray();
+            defaultTexture.SetPixels(pixels);
+            defaultTexture.Apply();
+
+            wallPaintMaterial.SetTexture("_MainTex", defaultTexture);
+            Debug.Log("WallPaintEffect: Set default _MainTex to prevent rendering errors");
+        }
+
+        // Ensure segmentation mask texture is set
+        if (wallPaintMaterial.GetTexture("_SegmentationMask") == null)
+        {
+            if (isSegmentationReady && wallSegmentation?.segmentationMaskTexture != null)
+            {
+                wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
+                Debug.Log("WallPaintEffect: Set _SegmentationMask from wallSegmentation");
+            }
+            else
+            {
+                // Create a simple fallback segmentation mask (blank)
+                Texture2D defaultMask = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+                Color[] pixels = Enumerable.Repeat(Color.black, 16).ToArray();
+                defaultMask.SetPixels(pixels);
+                defaultMask.Apply();
+
+                wallPaintMaterial.SetTexture("_SegmentationMask", defaultMask);
+                Debug.Log("WallPaintEffect: Set default _SegmentationMask to prevent rendering errors");
+            }
+        }
+    }
+
+    // This method recreates the material if it's lost or invalid
+    private void RecreateMaterial()
+    {
+        // Попробуем создать новый материал с правильным шейдером
+        Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+        if (wallPaintShader != null)
+        {
+            wallPaintMaterial = new Material(wallPaintShader);
+            wallPaintMaterial.SetColor("_PaintColor", paintColor);
+            wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
+
+            // Initialize textures to prevent rendering errors
+            EnsureTexturesInitialized();
+
+            // Если у нас есть WallPaintFeature, обновляем материал там
+            if (wallPaintFeature != null)
+            {
+                wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+                Debug.Log("Wall paint material recreated successfully");
+            }
+        }
+        else
+        {
+            Debug.LogError("Cannot find shader 'Custom/WallPaint'. Make sure it exists in the project.");
         }
     }
 
@@ -457,5 +619,230 @@ public class WallPaintEffect : MonoBehaviour
     public bool IsReady()
     {
         return isInitialized && wallPaintMaterial != null && (!useMask || isSegmentationReady);
+    }
+
+    // Экспериментальные методы для отладки - вызывайте их из редактора Unity для тестирования
+
+    // Метод для принудительного обновления материала
+    public void ForceUpdateMaterial()
+    {
+        if (!isInitialized)
+        {
+            Debug.LogWarning("WallPaintEffect не инициализирован, нельзя обновить материал");
+            return;
+        }
+
+        // Обновить существующий материал и его параметры
+        UpdatePaintParameters();
+
+        // Пересоздать связь с WallPaintFeature
+        if (wallPaintFeature != null && wallPaintMaterial != null)
+        {
+            wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+            Debug.Log("Материал принудительно обновлен в WallPaintFeature");
+        }
+        else
+        {
+            Debug.LogWarning("WallPaintFeature недоступен, обновление невозможно");
+        }
+
+        DebugSegmentationStatus();
+    }
+
+    // Метод для проверки и исправления текстур
+    public void FixMaterialTextures()
+    {
+        if (wallPaintMaterial == null)
+        {
+            Debug.LogError("Материал не найден");
+            return;
+        }
+
+        // Убедимся, что текстуры правильно установлены
+        EnsureTexturesInitialized();
+
+        // Проверим, что ключевое слово USE_MASK правильно установлено
+        if (isSegmentationReady && useMask)
+        {
+            wallPaintMaterial.EnableKeyword("USE_MASK");
+            Debug.Log("Включено ключевое слово USE_MASK");
+        }
+        else
+        {
+            wallPaintMaterial.DisableKeyword("USE_MASK");
+            Debug.Log("Отключено ключевое слово USE_MASK");
+        }
+
+        // Установить значения по умолчанию для безопасности
+        if (wallPaintMaterial.HasProperty("_BlendFactor"))
+        {
+            float currentBlend = wallPaintMaterial.GetFloat("_BlendFactor");
+            if (currentBlend > 0.8f)
+            {
+                wallPaintMaterial.SetFloat("_BlendFactor", 0.5f);
+                Debug.Log("BlendFactor уменьшен до 0.5 для предотвращения непрозрачного эффекта");
+            }
+        }
+
+        ForceUpdateMaterial();
+    }
+
+    // Метод для мгновенного изменения цвета и прозрачности
+    public void SetColorAndOpacity(Color color, float opacity)
+    {
+        if (wallPaintMaterial == null) return;
+
+        // Установить цвет
+        wallPaintMaterial.SetColor("_PaintColor", color);
+
+        // Установить прозрачность
+        wallPaintMaterial.SetFloat("_BlendFactor", Mathf.Clamp01(opacity));
+
+        // Обновить мгновенно
+        ForceUpdateMaterial();
+
+        Debug.Log($"Установлен цвет {color} и прозрачность {opacity}");
+    }
+
+    // Метод для принудительной настройки режима рендеринга
+    public void FixRenderingMode()
+    {
+        bool needsMaterialUpdate = false;
+
+        if (wallPaintMaterial != null)
+        {
+            // Включаем отладочную сетку, если свойство существует
+            if (wallPaintMaterial.HasProperty("_DebugOverlay"))
+            {
+                if (!wallPaintMaterial.IsKeywordEnabled("DEBUG_OVERLAY"))
+                {
+                    wallPaintMaterial.EnableKeyword("DEBUG_OVERLAY");
+                    needsMaterialUpdate = true;
+                    Debug.Log("WallPaintEffect: Включен режим отладки для визуализации покрытия (DEBUG_OVERLAY)");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("WallPaintEffect: Материал не содержит свойство _DebugOverlay для FixRenderingMode.");
+            }
+
+            // Устанавливаем безопасный BlendFactor для отладки, если он слишком высокий
+            if (wallPaintMaterial.HasProperty("_BlendFactor"))
+            {
+                float currentBlend = wallPaintMaterial.GetFloat("_BlendFactor");
+                if (currentBlend < 0.01f || currentBlend > 0.95f) // Если почти невидимый или почти непрозрачный
+                {
+                    // wallPaintMaterial.SetFloat("_BlendFactor", 0.3f); // Более заметное значение для отладки
+                    // needsMaterialUpdate = true;
+                    // Debug.Log("WallPaintEffect: BlendFactor установлен на 0.3 для отладки");
+                }
+            }
+
+            // Эта часть логики вызывала снятие галочки "Use Mask"
+            // Проверяем, нужно ли включать или выключать маску на основе состояния WallSegmentation
+            // Но не меняем this.useMask, чтобы настройка инспектора сохранялась.
+            // Вместо этого Update() должен управлять ключевым словом USE_MASK.
+            /*
+            if (wallSegmentation == null || !wallSegmentation.IsModelInitialized)
+            {
+                // SetUseMaskMode(false); // Не вызываем, чтобы не сбрасывать галочку в инспекторе
+                if (wallPaintMaterial.IsKeywordEnabled("USE_MASK"))
+                {
+                    wallPaintMaterial.DisableKeyword("USE_MASK");
+                    needsMaterialUpdate = true;
+                    Debug.Log("WallPaintEffect (FixRenderingMode): Отключено ключевое слово USE_MASK, т.к. сегментация не готова.");
+                }
+            }
+            else
+            {
+                // Если сегментация готова, то USE_MASK должен управляться this.useMask (из инспектора) и логикой в Update()
+                // Здесь не нужно принудительно включать, если this.useMask = false.
+                // SetUseMaskMode(true); // Не вызываем, чтобы не включать, если в инспекторе снято.
+                if (this.useMask && !wallPaintMaterial.IsKeywordEnabled("USE_MASK"))
+                {
+                     wallPaintMaterial.EnableKeyword("USE_MASK");
+                     needsMaterialUpdate = true;
+                     Debug.Log("WallPaintEffect (FixRenderingMode): Включено ключевое слово USE_MASK, т.к. сегментация готова и useMask=true.");
+                }
+            }
+            */
+
+            // Строка, которая, согласно логам (в районе ~741), приводила к вызову SetUseMaskMode(false)
+            // и логу "WallPaintEffect: Отключен режим USE_MASK"
+            // SetUseMaskMode(false); // Отключаем маску для чистоты эксперимента <-- ЗАКОММЕНТИРОВАНО
+            // Debug.Log("WallPaintEffect: Отключен режим USE_MASK (для чистоты эксперимента) - вызов закомментирован в FixRenderingMode");
+
+
+            // Вместо этого, если мы в режиме отладки и хотим видеть эффект без маски,
+            // можно временно отключить ключевое слово, не меняя this.useMask
+            // if (wallPaintMaterial.IsKeywordEnabled("USE_MASK"))
+            // {
+            //     wallPaintMaterial.DisableKeyword("USE_MASK");
+            //     needsMaterialUpdate = true;
+            //     Debug.Log("WallPaintEffect (FixRenderingMode): Временно отключено USE_MASK для отладочной сетки.");
+            // }
+
+        }
+        else
+        {
+            Debug.LogWarning("WallPaintEffect: WallPaintMaterial is null in FixRenderingMode.");
+            return;
+        }
+
+        if (needsMaterialUpdate)
+        {
+            ForceUpdateMaterial();
+        }
+        else
+        {
+            // Даже если ключевые слова не менялись, обновим на всякий случай, если другие параметры могли измениться
+            ForceUpdateMaterial(); // Это может быть избыточно, но для отладки безопасно
+            Debug.Log("WallPaintEffect (FixRenderingMode): Материал принудительно обновлен, даже если ключевые слова не менялись.");
+        }
+    }
+
+    // Отдельный метод для включения/отключения режима использования маски
+    public void SetUseMaskMode(bool useMaskValue)
+    {
+        if (wallPaintMaterial == null)
+        {
+            Debug.LogError("Cannot set mask mode: Material is null");
+            return;
+        }
+
+        useMask = useMaskValue;
+
+        if (useMaskValue)
+        {
+            wallPaintMaterial.EnableKeyword("USE_MASK");
+            Debug.Log("WallPaintEffect: Включен режим USE_MASK");
+        }
+        else
+        {
+            wallPaintMaterial.DisableKeyword("USE_MASK");
+            Debug.Log("WallPaintEffect: Отключен режим USE_MASK");
+        }
+
+        // Force material update
+        ForceUpdateMaterial();
+    }
+
+    // Метод для отключения режима отладки
+    public void DisableDebugMode()
+    {
+        if (wallPaintMaterial == null)
+        {
+            Debug.LogError("Cannot disable debug mode: Material is null");
+            return;
+        }
+
+        // Disable debug overlay
+        if (wallPaintMaterial.HasProperty("_DebugOverlay"))
+        {
+            wallPaintMaterial.DisableKeyword("DEBUG_OVERLAY");
+        }
+
+        // Force material update
+        ForceUpdateMaterial();
     }
 }
