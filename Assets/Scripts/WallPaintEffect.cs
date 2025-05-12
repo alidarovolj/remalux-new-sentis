@@ -16,6 +16,7 @@ public class WallPaintEffect : MonoBehaviour
     [SerializeField] private bool useMask = true;
     [SerializeField] private ARSessionManager arSessionManager; // Ссылка на ARSessionManager
 
+    private Camera mainCamera; // Added missing camera field
     private WallPaintFeature wallPaintFeature;
     private bool isInitialized = false;
     private bool isSegmentationReady = false;
@@ -23,6 +24,13 @@ public class WallPaintEffect : MonoBehaviour
 
     private void Start()
     {
+        Debug.Log("[WallPaintEffect LOG] Start() called.");
+        if (mainCamera == null)
+        {
+            mainCamera = Camera.main;
+            Debug.Log("[WallPaintEffect LOG] Main camera assigned in Start.");
+        }
+
         // Находим ARSessionManager, если он не задан
         if (arSessionManager == null)
         {
@@ -69,6 +77,7 @@ public class WallPaintEffect : MonoBehaviour
     // Добавляем метод с задержкой для iOS
     private IEnumerator InitializeWithDelay()
     {
+        Debug.Log("[WallPaintEffect LOG] InitializeWithDelay() coroutine started.");
         // Проверяем флаг инициализации
         if (!shouldInitialize)
         {
@@ -84,11 +93,13 @@ public class WallPaintEffect : MonoBehaviour
 
         // Теперь инициализируем наши компоненты
         InitializeComponents();
+        Debug.Log("[WallPaintEffect LOG] InitializeWithDelay() coroutine finished.");
     }
 
     // Основной метод инициализации, вынесенный для повторного использования
     private void InitializeComponents()
     {
+        Debug.Log("[WallPaintEffect LOG] InitializeComponents() called.");
         if (isInitialized)
         {
             return; // Избегаем повторной инициализации
@@ -158,6 +169,7 @@ public class WallPaintEffect : MonoBehaviour
         UpdatePaintParameters();
         isInitialized = true;
         Debug.Log("WallPaintEffect инициализирован успешно");
+        Debug.Log("[WallPaintEffect LOG] InitializeComponents() finished. isInitialized = true.");
 
         // Добавляем автоматический запуск отладки через 1 секунду
         StartCoroutine(DebugAfterDelay());
@@ -482,71 +494,113 @@ public class WallPaintEffect : MonoBehaviour
 
     private void UpdatePaintParameters()
     {
-        if (wallPaintMaterial != null)
+        Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters() called.");
+        if (wallPaintMaterial == null)
         {
-            // Применяем текущие настройки к материалу
-            wallPaintMaterial.SetColor("_PaintColor", paintColor);
-            wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
+            Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintMaterial is null, creating new one.");
+            CreateMaterialIfNeeded();
+        }
 
-            // Применяем или отключаем маску
-            if (isSegmentationReady && useMask)
+        if (wallPaintMaterial == null) // Повторная проверка после CreateMaterialIfNeeded
+        {
+            Debug.LogError("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintMaterial is STILL null after creation attempt. Aborting.");
+            return;
+        }
+
+        // Ensure textures are initialized before setting other parameters
+        EnsureTexturesInitialized();
+
+        wallPaintMaterial.SetColor("_PaintColor", paintColor);
+        wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
+
+        Debug.Log($"[WallPaintEffect LOG] UpdatePaintParameters: Color={paintColor}, Blend={blendFactor}, UseMask={useMask}");
+
+        if (useMask)
+        {
+            if (wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
             {
+                Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: USE_MASK is true, segmentation mask is available. Setting texture and enabling keyword.");
                 wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
                 wallPaintMaterial.EnableKeyword("USE_MASK");
             }
             else
             {
+                Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: USE_MASK is true, but segmentation mask is NULL. Disabling keyword.");
                 wallPaintMaterial.DisableKeyword("USE_MASK");
             }
-
-            // Ensure _MainTex is set to prevent Blit errors
-            EnsureTexturesInitialized();
+        }
+        else
+        {
+            Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: USE_MASK is false. Disabling keyword.");
+            wallPaintMaterial.DisableKeyword("USE_MASK");
         }
 
-        if (wallPaintFeature != null && !ReferenceEquals(wallPaintFeature.passMaterial, wallPaintMaterial))
+        // Обновляем материал в WallPaintFeature, если он уже найден
+        if (wallPaintFeature != null)
         {
-            // Обновляем материал в фиче
+            Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintFeature exists. Calling SetPassMaterial.");
             wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+        }
+        else
+        {
+            Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintFeature is NULL. Cannot set pass material yet.");
+        }
+    }
+
+    private void CreateMaterialIfNeeded()
+    {
+        Debug.Log("[WallPaintEffect LOG] CreateMaterialIfNeeded() called.");
+        if (wallPaintMaterial == null)
+        {
+            Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+            if (wallPaintShader != null)
+            {
+                wallPaintMaterial = new Material(wallPaintShader);
+                Debug.Log("[WallPaintEffect LOG] CreateMaterialIfNeeded: Material created with Custom/WallPaint shader.");
+            }
+            else
+            {
+                Debug.LogError("[WallPaintEffect LOG] CreateMaterialIfNeeded: Shader Custom/WallPaint not found! Cannot create material.");
+            }
         }
     }
 
     // New method to ensure textures are properly initialized
     private void EnsureTexturesInitialized()
     {
-        if (wallPaintMaterial == null) return;
-
-        // Check and set _MainTex if missing
-        if (wallPaintMaterial.GetTexture("_MainTex") == null)
+        Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized() called.");
+        if (wallPaintMaterial == null)
         {
-            // Create a default white texture if necessary
-            Texture2D defaultTexture = new Texture2D(4, 4, TextureFormat.RGBA32, false);
-            Color[] pixels = Enumerable.Repeat(Color.white, 16).ToArray();
-            defaultTexture.SetPixels(pixels);
-            defaultTexture.Apply();
-
-            wallPaintMaterial.SetTexture("_MainTex", defaultTexture);
-            Debug.Log("WallPaintEffect: Set default _MainTex to prevent rendering errors");
+            Debug.LogWarning("[WallPaintEffect LOG] EnsureTexturesInitialized: wallPaintMaterial is null. Aborting.");
+            return;
         }
 
-        // Ensure segmentation mask texture is set
-        if (wallPaintMaterial.GetTexture("_SegmentationMask") == null)
+        // Ensure _MainTex is initialized
+        if (wallPaintMaterial.GetTexture("_MainTex") == null)
         {
-            if (isSegmentationReady && wallSegmentation?.segmentationMaskTexture != null)
+            Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: _MainTex is null. Setting default white texture.");
+            wallPaintMaterial.SetTexture("_MainTex", Texture2D.whiteTexture);
+        }
+
+        // Ensure _SegmentationMask is initialized if needed
+        if (useMask && wallPaintMaterial.GetTexture("_SegmentationMask") == null)
+        {
+            if (wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
             {
+                Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is true, _SegmentationMask is null. Assigning from wallSegmentation.");
                 wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
-                Debug.Log("WallPaintEffect: Set _SegmentationMask from wallSegmentation");
             }
             else
             {
-                // Create a simple fallback segmentation mask (blank)
-                Texture2D defaultMask = new Texture2D(4, 4, TextureFormat.RGBA32, false);
-                Color[] pixels = Enumerable.Repeat(Color.black, 16).ToArray();
-                defaultMask.SetPixels(pixels);
-                defaultMask.Apply();
-
-                wallPaintMaterial.SetTexture("_SegmentationMask", defaultMask);
-                Debug.Log("WallPaintEffect: Set default _SegmentationMask to prevent rendering errors");
+                Debug.LogWarning("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is true, _SegmentationMask is null, AND wallSegmentation/mask is also null. Setting default black transparent texture.");
+                wallPaintMaterial.SetTexture("_SegmentationMask", Texture2D.blackTexture); // Default to a black (transparent if shader handles alpha correctly)
             }
+        }
+        else if (!useMask && wallPaintMaterial.IsKeywordEnabled("USE_MASK"))
+        {
+            Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is false, but USE_MASK keyword is enabled. Disabling and clearing texture.");
+            wallPaintMaterial.DisableKeyword("USE_MASK");
+            // wallPaintMaterial.SetTexture("_SegmentationMask", null); // Optionally clear
         }
     }
 

@@ -23,7 +23,7 @@ public class WallSegmentation : MonoBehaviour
     // Поле для хранения загруженного экземпляра модели Unity.Sentis.Model
     // Это поле не сериализуется, но может быть установлено через API/рефлексию
     [NonSerialized]
-    public object model;
+    public Model model;
 
     [Tooltip("Предпочитаемый бэкенд для исполнения модели (0 = CPU, 1 = GPUCompute)")]
     [Range(0, 1)]
@@ -64,8 +64,8 @@ public class WallSegmentation : MonoBehaviour
     public string debugSavePath = "SegmentationDebug";
 
     // Приватные поля для работы с моделью через рефлексию
-    private object engine;
-    private object runtimeModel;
+    private Worker engine;
+    private Model runtimeModel;
     private Worker worker;
     private Texture2D cameraTexture;
     private bool isModelInitialized = false;
@@ -125,20 +125,27 @@ public class WallSegmentation : MonoBehaviour
         if (!SentisInitializer.IsInitialized)
         {
             Debug.Log("Инициализируем Unity Sentis...");
-            var sentisInitializer = FindObjectOfType<SentisInitializer>();
-            if (sentisInitializer == null)
+            // var sentisInitializer = FindObjectOfType<SentisInitializer>(); // Больше не ищем так
+            // if (sentisInitializer == null)
+            // {
+            // sentisInitializer = gameObject.AddComponent<SentisInitializer>(); // Больше не добавляем компонент сюда
+            // }
+
+            // Используем статический экземпляр SentisInitializer,
+            // который сам позаботится о своем создании как корневого объекта
+            var sentisInitializerInstance = SentisInitializer.Instance;
+            if (!SentisInitializer.IsInitialized) // Проверяем снова, т.к. Instance мог запустить инициализацию
             {
-                sentisInitializer = gameObject.AddComponent<SentisInitializer>();
+                var initAsync = sentisInitializerInstance.InitializeAsync();
+                yield return initAsync;
             }
-            var initAsync = sentisInitializer.InitializeAsync();
-            yield return initAsync;
         }
 
         // Проверяем, есть ли уже загруженная модель в ModelLoader
         var modelLoader = FindObjectOfType<WallSegmentationModelLoader>();
         if (modelLoader != null && modelLoader.IsModelLoaded)
         {
-            model = modelLoader.GetLoadedModel();
+            model = modelLoader.GetLoadedModel() as Model;
             if (model != null)
             {
                 Debug.Log("Использую модель, уже загруженную в WallSegmentationModelLoader");
@@ -404,52 +411,55 @@ public class WallSegmentation : MonoBehaviour
             var loadMethod = modelLoaderType.GetMethod("Load", new Type[] { modelAsset.GetType() });
             if (loadMethod == null)
             {
-                throw new Exception($"Метод Load не найден в ModelLoader для типа {modelAsset.GetType().Name}");
+                // Попробуем найти метод Load, который принимает ModelAsset
+                Type modelAssetType = Type.GetType("Unity.Sentis.ModelAsset, Unity.Sentis");
+                if (modelAssetType != null && modelAsset.GetType() == modelAssetType)
+                {
+                    loadMethod = modelLoaderType.GetMethod("Load", new Type[] { modelAssetType });
+                }
+
+                if (loadMethod == null)
+                {
+                    throw new Exception($"Метод Load не найден в ModelLoader для типа {modelAsset.GetType().Name}. Убедитесь, что modelAsset является ModelAsset или путем к файлу ONNX/Sentis.");
+                }
             }
 
             // Загружаем модель и сохраняем в обоих полях
-            object loadedModel = loadMethod.Invoke(null, new object[] { modelAsset });
-            if (loadedModel == null)
+            object loadedModelObj = loadMethod.Invoke(null, new object[] { modelAsset });
+            if (loadedModelObj == null)
             {
                 throw new Exception("Модель загружена, но результат null");
+            }
+
+            Model loadedModel = loadedModelObj as Model;
+            if (loadedModel == null)
+            {
+                throw new Exception("Не удалось привести загруженную модель к типу Unity.Sentis.Model");
             }
 
             // Сохраняем ссылку на модель в обоих полях
             this.model = loadedModel;
             this.runtimeModel = loadedModel;
 
-            // Создаем исполнителя с помощью рефлексии
-            var workerFactoryType = Type.GetType("Unity.Sentis.WorkerFactory, Unity.Sentis");
-            if (workerFactoryType == null)
+            // Создаем исполнителя напрямую, без рефлексии
+            BackendType backendType = preferredBackend == 0 ? BackendType.CPU : BackendType.GPUCompute;
+
+            // Проверяем, есть ли у нас ссылка на старый worker и освобождаем его, если есть
+            if (this.worker != null)
             {
-                throw new Exception("Тип Unity.Sentis.WorkerFactory не найден");
+                this.worker.Dispose();
+                this.worker = null;
+            }
+            if (this.engine != null) // engine - это наш новый worker
+            {
+                this.engine.Dispose();
             }
 
-            // Пробуем оба порядка параметров (для совместимости с разными версиями Sentis)
-            MethodInfo createMethod = workerFactoryType.GetMethod("CreateWorker",
-                new Type[] { runtimeModel.GetType(), typeof(int) });
-
-            if (createMethod == null)
-            {
-                createMethod = workerFactoryType.GetMethod("CreateWorker",
-                    new Type[] { typeof(int), runtimeModel.GetType() });
-
-                if (createMethod == null)
-                {
-                    throw new Exception("Метод CreateWorker не найден в WorkerFactory");
-                }
-
-                // Вызываем с порядком (backend, model)
-                engine = createMethod.Invoke(null, new object[] { preferredBackend, runtimeModel });
-            }
-            else
-            {
-                // Вызываем с порядком (model, backend)
-                engine = createMethod.Invoke(null, new object[] { runtimeModel, preferredBackend });
-            }
+            this.engine = new Worker(this.runtimeModel, backendType); // Используем this.engine
+            this.worker = this.engine; // Также присваиваем this.worker для совместимости, если он где-то используется напрямую
 
             isModelInitialized = true;
-            Debug.Log("Модель успешно инициализирована");
+            Debug.Log($"Модель успешно инициализирована с бэкендом: {backendType}");
         }
         catch (Exception e)
         {
@@ -579,10 +589,10 @@ public class WallSegmentation : MonoBehaviour
 
                 if (textureToTensorMethod != null)
                 {
-                    object inputTensor = textureToTensorMethod.Invoke(null, new object[] { inputTexture });
-                    if (inputTensor != null)
+                    object inputTensorCompat = textureToTensorMethod.Invoke(null, new object[] { inputTexture });
+                    if (inputTensorCompat != null)
                     {
-                        ExecuteModelAndProcessResult(inputTensor);
+                        ExecuteModelAndProcessResult(inputTensorCompat);
                         return;
                     }
                     else
@@ -601,33 +611,68 @@ public class WallSegmentation : MonoBehaviour
                 return;
             }
 
-            // Пробуем метод ToTensor (существующий в различных версиях Sentis)
-            var toTensorMethod = textureConverterType.GetMethod("ToTensor", new Type[] { typeof(Texture) });
-            if (toTensorMethod != null)
+            // Вместо рефлексии здесь, будем использовать прямой вызов TextureConverter.ToTensor
+            // если предыдущий TextureToTensor из SentisCompat не сработал
+
+            Tensor<float> inputTensor = null; // Заменен TensorFloat на Tensor<float>
+            try
             {
-                Debug.Log("Используем метод ToTensor с параметром Texture");
-                object inputTensor = toTensorMethod.Invoke(null, new object[] { inputTexture });
-                if (inputTensor != null)
+                // Прямой вызов API Sentis 2.x
+                // Важно: inputResolution должно соответствовать ожиданиям модели (например, 512x512)
+                // TextureTransform используется для указания размеров и других параметров преобразования.
+                TextureTransform transform = new TextureTransform().SetDimensions(inputResolution.x, inputResolution.y);
+
+                // Создаем или переиспользуем тензор
+                // Вместо `tensor = TextureConverter.ToTensor(inputTexture, transform);`
+                // используем новый API:
+                if (inputTensor == null) // Создаем, если еще не создан
                 {
-                    ExecuteModelAndProcessResult(inputTensor);
-                    return;
+                    // Определяем форму тензора: [batch, height, width, channels]
+                    // Для TextureConverter обычно ожидается [1, height, width, 3] или [1, height, width, 4]
+                    // Каналы (3 для RGB, 4 для RGBA) зависят от того, как TextureConverter обрабатывает текстуру.
+                    // Обычно это 3, но лучше проверить документацию или экспериментировать.
+                    // Пока что предположим 3 канала, т.к. модель сегментации часто работает с RGB.
+                    TensorShape inputShape = new TensorShape(1, inputResolution.y, inputResolution.x, 3);
+                    inputTensor = new Tensor<float>(inputShape);
+                }
+
+                TextureConverter.ToTensor(inputTexture, inputTensor, transform); // Новый вызов API
+
+                // ExecuteModelAndProcessResult ожидает object, поэтому передаем тензор как object
+                // В идеале, ExecuteModelAndProcessResult тоже должен быть типизирован.
+                ExecuteModelAndProcessResult(inputTensor);
+                return;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Не удалось создать тензор через TextureConverter.ToTensor (Sentis 2.x API): {e.Message}. Попытка fallback через рефлексию...");
+                // Попытка рефлексии (менее предпочтительно)
+                var toTensorMethod = textureConverterType.GetMethod("ToTensor", new Type[] { typeof(Texture) });
+                if (toTensorMethod != null)
+                {
+                    Debug.Log("Используем метод ToTensor с параметром Texture (через рефлексию)");
+                    object inputTensorObj = toTensorMethod.Invoke(null, new object[] { inputTexture });
+                    if (inputTensorObj != null)
+                    {
+                        ExecuteModelAndProcessResult(inputTensorObj);
+                        return;
+                    }
+                }
+
+                var textureToTensorNewMethod = textureConverterType.GetMethod("TextureToTensor", new Type[] { typeof(Texture) });
+                if (textureToTensorNewMethod != null)
+                {
+                    Debug.Log("Используем метод TextureToTensor с параметром Texture (через рефлексию)");
+                    object inputTensorObj = textureToTensorNewMethod.Invoke(null, new object[] { inputTexture });
+                    if (inputTensorObj != null)
+                    {
+                        ExecuteModelAndProcessResult(inputTensorObj);
+                        return;
+                    }
                 }
             }
 
-            // Пробуем метод TextureToTensor (Sentis 2.1.x+)
-            var textureToTensorNewMethod = textureConverterType.GetMethod("TextureToTensor", new Type[] { typeof(Texture) });
-            if (textureToTensorNewMethod != null)
-            {
-                Debug.Log("Используем метод TextureToTensor с параметром Texture");
-                object inputTensor = textureToTensorNewMethod.Invoke(null, new object[] { inputTexture });
-                if (inputTensor != null)
-                {
-                    ExecuteModelAndProcessResult(inputTensor);
-                    return;
-                }
-            }
-
-            // Если не удалось создать тензор ни одним из методов, используем заглушку
+            // Если не удалось создать тензор ни одним из доступных методов, используем заглушку
             Debug.LogWarning("Не удалось создать тензор ни одним из доступных методов, используем заглушку");
             RenderSimpleMask();
         }
@@ -957,29 +1002,16 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void DisposeEngine()
     {
+        // Освобождаем ресурсы движка (Worker)
         if (engine != null)
         {
-            try
-            {
-                // Проверяем, реализует ли engine интерфейс IDisposable
-                if (engine is IDisposable disposable)
-                {
-                    disposable.Dispose();
-                }
-                else
-                {
-                    // Пытаемся найти метод Dispose через рефлексию
-                    var disposeMethod = engine.GetType().GetMethod("Dispose");
-                    if (disposeMethod != null)
-                    {
-                        disposeMethod.Invoke(engine, null);
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Ошибка при освобождении ресурсов Engine: {e.Message}");
-            }
+            engine.Dispose();
+            engine = null;
+        }
+        if (worker != null) // Также освобождаем worker, если он используется отдельно
+        {
+            worker.Dispose();
+            worker = null;
         }
     }
 

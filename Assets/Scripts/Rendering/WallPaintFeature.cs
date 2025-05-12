@@ -19,13 +19,12 @@ public class WallPaintFeature : ScriptableRendererFeature
     public bool useFallbackMaterial = true;
 
     private WallPaintRenderPass wallPaintPass;
-    private bool isFirstFrame = true;
     private bool hasWarnedAboutMissingMask = false;
     private Material fallbackMaterial;
-    private bool materialInitialized = false;
 
     public override void Create()
     {
+        Debug.Log("[WallPaintFeature LOG] Create() called.");
         // Проверяем наличие материала и пытаемся загрузить его, если не задан
         // if (passMaterial == null)
         // {
@@ -43,8 +42,7 @@ public class WallPaintFeature : ScriptableRendererFeature
         wallPaintPass.renderPassEvent = RenderPassEvent.AfterRenderingTransparents;
         wallPaintPass.minTransparency = minTransparency;
         hasWarnedAboutMissingMask = false; // Сбросим флаг предупреждения
-        materialInitialized = false; // Материал еще не инициализирован полностью из WallPaintEffect
-        isFirstFrame = true;
+        Debug.Log($"[WallPaintFeature LOG] Create() finished. passMaterial is {(passMaterial == null ? "NULL" : "NOT NULL")}, fallbackMaterial is {(fallbackMaterial == null ? "NULL" : "NOT NULL")}");
     }
 
     // Пытаемся загрузить материал по умолчанию
@@ -62,7 +60,6 @@ public class WallPaintFeature : ScriptableRendererFeature
                 passMaterial = new Material(wallPaintShader);
                 passMaterial.SetColor("_PaintColor", Color.red);
                 passMaterial.SetFloat("_BlendFactor", 0.7f);
-                materialInitialized = true;
                 Debug.Log("WallPaintFeature: Created default material with Custom/WallPaint shader");
             }
             else
@@ -72,7 +69,6 @@ public class WallPaintFeature : ScriptableRendererFeature
         }
         else
         {
-            materialInitialized = true;
             Debug.Log("WallPaintFeature: Loaded default material from Resources/Materials/WallPaint");
         }
     }
@@ -211,74 +207,102 @@ public class WallPaintFeature : ScriptableRendererFeature
 
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
     {
-        // Если это первый кадр, инициализируем материал с безопасными настройками
-        // Эту логику лучше перенести в WallPaintEffect или вызываться оттуда,
-        // так как WallPaintFeature не должен управлять инициализацией своего passMaterial.
-        // if (isFirstFrame && passMaterial != null)
-        // {
-        // if (!materialInitialized)
-        // {
-        // EnsureSafeInitialState();
-        // EnsureMaterialTextures(); // Ensure textures are initialized
-        // materialInitialized = true;
-        // }
-        // isFirstFrame = false;
-        // }
+        // If the pass or renderer is null, setup failed, so exit
+        if (wallPaintPass == null || renderer == null)
+        {
+            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: wallPaintPass or renderer is null. Skipping pass.");
+            return;
+        }
 
+        // Create fallback material if needed
+        if (useFallbackMaterial && fallbackMaterial == null)
+        {
+            EnsureFallbackMaterial();
+        }
+
+        // If passMaterial is null, automatically create a default one instead of just showing a warning
+        if (passMaterial == null)
+        {
+            Shader defaultShader = Shader.Find("Universal Render Pipeline/Lit");
+            if (defaultShader != null)
+            {
+                passMaterial = new Material(defaultShader);
+                passMaterial.SetColor("_BaseColor", new Color(1f, 1f, 1f, 0.7f));
+                Debug.Log("[WallPaintFeature LOG] AddRenderPasses: Created default passMaterial since it was null.");
+                // Initialize with basic textures
+                EnsureMaterialTexturesInternal(passMaterial);
+            }
+            else
+            {
+                Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: Couldn't create default material. Shader not found.");
+            }
+        }
+
+        // Проверяем наличие и готовность материала
         Material materialToUse = null;
 
-        // Сначала проверяем, установлен ли passMaterial (из WallPaintEffect) и готов ли он
+        // Проверяем состояние основного материала
         if (passMaterial != null)
         {
-            bool mainTexOk = passMaterial.GetTexture("_MainTex") != null;
-            bool maskTexOk = true; // По умолчанию считаем, что маска не нужна или будет проверена ниже
+            // Проверка наличия требуемых текстур
+            bool mainTexOk = passMaterial.HasProperty("_MainTex") && passMaterial.GetTexture("_MainTex") != null;
+            bool maskTexOk = true; // По умолчанию маска не обязательна
 
-            if (passMaterial.IsKeywordEnabled("USE_MASK") || passMaterial.HasProperty("_SegmentationMask")) // Проверяем, если маска предполагается к использованию
+            // Проверяем маску только если USE_MASK включен
+            if (passMaterial.IsKeywordEnabled("USE_MASK"))
             {
-                Texture segMask = passMaterial.GetTexture("_SegmentationMask");
-                if (segMask == null)
+                if (passMaterial.HasProperty("_SegmentationMask"))
                 {
-                    maskTexOk = false;
-                    if (!hasWarnedAboutMissingMask)
+                    Texture segMask = passMaterial.GetTexture("_SegmentationMask");
+                    maskTexOk = segMask != null;
+
+                    // Если маски нет, но требуется, логируем предупреждение
+                    if (!maskTexOk && !hasWarnedAboutMissingMask)
                     {
-                        Debug.LogWarning("WallPaintFeature: Segmentation mask texture is missing in the (passMaterial) provided by WallPaintEffect, or USE_MASK is enabled without a mask.");
+                        Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: Segmentation mask is missing but USE_MASK is enabled!");
                         hasWarnedAboutMissingMask = true;
                     }
                 }
                 else
                 {
-                    hasWarnedAboutMissingMask = false; // Сбрасываем флаг
+                    // Если свойство _SegmentationMask отсутствует, но USE_MASK включен
+                    maskTexOk = false;
+                    if (!hasWarnedAboutMissingMask)
+                    {
+                        Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: Material has USE_MASK enabled but no _SegmentationMask property!");
+                        hasWarnedAboutMissingMask = true;
+                    }
                 }
             }
-            // Если основная текстура или маска (если нужна) не в порядке, passMaterial не готов
+
             if (mainTexOk && maskTexOk)
             {
                 materialToUse = passMaterial;
+                Debug.Log("[WallPaintFeature LOG] AddRenderPasses: Using passMaterial.");
             }
         }
-
 
         // Если основной материал не готов или не установлен, и разрешен fallback
         if (materialToUse == null && useFallbackMaterial && fallbackMaterial != null)
         {
-            Debug.LogWarning("WallPaintFeature: passMaterial is not ready or not set by WallPaintEffect. Using fallbackMaterial.");
+            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: passMaterial is not ready or not set by WallPaintEffect. Using fallbackMaterial.");
             materialToUse = fallbackMaterial;
         }
         else if (materialToUse == null)
         {
             // Если основной материал не готов, и fallback не разрешен или отсутствует
-            Debug.LogWarning("WallPaintFeature: passMaterial is not ready, and fallback is not available/enabled. Skipping pass.");
+            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: passMaterial is not ready, and fallback is not available/enabled. Skipping pass.");
             return;
         }
-
 
         // Если не удалось выбрать материал, выходим
         if (materialToUse == null)
         {
-            // Это сообщение теперь будет в блоке выше
-            // Debug.LogWarning("WallPaintFeature: No suitable material found (passMaterial or fallback). Skipping pass.");
+            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: No suitable material found (passMaterial or fallback). Skipping pass.");
             return;
         }
+
+        Debug.Log($"[WallPaintFeature LOG] AddRenderPasses: Material to use is {(materialToUse == passMaterial ? "passMaterial" : "fallbackMaterial")}. Shader: {materialToUse.shader.name}");
 
         // Обновляем материал в рендер-пассе
         wallPaintPass.SetMaterial(materialToUse);
@@ -326,10 +350,9 @@ public class WallPaintFeature : ScriptableRendererFeature
     {
         if (material != null)
         {
+            Debug.Log($"[WallPaintFeature LOG] SetPassMaterial called with material: {material.name}, shader: {material.shader.name}");
             this.passMaterial = material; // Это основной материал, который WallPaintEffect устанавливает
             // Сбросим флаги, чтобы AddRenderPasses выполнил проверки заново
-            materialInitialized = false;
-            isFirstFrame = true; // Чтобы AddRenderPasses мог перепроверить состояние
             hasWarnedAboutMissingMask = false;
 
 
@@ -346,7 +369,7 @@ public class WallPaintFeature : ScriptableRendererFeature
         }
         else
         {
-            Debug.LogWarning("WallPaintFeature: Attempted to set a null passMaterial.");
+            Debug.LogWarning("[WallPaintFeature LOG] SetPassMaterial called with NULL material.");
             this.passMaterial = null; // Явно обнуляем, если пришел null
         }
     }
@@ -369,6 +392,7 @@ public class WallPaintFeature : ScriptableRendererFeature
     // This is called when the feature is enabled
     public override void SetupRenderPasses(ScriptableRenderer renderer, in RenderingData renderingData)
     {
+        Debug.Log("[WallPaintFeature LOG] SetupRenderPasses() called.");
         // Проверка инициализации материала
         // Эту логику лучше убрать отсюда, пусть WallPaintEffect отвечает за готовность passMaterial
         // if (!materialInitialized && passMaterial != null)

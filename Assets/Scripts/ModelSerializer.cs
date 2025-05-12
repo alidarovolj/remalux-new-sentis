@@ -34,8 +34,7 @@ public class ModelSerializer : MonoBehaviour
 
             // Сначала пытаемся загрузить как Asset
             Model model = null;
-            ModelAsset modelAsset = null;
-
+#if UNITY_EDITOR
             try
             {
                   // Пробуем загрузить как Asset
@@ -43,14 +42,14 @@ public class ModelSerializer : MonoBehaviour
                   if (asset != null)
                   {
                         Debug.Log("Модель загружена как Unity Asset");
-                        modelAsset = asset;
-                        model = ModelLoader.Load(modelAsset);
+                        model = ModelLoader.Load(asset);
                   }
             }
             catch (System.Exception assetEx)
             {
                   Debug.LogWarning($"Не удалось загрузить как Asset: {assetEx.Message}. Попробуем альтернативный метод.");
             }
+#endif
 
             // Если не удалось загрузить как Asset, пробуем загрузить из файла ONNX
             if (model == null)
