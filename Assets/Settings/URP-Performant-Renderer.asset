@@ -12,8 +12,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4eb9c1aa96f1e5f4da6b7837ee2ddb25, type: 3}
   m_Name: WallPaintFeature
   m_EditorClassIdentifier: 
-  m_Active: 1
-  passMaterial: {fileID: 0}
+  m_Active: 0
+  passMaterial: {fileID: 2100000, guid: 943407cff66a9a64ca8c837f71bbd10b, type: 2}
+  minTransparency: 0.3
+  useFallbackMaterial: 1
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0

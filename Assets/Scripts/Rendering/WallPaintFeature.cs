@@ -24,7 +24,6 @@ public class WallPaintFeature : ScriptableRendererFeature
 
     public override void Create()
     {
-        Debug.Log("[WallPaintFeature LOG] Create() called.");
         // Проверяем наличие материала и пытаемся загрузить его, если не задан
         // if (passMaterial == null)
         // {
@@ -42,7 +41,6 @@ public class WallPaintFeature : ScriptableRendererFeature
         wallPaintPass.renderPassEvent = RenderPassEvent.AfterRenderingTransparents;
         wallPaintPass.minTransparency = minTransparency;
         hasWarnedAboutMissingMask = false; // Сбросим флаг предупреждения
-        Debug.Log($"[WallPaintFeature LOG] Create() finished. passMaterial is {(passMaterial == null ? "NULL" : "NOT NULL")}, fallbackMaterial is {(fallbackMaterial == null ? "NULL" : "NOT NULL")}");
     }
 
     // Пытаемся загрузить материал по умолчанию
@@ -210,7 +208,6 @@ public class WallPaintFeature : ScriptableRendererFeature
         // If the pass or renderer is null, setup failed, so exit
         if (wallPaintPass == null || renderer == null)
         {
-            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: wallPaintPass or renderer is null. Skipping pass.");
             return;
         }
 
@@ -228,13 +225,11 @@ public class WallPaintFeature : ScriptableRendererFeature
             {
                 passMaterial = new Material(defaultShader);
                 passMaterial.SetColor("_BaseColor", new Color(1f, 1f, 1f, 0.7f));
-                Debug.Log("[WallPaintFeature LOG] AddRenderPasses: Created default passMaterial since it was null.");
                 // Initialize with basic textures
                 EnsureMaterialTexturesInternal(passMaterial);
             }
             else
             {
-                Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: Couldn't create default material. Shader not found.");
             }
         }
 
@@ -259,7 +254,6 @@ public class WallPaintFeature : ScriptableRendererFeature
                     // Если маски нет, но требуется, логируем предупреждение
                     if (!maskTexOk && !hasWarnedAboutMissingMask)
                     {
-                        Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: Segmentation mask is missing but USE_MASK is enabled!");
                         hasWarnedAboutMissingMask = true;
                     }
                 }
@@ -269,7 +263,6 @@ public class WallPaintFeature : ScriptableRendererFeature
                     maskTexOk = false;
                     if (!hasWarnedAboutMissingMask)
                     {
-                        Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: Material has USE_MASK enabled but no _SegmentationMask property!");
                         hasWarnedAboutMissingMask = true;
                     }
                 }
@@ -278,31 +271,26 @@ public class WallPaintFeature : ScriptableRendererFeature
             if (mainTexOk && maskTexOk)
             {
                 materialToUse = passMaterial;
-                Debug.Log("[WallPaintFeature LOG] AddRenderPasses: Using passMaterial.");
             }
         }
 
         // Если основной материал не готов или не установлен, и разрешен fallback
         if (materialToUse == null && useFallbackMaterial && fallbackMaterial != null)
         {
-            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: passMaterial is not ready or not set by WallPaintEffect. Using fallbackMaterial.");
             materialToUse = fallbackMaterial;
         }
         else if (materialToUse == null)
         {
             // Если основной материал не готов, и fallback не разрешен или отсутствует
-            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: passMaterial is not ready, and fallback is not available/enabled. Skipping pass.");
             return;
         }
 
         // Если не удалось выбрать материал, выходим
         if (materialToUse == null)
         {
-            Debug.LogWarning("[WallPaintFeature LOG] AddRenderPasses: No suitable material found (passMaterial or fallback). Skipping pass.");
             return;
         }
 
-        Debug.Log($"[WallPaintFeature LOG] AddRenderPasses: Material to use is {(materialToUse == passMaterial ? "passMaterial" : "fallbackMaterial")}. Shader: {materialToUse.shader.name}");
 
         // Обновляем материал в рендер-пассе
         wallPaintPass.SetMaterial(materialToUse);
@@ -350,11 +338,14 @@ public class WallPaintFeature : ScriptableRendererFeature
     {
         if (material != null)
         {
-            Debug.Log($"[WallPaintFeature LOG] SetPassMaterial called with material: {material.name}, shader: {material.shader.name}");
             this.passMaterial = material; // Это основной материал, который WallPaintEffect устанавливает
             // Сбросим флаги, чтобы AddRenderPasses выполнил проверки заново
             hasWarnedAboutMissingMask = false;
 
+            // Log details about the material
+            string materialName = material.name;
+            string shaderName = material.shader != null ? material.shader.name : "null shader";
+            Debug.Log($"WallPaintFeature: SetPassMaterial called with material '{materialName}', shader '{shaderName}'. Instance ID: {material.GetInstanceID()}");
 
             // Убедимся, что у нового материала есть нужные текстуры или установим заглушки
             // Это гарантирует, что материал будет рендер-способным, даже если текстуры еще не пришли от WallSegmentation
@@ -365,12 +356,12 @@ public class WallPaintFeature : ScriptableRendererFeature
             {
                 // wallPaintPass.SetMaterial(this.passMaterial); // Не устанавливаем здесь напрямую, пусть AddRenderPasses решает
             }
-            Debug.Log("WallPaintFeature: passMaterial has been set by WallPaintEffect.");
+            // Debug.Log("WallPaintFeature: passMaterial has been set by WallPaintEffect."); // Эта строка теперь избыточна
         }
         else
         {
-            Debug.LogWarning("[WallPaintFeature LOG] SetPassMaterial called with NULL material.");
             this.passMaterial = null; // Явно обнуляем, если пришел null
+            Debug.Log("WallPaintFeature: SetPassMaterial called with null material.");
         }
     }
 
@@ -392,7 +383,6 @@ public class WallPaintFeature : ScriptableRendererFeature
     // This is called when the feature is enabled
     public override void SetupRenderPasses(ScriptableRenderer renderer, in RenderingData renderingData)
     {
-        Debug.Log("[WallPaintFeature LOG] SetupRenderPasses() called.");
         // Проверка инициализации материала
         // Эту логику лучше убрать отсюда, пусть WallPaintEffect отвечает за готовность passMaterial
         // if (!materialInitialized && passMaterial != null)
@@ -497,7 +487,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
 
         if (renderer == null || wallPaintMaterial == null)
         {
-            Debug.LogWarning("WallPaintRenderPass: OnCameraSetup - Missing renderer or material");
             return;
         }
 
@@ -515,7 +504,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
             }
             catch (System.Exception rtEx)
             {
-                Debug.LogError($"WallPaintRenderPass: Failed to allocate RTHandle: {rtEx.Message}");
 
                 // Try alternative allocation method
                 if (tempTexture == null)
@@ -529,26 +517,18 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                         rt.Create();
 
                         tempTexture = RTHandles.Alloc(rt);
-                        Debug.Log("WallPaintRenderPass: Created fallback RTHandle from RenderTexture");
                     }
                     catch (System.Exception fallbackEx)
                     {
-                        Debug.LogError($"WallPaintRenderPass: Failed fallback RTHandle allocation: {fallbackEx.Message}");
                         return;
                     }
                 }
             }
 
             isSetupComplete = tempTexture != null;
-
-            if (isSetupComplete)
-            {
-                Debug.Log($"WallPaintRenderPass: Successfully setup temporary texture ({tempTexture.rt.width}x{tempTexture.rt.height})");
-            }
         }
         catch (System.Exception ex)
         {
-            Debug.LogError($"WallPaintRenderPass: Error in OnCameraSetup: {ex.Message}\n{ex.StackTrace}");
             isSetupComplete = false;
         }
     }
@@ -558,13 +538,11 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
         // Early exit conditions - fail safe
         if (wallPaintMaterial == null || renderer == null)
         {
-            Debug.LogWarning("WallPaintRenderPass: Missing material or renderer");
             return;
         }
 
         if (!isSetupComplete)
         {
-            Debug.LogWarning("WallPaintRenderPass: Setup is not complete");
             return;
         }
 
@@ -576,13 +554,11 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
         }
         catch (System.Exception ex)
         {
-            Debug.LogError($"WallPaintRenderPass: Error getting camera color target: {ex.Message}");
             return;
         }
 
         if (source == null || tempTexture == null)
         {
-            Debug.LogWarning("WallPaintRenderPass: Source or tempTexture is null");
             return;
         }
 
@@ -636,7 +612,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
 
                     wallPaintMaterial.SetTexture("_MainTex", defaultTex);
                     hasValidMainTex = true;
-                    Debug.Log("WallPaintRenderPass: Added default main texture to material");
                 }
 
                 // Check for blend factor (to handle transparency)
@@ -669,11 +644,9 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                     {
                         cmd.Blit(sourceID, tempID);
                         cmd.Blit(tempID, sourceID);
-                        Debug.Log("WallPaintRenderPass: Skipped effect, performed simple copy with cmd.Blit");
                     }
                     catch (System.Exception ex)
                     {
-                        Debug.LogError($"WallPaintRenderPass: Failed direct blit: {ex.Message}");
                     }
                 }
                 else
@@ -685,7 +658,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"Error during WallPaintRenderPass execution: {e.Message}\n{e.StackTrace}");
                 // In case of error, just copy source image without effect
                 try
                 {
@@ -694,7 +666,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                         // Use the already created safer RenderTargetIdentifiers
                         cmd.Blit(sourceID, tempID);
                         cmd.Blit(tempID, sourceID);
-                        Debug.Log("WallPaintRenderPass: Performed emergency copy after error with cmd.Blit");
                     }
                 }
                 catch (System.Exception e2)
@@ -708,12 +679,10 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                         {
                             cmd.Blit(source.rt, tempTexture.rt);
                             cmd.Blit(tempTexture.rt, source.rt);
-                            Debug.Log("WallPaintRenderPass: Used ultra-fallback direct RT blit");
                         }
                     }
                     catch (System.Exception e3)
                     {
-                        Debug.LogError($"WallPaintRenderPass: All fallback blit attempts failed: {e3.Message}");
                     }
                 }
             }
@@ -731,7 +700,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
             // Skip blit if source or destination textures are invalid
             if (source == null || destination == null)
             {
-                Debug.LogWarning("WallPaintRenderPass: Cannot blit with null RTHandle");
                 return;
             }
 
@@ -762,7 +730,6 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"WallPaintRenderPass: Error in SafeBlitCameraTexture: {e.Message}\nStackTrace: {e.StackTrace}");
 
             // Fallback to a direct copy without using RTHandles in case of error
             try
@@ -771,12 +738,10 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                 {
                     // Emergency fallback: blit directly between RenderTextures
                     cmd.Blit(source.rt, destination.rt);
-                    Debug.Log("WallPaintRenderPass: Used emergency fallback blit");
                 }
             }
             catch (System.Exception fallbackEx)
             {
-                Debug.LogError($"WallPaintRenderPass: Even fallback blit failed: {fallbackEx.Message}");
             }
         }
     }
@@ -808,11 +773,9 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                     {
                         RTHandles.Release(tempTexture);
                         tempTexture = null;
-                        Debug.Log("WallPaintRenderPass: Properly released tempTexture RTHandle");
                     }
                     catch (System.Exception ex)
                     {
-                        Debug.LogError($"WallPaintRenderPass: Error releasing tempTexture: {ex.Message}");
                     }
                 }
             }

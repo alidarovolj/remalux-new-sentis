@@ -51,7 +51,7 @@ public class WallSegmentation : MonoBehaviour
     public ARCameraManager arCameraManager;
 
     [Tooltip("Ссылка на ARSessionManager")]
-    public UnityEngine.Object arSessionManager;
+    public ARSessionManager arSessionManager;
 
     [Tooltip("Текстура для вывода маски сегментации")]
     public RenderTexture segmentationMaskTexture;
@@ -150,165 +150,138 @@ public class WallSegmentation : MonoBehaviour
             {
                 Debug.Log("Использую модель, уже загруженную в WallSegmentationModelLoader");
                 isModelInitialized = true;
-                if (OnModelInitialized != null) OnModelInitialized.Invoke();
-                yield break;
             }
         }
 
-        // Пробуем загрузить модель самостоятельно
-        // Пробуем оба формата (.sentis и .onnx)
-        string[] fileExtensionsToTry = new string[] { ".sentis", ".onnx" };
-        bool modelLoaded = false;
-
-        foreach (string extension in fileExtensionsToTry)
+        // Если модель НЕ была получена от загрузчика, пробуем загрузить самостоятельно
+        if (!isModelInitialized)
         {
-            string fileName = "model" + extension;
-            string modelPath = Path.Combine(Application.streamingAssetsPath, fileName);
-            string modelUrl = extension == ".sentis" ?
-                "file://" + modelPath.Replace('\\', '/') :
-                "file://" + modelPath.Replace('\\', '/');
+            // Пробуем оба формата (.sentis и .onnx)
+            string[] fileExtensionsToTry = new string[] { ".sentis", ".onnx" };
+            bool modelLoaded = false;
 
-            Debug.Log($"Загружаем модель из: {modelUrl}");
-
-            // Проверяем существование файла
-            bool fileExists = File.Exists(modelPath);
-            if (!fileExists && !modelUrl.StartsWith("http"))
+            foreach (string extension in fileExtensionsToTry)
             {
-                Debug.LogWarning($"Файл модели не найден: {modelPath}, пропускаем");
-                continue;
-            }
+                string fileName = "model" + extension;
+                string modelPath = Path.Combine(Application.streamingAssetsPath, fileName);
+                string modelUrl = extension == ".sentis" ?
+                    "file://" + modelPath.Replace('\\', '/') :
+                    "file://" + modelPath.Replace('\\', '/');
 
-            UnityWebRequest www = UnityWebRequest.Get(modelUrl);
-            yield return www.SendWebRequest();
+                Debug.Log($"Загружаем модель из: {modelUrl}");
 
-            if (www.result != UnityWebRequest.Result.Success)
-            {
-                Debug.LogWarning($"Не удалось загрузить {fileName}: {www.error}");
-                continue;
-            }
-
-            byte[] modelData = www.downloadHandler.data;
-            Debug.Log($"Модель успешно загружена, размер: {modelData.Length} байт");
-
-            try
-            {
-                // Загружаем модель в зависимости от типа файла
-                if (extension == ".sentis")
+                // Проверяем существование файла
+                bool fileExists = File.Exists(modelPath);
+                if (!fileExists && !modelUrl.StartsWith("http"))
                 {
-                    using (var ms = new MemoryStream(modelData))
-                    {
-                        var loadedModel = ModelLoader.Load(ms);
-                        if (loadedModel != null)
-                        {
-                            model = loadedModel;
-                            Debug.Log("Модель успешно загружена через ModelLoader (.sentis)");
-                            isModelInitialized = true;
-                            modelLoaded = true;
-                            break;
-                        }
-                    }
+                    Debug.LogWarning($"Файл модели не найден: {modelPath}, пропускаем");
+                    continue;
                 }
-                else // .onnx
+
+                UnityWebRequest www = UnityWebRequest.Get(modelUrl);
+                yield return www.SendWebRequest();
+
+                if (www.result != UnityWebRequest.Result.Success)
                 {
-                    using (var ms = new MemoryStream(modelData))
+                    Debug.LogWarning($"Не удалось загрузить {fileName}: {www.error}");
+                    continue;
+                }
+
+                byte[] modelData = www.downloadHandler.data;
+                Debug.Log($"Модель успешно загружена, размер: {modelData.Length} байт");
+
+                try
+                {
+                    // Загружаем модель в зависимости от типа файла
+                    if (extension == ".sentis")
                     {
-                        try
+                        using (var ms = new MemoryStream(modelData))
                         {
                             var loadedModel = ModelLoader.Load(ms);
                             if (loadedModel != null)
                             {
                                 model = loadedModel;
-                                Debug.Log("Модель успешно загружена через ModelLoader (.onnx)");
+                                Debug.Log("Модель успешно загружена через ModelLoader (.sentis)");
                                 isModelInitialized = true;
                                 modelLoaded = true;
                                 break;
                             }
                         }
-                        catch (Exception ex)
+                    }
+                    else // .onnx
+                    {
+                        using (var ms = new MemoryStream(modelData))
                         {
-                            Debug.LogWarning($"Не удалось загрузить ONNX через Stream: {ex.Message}");
-
-                            // Пробуем через временный файл
-                            string tempFilePath = Path.Combine(Application.temporaryCachePath, "temp_model.onnx");
                             try
                             {
-                                File.WriteAllBytes(tempFilePath, modelData);
-                                var tempModel = ModelLoader.Load(tempFilePath);
-                                if (tempModel != null)
+                                var loadedModel = ModelLoader.Load(ms);
+                                if (loadedModel != null)
                                 {
-                                    model = tempModel;
-                                    Debug.Log("Модель успешно загружена через временный файл");
+                                    model = loadedModel;
+                                    Debug.Log("Модель успешно загружена через ModelLoader (.onnx)");
                                     isModelInitialized = true;
                                     modelLoaded = true;
                                     break;
                                 }
                             }
-                            catch (Exception e)
+                            catch (Exception ex)
                             {
-                                Debug.LogWarning($"Ошибка загрузки через временный файл: {e.Message}");
-                            }
-                            finally
-                            {
-                                if (File.Exists(tempFilePath))
+                                Debug.LogWarning($"Не удалось загрузить ONNX через Stream: {ex.Message}");
+
+                                // Пробуем через временный файл
+                                string tempFilePath = Path.Combine(Application.temporaryCachePath, "temp_model.onnx");
+                                try
                                 {
-                                    File.Delete(tempFilePath);
+                                    File.WriteAllBytes(tempFilePath, modelData);
+                                    var tempModel = ModelLoader.Load(tempFilePath);
+                                    if (tempModel != null)
+                                    {
+                                        model = tempModel;
+                                        Debug.Log("Модель успешно загружена через временный файл");
+                                        isModelInitialized = true;
+                                        modelLoaded = true;
+                                        break;
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    Debug.LogWarning($"Ошибка загрузки через временный файл: {e.Message}");
+                                }
+                                finally
+                                {
+                                    if (File.Exists(tempFilePath))
+                                    {
+                                        File.Delete(tempFilePath);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Исключение при загрузке модели {extension}: {e.Message}");
-            }
-        }
-
-        // Если модель все еще не загружена, пробуем создать ее
-        if (!modelLoaded)
-        {
-            Debug.LogWarning("Не удалось загрузить модель ни в одном формате. Пробуем создать и сериализовать модель...");
-
-            // Создаем экземпляр ModelSerializer для преобразования модели
-            var serializer = gameObject.AddComponent<ModelSerializer>();
-            if (serializer != null)
-            {
-                serializer.onnxModelPath = Path.Combine(Application.streamingAssetsPath, "model.onnx");
-                serializer.outputPath = Path.Combine(Application.streamingAssetsPath, "model.sentis");
-
-                // Запускаем сериализацию и ждем
-                var serializeCoroutine = serializer.SerializeModelWithTimeout();
-                yield return serializeCoroutine;
-
-                yield return new WaitForSeconds(1);
-
-                // Попробуем загрузить свежесозданную модель
-                string sentisPath = Path.Combine(Application.streamingAssetsPath, "model.sentis");
-                if (File.Exists(sentisPath))
+                catch (Exception e)
                 {
-                    try
-                    {
-                        model = ModelLoader.Load(sentisPath);
-                        if (model != null)
-                        {
-                            Debug.Log("Модель Sentis успешно создана и загружена!");
-                            isModelInitialized = true;
-                            modelLoaded = true;
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError($"Не удалось загрузить свежесозданную Sentis модель: {e.Message}");
-                    }
+                    Debug.LogError($"Исключение при загрузке модели {extension}: {e.Message}");
                 }
             }
+
+            // Если модель все еще не загружена после попыток загрузки
+            if (!modelLoaded)
+            {
+                Debug.LogError("Не удалось загрузить модель ни в одном формате и не найдена в ModelLoader.");
+                isInitializationFailed = true; // Помечаем ошибку
+                yield break; // Выходим, если модель так и не получена
+            }
         }
 
-        // Инициализируем worker если модель загружена
-        if (isModelInitialized && model != null)
+        // ----- Создание Worker ----- 
+        // Этот блок теперь выполняется ВСЕГДА, если isModelInitialized = true (неважно, откуда модель)
+        if (isModelInitialized && model != null) 
         {
-            try
+             try
             {
+                // Проверяем старый worker и освобождаем
+                DisposeEngine(); 
+
                 // Создаем worker для модели через прямой конструктор Worker
                 Type workerType = Type.GetType("Unity.Sentis.Worker, Unity.Sentis");
                 if (workerType == null)
@@ -364,23 +337,27 @@ public class WallSegmentation : MonoBehaviour
                 if (worker != null)
                 {
                     Debug.Log("Worker успешно создан через конструктор Worker");
+                    this.engine = this.worker;
                     if (OnModelInitialized != null) OnModelInitialized.Invoke();
                 }
                 else
                 {
                     Debug.LogError("Не удалось создать worker для модели");
                     isModelInitialized = false;
+                    isInitializationFailed = true;
                 }
             }
             catch (Exception e)
-            {
+            {                
                 Debug.LogError($"Ошибка при создании worker: {e.Message}");
                 isModelInitialized = false;
+                isInitializationFailed = true;
             }
         }
-        else
+        else // Сюда попадаем, если модель = null или isModelInitialized = false
         {
-            Debug.LogError("Не удалось инициализировать модель: Модель не загрузилась ни в одном формате");
+            Debug.LogError("Не удалось инициализировать модель: Модель не была успешно загружена или получена.");
+            isInitializationFailed = true;
         }
     }
 
@@ -512,12 +489,20 @@ public class WallSegmentation : MonoBehaviour
 
     private void Update()
     {
+        Debug.Log("[Update] Method called.");
         // Если модель не инициализирована, не выполняем сегментацию
         if (!isModelInitialized || engine == null) return;
 
         // Получаем изображение с камеры
         Texture2D cameraTex = GetCameraTexture();
-        if (cameraTex == null) return;
+        if (cameraTex == null)
+        {
+            // Добавлен лог: Пропускаем кадр, т.к. нет изображения с камеры
+            Debug.LogWarning("[Update] Пропуск кадра: GetCameraTexture() вернул null");
+            return; // Выходим, если нет текстуры
+        }
+        // Добавлен лог: Изображение с камеры получено
+        Debug.Log("[Update] Изображение с камеры получено, вызываем PerformSegmentation");
 
         // Выполняем сегментацию
         PerformSegmentation(cameraTex);
@@ -528,10 +513,20 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private Texture2D GetCameraTexture()
     {
-        if (arCameraManager == null || !arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage image))
+        if (arCameraManager == null) 
         {
+             Debug.LogError("[GetCameraTexture] arCameraManager is null!");
+             return null;
+        }
+
+        if (!arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage image))
+        {
+            // Добавлен лог: Не удалось получить CPU изображение
+             Debug.LogWarning("[GetCameraTexture] TryAcquireLatestCpuImage не удалось получить изображение.");
             return null;
         }
+        // Добавлен лог: CPU изображение получено
+         Debug.Log("[GetCameraTexture] CPU изображение успешно получено (ID: " + image.GetHashCode() + ")");
 
         using (image)
         {
@@ -842,151 +837,155 @@ public class WallSegmentation : MonoBehaviour
     }
 
     /// <summary>
-    /// Обрабатывает результат сегментации и обновляет маску, используя рефлексию
+    /// Обрабатывает результат сегментации и обновляет маску
     /// </summary>
-    private void ProcessSegmentationResult(object outputTensor)
+    private void ProcessSegmentationResult(object outputTensorObj)
     {
+        Debug.Log("[ProcessSegmentationResult] Вызван.");
+
+        // Проверяем, что segmentationMaskTexture существует и готова
+        if (segmentationMaskTexture == null || !segmentationMaskTexture.IsCreated())
+        {
+            Debug.LogError("SegmentationMaskTexture не готова для записи.");
+            return;
+        }
+
+        // Пытаемся привести к типу TensorFloat (или Tensor<float>)
+        Tensor<float> outputTensor = outputTensorObj as Tensor<float>;
+        if (outputTensor == null)
+        {
+            Debug.LogError($"[ProcessSegmentationResult] Не удалось привести выходной тензор к типу Tensor<float>. Фактический тип: {outputTensorObj?.GetType().FullName ?? "null"}");
+            // Опционально: можно отрисовать пустую маску или использовать RenderSimpleMask
+            RenderSimpleMask(); 
+            return;
+        }
+        Debug.Log("[ProcessSegmentationResult] Успешно приведено к Tensor<float>.");
+
         try
         {
-            // Получаем ранг тензора через рефлексию
-            var tensorType = outputTensor.GetType();
-            var shapeProperty = tensorType.GetProperty("shape");
-            if (shapeProperty == null)
-            {
-                Debug.LogError("Свойство shape не найдено в Tensor");
-                return;
-            }
+            // Вызываем новый метод для обработки
+            ProcessTensorManual(outputTensor);
 
-            var shape = shapeProperty.GetValue(outputTensor);
-            var rankProperty = shape.GetType().GetProperty("rank");
-            if (rankProperty == null)
-            {
-                Debug.LogError("Свойство rank не найдено в TensorShape");
-                return;
-            }
-
-            int outputRank = (int)rankProperty.GetValue(shape);
-            Debug.Log($"Обработка тензора с рангом {outputRank}");
-
-            // Находим тип TextureConverter
-            Type textureConverterType = Type.GetType("Unity.Sentis.TextureConverter, Unity.Sentis");
-            if (textureConverterType == null)
-            {
-                Debug.LogError("Тип Unity.Sentis.TextureConverter не найден");
-                return;
-            }
-
-            // Попытка использовать SentisCompat для оптимизации для конкретной версии
-            bool renderedUsingCompat = false;
-            Type sentisCompatType = null;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                sentisCompatType = assembly.GetType("SentisCompat");
-                if (sentisCompatType != null) break;
-            }
-
-            if (sentisCompatType != null)
-            {
-                var renderToTextureMethod = sentisCompatType.GetMethod("RenderTensorToTexture",
-                    BindingFlags.Public | BindingFlags.Static);
-
-                if (renderToTextureMethod != null)
-                {
-                    try
-                    {
-                        bool success = (bool)renderToTextureMethod.Invoke(null, new object[] { outputTensor, segmentationMaskTexture });
-                        renderedUsingCompat = success;
-
-                        if (success)
-                        {
-                            Debug.Log("Маска успешно отрисована через SentisCompat");
-                            return;
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogWarning($"Ошибка при попытке рендеринга через SentisCompat: {e.Message}");
-                        // Продолжаем стандартными методами при ошибке
-                    }
-                }
-            }
-
-            // Если не получилось через SentisCompat, пробуем стандартные методы
-            if (!renderedUsingCompat)
-            {
-                // Находим метод RenderToTexture для текущей версии Sentis
-                var methods = textureConverterType.GetMethods()
-                    .Where(m => m.Name == "RenderToTexture" && m.GetParameters().Length >= 2)
-                    .ToArray();
-
-                if (methods.Length > 0)
-                {
-                    Debug.Log($"Найдено {methods.Length} методов RenderToTexture");
-
-                    bool rendered = false;
-                    foreach (var method in methods)
-                    {
-                        try
-                        {
-                            var parameters = method.GetParameters();
-
-                            // Проверяем сигнатуру
-                            string parameterTypes = string.Join(", ", parameters.Select(p => p.ParameterType.Name));
-                            Debug.Log($"Пробуем метод RenderToTexture({parameterTypes})");
-
-                            if (parameters.Length == 2)
-                            {
-                                // RenderToTexture(tensor, texture)
-                                method.Invoke(null, new object[] { outputTensor, segmentationMaskTexture });
-                                rendered = true;
-                                Debug.Log("Маска успешно отрисована через RenderToTexture (2 параметра)");
-                                break;
-                            }
-                            else if (parameters.Length == 3)
-                            {
-                                // Создаем TextureTransform (default)
-                                Type textureTransformType = Type.GetType("Unity.Sentis.TextureTransform, Unity.Sentis");
-                                if (textureTransformType == null)
-                                {
-                                    Debug.LogError("Тип Unity.Sentis.TextureTransform не найден");
-                                    continue;
-                                }
-
-                                object textureTransform = Activator.CreateInstance(textureTransformType);
-                                method.Invoke(null, new object[] { outputTensor, segmentationMaskTexture, textureTransform });
-                                rendered = true;
-                                Debug.Log("Маска успешно отрисована через RenderToTexture (3 параметра)");
-                                break;
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogWarning($"Ошибка при вызове метода RenderToTexture: {e.Message}");
-                        }
-                    }
-
-                    if (!rendered)
-                    {
-                        Debug.LogError("Не удалось отрисовать маску через имеющиеся методы RenderToTexture");
-                        // Здесь можно добавить ручное копирование данных из тензора в текстуру при необходимости
-                    }
-                }
-                else
-                {
-                    Debug.LogError("Методы RenderToTexture не найдены в TextureConverter");
-                }
-            }
-
-            // Отладочное сохранение маски, если включено
+             // Отладочное сохранение маски, если включено
             if (saveDebugMask)
             {
-                SaveDebugMask();
+                SaveDebugMask(); // Нужно убедиться, что эта функция реализована
             }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Ошибка при обработке результата сегментации: {e.Message}\nStackTrace: {e.StackTrace}");
+            Debug.LogError($"Ошибка при ручной обработке результата сегментации: {e.Message}\nStackTrace: {e.StackTrace}");
+            RenderSimpleMask(); // Используем заглушку в случае ошибки
         }
+        finally
+        {
+             // Освобождаем тензор СРАЗУ после использования
+             // Важно: PeekOutput не передает владение, Dispose здесь не нужен,
+             // тензор будет управляться Worker-ом. Если бы мы использовали Execute и забирали тензор,
+             // то Dispose был бы нужен. Оставим это пока так, но надо помнить.
+             // outputTensor?.Dispose(); // Пока не вызываем Dispose для PeekOutput
+        }
+    }
+
+    /// <summary>
+    /// Вручную обрабатывает тензор сегментации и записывает результат в segmentationMaskTexture.
+    /// </summary>
+    private void ProcessTensorManual(Tensor<float> tensor)
+    {
+        Debug.Log("[ProcessTensorManual] Вызван.");
+
+        // Получаем размеры тензора
+        // Предполагаем формат NHWC [batch, height, width, channels] или NCHW [batch, channels, height, width]
+        // Sentis обычно использует NCHW для выходов моделей сегментации
+        TensorShape shape = tensor.shape;
+        int batch = shape[0];
+        int channels = shape[1]; // Количество классов (или 3 для NHWC)
+        int height = shape[2]; // (или 1 для NHWC)
+        int width = shape[3]; // (или 2 для NHWC)
+
+        // Добавлен детальный лог формы
+        Debug.Log($"[ProcessTensorManual] Обработка тензора с формой: {shape}. Batch={batch}, Channels={channels}, Height={height}, Width={width}. Target Class={wallClassIndex}, Threshold={wallThreshold}");
+
+        // Определяем формат (простая эвристика по соотношению сторон, может быть неточной)
+        bool isNCHW = channels < height && channels < width; // Предполагаем NCHW если каналов меньше чем H/W
+        if (!isNCHW) { 
+             // Если похоже на NHWC, переназначаем переменные (требует проверки!)
+             // height = shape[1]; 
+             // width = shape[2];
+             // channels = shape[3];
+             Debug.LogWarning("[ProcessTensorManual] Форма тензора похожа на NHWC. Текущая логика предполагает NCHW. Результат может быть неверным.");
+             // ВАЖНО: Если формат NHWC, логика доступа к данным ниже должна быть изменена!
+        }
+
+        // Проверяем валидность wallClassIndex
+        if (wallClassIndex < 0 || wallClassIndex >= channels)
+        {
+            Debug.LogError($"Неверный WallClassIndex ({wallClassIndex}). Должен быть между 0 и {channels - 1}. Используем заглушку.");
+            RenderSimpleMask();
+            return;
+        }
+        
+        // Проверяем соответствие размеров текстуры и тензора
+        if (segmentationMaskTexture.width != width || segmentationMaskTexture.height != height)
+        {
+             Debug.LogWarning($"Размер RenderTexture ({segmentationMaskTexture.width}x{segmentationMaskTexture.height}) не совпадает с размером выхода модели ({width}x{height}). Маска может быть искажена. Проверьте настройки inputResolution и модель.");
+             // Можно либо пересоздать RenderTexture, либо попробовать масштабировать (сложнее). 
+             // Пока продолжим, но результат может быть неверным.
+        }
+
+        // <-- Добавлен лог перед доступом к данным
+        Debug.Log("[ProcessTensorManual] Попытка получить данные тензора...");
+
+        // Создаем массив пикселей для временной текстуры
+        // Texture2D работает с Color, но Color32 может быть быстрее
+        Color32[] pixels = new Color32[width * height];
+
+        // Заполняем массив пикселей на основе выбранного класса и порога
+        // Доступ к данным напрямую через индексатор [batch, channel, y, x]
+        // int baseIndexOffset = wallClassIndex * height * width; // Больше не нужен для прямого доступа
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {                
+                int pixelIndex = y * width + x; // Индекс в массиве pixels (и для координат x, y)
+                // int dataIndex = baseIndexOffset + pixelIndex; // Больше не нужен
+
+                // if (dataIndex < 0 || dataIndex >= tensorData.Length) { // Проверка больше не нужна, т.к. нет tensorData
+                //     Debug.LogError($"Индекс данных ({dataIndex}) вне диапазона [0..{tensorData.Length - 1}] для x={x}, y={y}");
+                //     continue; // Пропустить этот пиксель
+                // }
+
+                // Прямой доступ к значению вероятности
+                float probability = tensor[0, wallClassIndex, y, x]; // Используем индексатор
+                
+                // Применяем порог
+                byte maskValue = (probability >= wallThreshold) ? (byte)255 : (byte)0;
+
+                // Записываем значение в пиксель (R=G=B=maskValue, A=255)
+                // Шейдер читает только R канал, но запишем во все для наглядности
+                pixels[pixelIndex] = new Color32(maskValue, maskValue, maskValue, 255);
+            }
+        }
+
+        // Создаем временную Texture2D
+        // Используем формат RFloat или R8 для одноканальной маски, если шейдер сможет это прочитать.
+        // RGBA32 более совместимый формат.
+        Texture2D tempMaskTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        tempMaskTexture.SetPixels32(pixels);
+        tempMaskTexture.Apply();
+
+        // Копируем результат в RenderTexture
+        RenderTexture previousRT = RenderTexture.active;
+        RenderTexture.active = segmentationMaskTexture;
+        GL.Clear(true, true, Color.clear); // Очищаем перед копированием
+        Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
+        RenderTexture.active = previousRT;
+
+        // Уничтожаем временную текстуру
+        Destroy(tempMaskTexture);
+
+        // Debug.Log("Ручная обработка тензора завершена, маска обновлена.");
     }
 
     /// <summary>
@@ -994,7 +993,46 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void SaveDebugMask()
     {
-        // Реализация сохранения отладочной текстуры
+        if (segmentationMaskTexture == null)
+        {
+            Debug.LogWarning("[SaveDebugMask] segmentationMaskTexture is null, cannot save.");
+            return;
+        }
+
+        try
+        {
+            // Создаем временную Texture2D для копирования данных из RenderTexture
+            Texture2D tempTex = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height, TextureFormat.RGBA32, false);
+            RenderTexture previousRT = RenderTexture.active;
+            RenderTexture.active = segmentationMaskTexture;
+            tempTex.ReadPixels(new Rect(0, 0, segmentationMaskTexture.width, segmentationMaskTexture.height), 0, 0);
+            tempTex.Apply();
+            RenderTexture.active = previousRT;
+
+            // Кодируем в PNG
+            byte[] bytes = tempTex.EncodeToPNG();
+            Destroy(tempTex); // Уничтожаем временную текстуру
+
+            // Создаем папку, если её нет
+            string fullPathDir = Path.Combine(Application.persistentDataPath, debugSavePath);
+            if (!Directory.Exists(fullPathDir))
+            {
+                Directory.CreateDirectory(fullPathDir);
+            }
+
+            // Генерируем имя файла с временной меткой
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
+            string fileName = $"DebugMask_{timestamp}.png";
+            string fullFilePath = Path.Combine(fullPathDir, fileName);
+
+            // Сохраняем файл
+            File.WriteAllBytes(fullFilePath, bytes);
+            Debug.Log($"[SaveDebugMask] Отладочная маска сохранена в: {fullFilePath}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[SaveDebugMask] Ошибка при сохранении отладочной маски: {e.Message}");
+        }
     }
 
     /// <summary>

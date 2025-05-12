@@ -102,50 +102,61 @@ public class WallPaintEffect : MonoBehaviour
         Debug.Log("[WallPaintEffect LOG] InitializeComponents() called.");
         if (isInitialized)
         {
+            Debug.LogWarning("[WallPaintEffect LOG] InitializeComponents: Уже инициализировано.");
             return; // Избегаем повторной инициализации
         }
 
         Debug.Log("WallPaintEffect: Начало инициализации компонентов");
 
-        if (wallPaintMaterial == null)
+        // 1. Проверяем материал, назначенный в инспекторе
+        if (wallPaintMaterial != null)
         {
-            // Попробуем найти материал в папке Materials
+            Debug.Log($"[WallPaintEffect LOG] Используем материал, назначенный в инспекторе: {wallPaintMaterial.name}");
+            // Важно: НЕ создаем копию через `new Material(wallPaintMaterial)`
+            // Будем использовать сам назначеннный материал.
+            // Если нужны уникальные изменения для этого экземпляра,
+            // Unity создаст инстанс автоматически при изменении свойств (SetColor, SetFloat и т.д.).
+        }
+        else
+        {
+            // 2. Если в инспекторе не назначен, пробуем загрузить из Resources
+            Debug.LogWarning("[WallPaintEffect LOG] Материал не назначен в инспекторе. Пытаемся загрузить из Resources/Materials/WallPaint...");
             wallPaintMaterial = Resources.Load<Material>("Materials/WallPaint");
 
             if (wallPaintMaterial == null)
             {
-                Debug.LogError("Wall Paint Material is not assigned and not found in Resources. Disabling component.");
-                enabled = false;
-                return;
+                // 3. Если и в Resources нет, создаем новый с нуля
+                Debug.LogWarning("[WallPaintEffect LOG] Материал не найден в Resources. Создаем новый материал с шейдером Custom/WallPaint.");
+                Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+                if (wallPaintShader != null)
+                {
+                    wallPaintMaterial = new Material(wallPaintShader);
+                    wallPaintMaterial.name = "WallPaint_RuntimeCreated"; // Даем имя для отладки
+                    // Устанавливаем дефолтные значения из инспектора
+                    wallPaintMaterial.SetColor("_PaintColor", paintColor);
+                    wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
+                    Debug.Log("[WallPaintEffect LOG] Новый материал создан.");
+                }
+                else
+                {
+                    Debug.LogError("[WallPaintEffect LOG] Шейдер Custom/WallPaint не найден! Невозможно создать материал. Компонент будет отключен.");
+                    enabled = false;
+                    return;
+                }
             }
             else
             {
-                Debug.Log("WallPaintEffect: Материал успешно загружен из Resources");
+                Debug.Log("[WallPaintEffect LOG] Материал успешно загружен из Resources.");
             }
         }
 
-        // Создаем копию материала, чтобы не изменять общий шаблон
-        wallPaintMaterial = new Material(wallPaintMaterial);
-
-        // Проверяем, что шейдер имеет свойство _SegmentationMask
-        if (!wallPaintMaterial.HasProperty("_SegmentationMask"))
+        // Проверяем, что у материала ЕСТЬ нужные свойства (уже после того как материал точно есть)
+        if (!wallPaintMaterial.HasProperty("_SegmentationMask") || !wallPaintMaterial.HasProperty("_PaintColor") || !wallPaintMaterial.HasProperty("_BlendFactor"))
         {
-            Debug.LogError("WallPaint material doesn't have _SegmentationMask property. Make sure the shader is correct.");
-
-            // Проверяем шейдер
-            Shader shader = wallPaintMaterial.shader;
-            if (shader != null)
-            {
-                Debug.LogError("Текущий шейдер: " + shader.name);
-            }
-
-            TryRecreateWallPaintMaterial();
-
-            if (!wallPaintMaterial.HasProperty("_SegmentationMask"))
-            {
-                enabled = false;
-                return;
-            }
+            Debug.LogError($"[WallPaintEffect LOG] Материал '{wallPaintMaterial.name}' не содержит необходимые свойства (_SegmentationMask, _PaintColor, _BlendFactor). Убедитесь, что используется правильный шейдер (Custom/WallPaint). Компонент будет отключен.");
+            // Попытка найти правильный шейдер не имеет смысла, если сам материал некорректен.
+            enabled = false;
+            return;
         }
 
         // Если сегментация не указана, пытаемся найти ее в сцене
@@ -171,8 +182,8 @@ public class WallPaintEffect : MonoBehaviour
         Debug.Log("WallPaintEffect инициализирован успешно");
         Debug.Log("[WallPaintEffect LOG] InitializeComponents() finished. isInitialized = true.");
 
-        // Добавляем автоматический запуск отладки через 1 секунду
-        StartCoroutine(DebugAfterDelay());
+        // Запускаем отладочную корутину после небольшой задержки, если включено
+        // StartCoroutine(DebugAfterDelay());
     }
 
     // Корутина для запуска отладки с задержкой
@@ -468,43 +479,29 @@ public class WallPaintEffect : MonoBehaviour
         Debug.Log($"[WallPaintEffect] Статус: {segmentationState}\n{maskInfo}\n{materialInfo}");
     }
 
-    // Метод для попытки пересоздания материала стены
-    private void TryRecreateWallPaintMaterial()
-    {
-        // Попробуем создать новый материал с правильным шейдером
-        Shader wallPaintShader = Shader.Find("Custom/WallPaint");
-        if (wallPaintShader != null)
-        {
-            wallPaintMaterial = new Material(wallPaintShader);
-            wallPaintMaterial.SetColor("_PaintColor", paintColor);
-            wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
-
-            // Если у нас есть WallPaintFeature, обновляем материал там
-            if (wallPaintFeature != null)
-            {
-                wallPaintFeature.SetPassMaterial(wallPaintMaterial);
-                Debug.Log("Wall paint material recreated successfully");
-            }
-        }
-        else
-        {
-            Debug.LogError("Cannot find shader 'Custom/WallPaint'. Make sure it exists in the project.");
-        }
-    }
-
     private void UpdatePaintParameters()
     {
         Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters() called.");
         if (wallPaintMaterial == null)
         {
-            Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintMaterial is null, creating new one.");
-            CreateMaterialIfNeeded();
+            // Этого не должно происходить, если InitializeComponents отработал корректно
+            Debug.LogError("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintMaterial is null! Попытка повторной инициализации...");
+            InitializeComponents(); // Попробуем инициализировать снова
+            if (wallPaintMaterial == null)
+            {
+                Debug.LogError("[WallPaintEffect LOG] UpdatePaintParameters: Повторная инициализация не помогла. wallPaintMaterial все еще null. Прерывание.");
+                return; // Прерываем, если материал так и не появился
+            }
         }
 
-        if (wallPaintMaterial == null) // Повторная проверка после CreateMaterialIfNeeded
+        // Убедимся, что шейдер правильный перед установкой параметров
+        if (wallPaintMaterial.shader == null || !wallPaintMaterial.shader.name.Contains("Custom/WallPaint"))
         {
-            Debug.LogError("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintMaterial is STILL null after creation attempt. Aborting.");
-            return;
+             Debug.LogWarning($"[WallPaintEffect LOG] UpdatePaintParameters: У материала '{wallPaintMaterial.name}' неправильный шейдер ({wallPaintMaterial.shader?.name}). Пропускаем установку параметров.");
+             // Можно попытаться назначить правильный шейдер, но это рискованно
+             // Shader correctShader = Shader.Find("Custom/WallPaint");
+             // if (correctShader) wallPaintMaterial.shader = correctShader;
+             return; // Лучше прервать, чем работать с неправильным шейдером
         }
 
         // Ensure textures are initialized before setting other parameters
@@ -538,30 +535,25 @@ public class WallPaintEffect : MonoBehaviour
         // Обновляем материал в WallPaintFeature, если он уже найден
         if (wallPaintFeature != null)
         {
-            Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintFeature exists. Calling SetPassMaterial.");
-            wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+             // Дополнительная проверка перед установкой
+            if (wallPaintFeature.passMaterial != wallPaintMaterial)
+            {
+                Debug.Log($"[WallPaintEffect LOG] UpdatePaintParameters: Обновляем материал в WallPaintFeature. Текущий: {wallPaintFeature.passMaterial?.name}, Новый: {wallPaintMaterial?.name}");
+                wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+            }
+             else {
+                // Debug.Log($"[WallPaintEffect LOG] UpdatePaintParameters: Материал в WallPaintFeature уже {wallPaintMaterial?.name}. Пропуск SetPassMaterial.");
+             }
         }
         else
         {
             Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintFeature is NULL. Cannot set pass material yet.");
-        }
-    }
-
-    private void CreateMaterialIfNeeded()
-    {
-        Debug.Log("[WallPaintEffect LOG] CreateMaterialIfNeeded() called.");
-        if (wallPaintMaterial == null)
-        {
-            Shader wallPaintShader = Shader.Find("Custom/WallPaint");
-            if (wallPaintShader != null)
-            {
-                wallPaintMaterial = new Material(wallPaintShader);
-                Debug.Log("[WallPaintEffect LOG] CreateMaterialIfNeeded: Material created with Custom/WallPaint shader.");
-            }
-            else
-            {
-                Debug.LogError("[WallPaintEffect LOG] CreateMaterialIfNeeded: Shader Custom/WallPaint not found! Cannot create material.");
-            }
+            // Попробуем найти фичу еще раз на всякий случай
+            FindAndSetupWallPaintFeature();
+             if (wallPaintFeature != null) {
+                 Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: WallPaintFeature найден повторно. Устанавливаем материал.");
+                 wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+             }
         }
     }
 
@@ -604,33 +596,6 @@ public class WallPaintEffect : MonoBehaviour
         }
     }
 
-    // This method recreates the material if it's lost or invalid
-    private void RecreateMaterial()
-    {
-        // Попробуем создать новый материал с правильным шейдером
-        Shader wallPaintShader = Shader.Find("Custom/WallPaint");
-        if (wallPaintShader != null)
-        {
-            wallPaintMaterial = new Material(wallPaintShader);
-            wallPaintMaterial.SetColor("_PaintColor", paintColor);
-            wallPaintMaterial.SetFloat("_BlendFactor", blendFactor);
-
-            // Initialize textures to prevent rendering errors
-            EnsureTexturesInitialized();
-
-            // Если у нас есть WallPaintFeature, обновляем материал там
-            if (wallPaintFeature != null)
-            {
-                wallPaintFeature.SetPassMaterial(wallPaintMaterial);
-                Debug.Log("Wall paint material recreated successfully");
-            }
-        }
-        else
-        {
-            Debug.LogError("Cannot find shader 'Custom/WallPaint'. Make sure it exists in the project.");
-        }
-    }
-
     public void SetPaintColor(Color color)
     {
         paintColor = color;
@@ -662,9 +627,11 @@ public class WallPaintEffect : MonoBehaviour
     // Метод для получения материала из WallPaintFeature
     public Material GetMaterial()
     {
+        // Возвращаем текущий материал, который используется компонентом
+        // Не пытаемся получить его из WallPaintFeature здесь
         if (wallPaintMaterial == null)
         {
-            Debug.LogWarning("Wall Paint Material is null in WallPaintEffect");
+            Debug.LogWarning("WallPaintMaterial is null в WallPaintEffect при вызове GetMaterial()");
         }
         return wallPaintMaterial;
     }
@@ -708,9 +675,10 @@ public class WallPaintEffect : MonoBehaviour
     {
         if (wallPaintMaterial == null)
         {
-            Debug.LogError("Материал не найден");
+            Debug.LogError("FixMaterialTextures: Материал не найден");
             return;
         }
+         Debug.Log("[WallPaintEffect LOG] FixMaterialTextures() called.");
 
         // Убедимся, что текстуры правильно установлены
         EnsureTexturesInitialized();

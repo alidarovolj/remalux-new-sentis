@@ -384,12 +384,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e883d66876404ea4ea89b2bd73fe9657, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  modelAsset: {fileID: 5022602860645237092, guid: bc2eac9afc089461791d5ab232768c46,
+  modelAsset: {fileID: 5022602860645237092, guid: b3412e004c632824185d5da48a869bf2,
     type: 3}
   preferredBackend: 0
   useSafeLoading: 1
   modelLoadTimeout: 30
-  wallClassIndex: 9
+  wallClassIndex: 0
   wallThreshold: 0.5
   inputResolution: {x: 224, y: 224}
   arCameraManager: {fileID: 535252333}

@@ -180,7 +180,7 @@ MonoBehaviour:
       m_Name: Position
       m_Type: 0
       m_ExpectedControlType: Vector3
-      m_Id: a79cf249-ec39-43c8-a51f-1b31f90f2f84
+      m_Id: e32829d1-fd08-4f28-9c7e-69124dfa817a
       m_Processors: 
       m_Interactions: 
       m_SingletonActionBindings: []
@@ -192,7 +192,7 @@ MonoBehaviour:
       m_Name: Rotation
       m_Type: 0
       m_ExpectedControlType: Quaternion
-      m_Id: dd2ac68c-6c7e-4c71-8abf-0eeb768dbbac
+      m_Id: e3b8dbea-b4a4-4378-aca6-c07585499402
       m_Processors: 
       m_Interactions: 
       m_SingletonActionBindings: []
@@ -204,7 +204,7 @@ MonoBehaviour:
       m_Name: Tracking State
       m_Type: 0
       m_ExpectedControlType: Integer
-      m_Id: 5f9079fd-1683-4dc7-8fe2-8519d8e3ea9b
+      m_Id: a398c836-73cb-4256-9cb0-5432c483b5be
       m_Processors: 
       m_Interactions: 
       m_SingletonActionBindings: []
@@ -214,7 +214,7 @@ MonoBehaviour:
     m_Name: 
     m_Type: 0
     m_ExpectedControlType: 
-    m_Id: d0b22eae-559d-4339-94de-1eafd2ba8c08
+    m_Id: 750c4c37-6606-466f-bdbb-2e0fdf07516d
     m_Processors: 
     m_Interactions: 
     m_SingletonActionBindings: []
@@ -223,7 +223,7 @@ MonoBehaviour:
     m_Name: 
     m_Type: 0
     m_ExpectedControlType: 
-    m_Id: f5bba5c2-1d4b-4ac2-9159-463b631fa05a
+    m_Id: 2574f762-014f-4ec5-a722-af4ae2bac9ca
     m_Processors: 
     m_Interactions: 
     m_SingletonActionBindings: []

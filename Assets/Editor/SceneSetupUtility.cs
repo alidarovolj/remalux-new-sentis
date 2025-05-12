@@ -2914,42 +2914,6 @@ public class SceneSetupUtility : EditorWindow
 
         Debug.Log("Настройка камеры: ClearFlags установлены в Skybox для лучшей диагностики");
 
-        // Проверяем нормальную работу рендеринга с помощью фонового цвета
-        GameObject bgQuad = null;
-        Transform existingBg = cameraObj.transform.Find("DiagnosticBackground");
-        if (existingBg != null)
-        {
-            bgQuad = existingBg.gameObject;
-        }
-        else
-        {
-            // Создаем диагностический фоновый примитив
-            bgQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            bgQuad.name = "DiagnosticBackground";
-            bgQuad.transform.SetParent(cameraObj.transform);
-            bgQuad.transform.localPosition = new Vector3(0, 0, 0.5f); // Чуть впереди камеры
-            bgQuad.transform.localRotation = Quaternion.Euler(0, 180, 0); // Развернут к камере
-            bgQuad.transform.localScale = new Vector3(1f, 1f, 1f);
-
-            // Настраиваем полупрозрачность
-            Renderer renderer = bgQuad.GetComponent<Renderer>();
-            if (renderer != null && renderer.material != null)
-            {
-                // Создаем новый материал для фона
-                Material diagMaterial = new Material(Shader.Find("Unlit/Transparent"));
-                if (diagMaterial != null)
-                {
-                    diagMaterial.color = new Color(0.2f, 0.2f, 0.8f, 0.3f); // Полупрозрачный синий
-                    renderer.material = diagMaterial;
-                }
-            }
-        }
-
-        // Настраиваем видимость диагностического фона (по умолчанию отключен)
-        bgQuad.SetActive(false);
-
-        Debug.Log("Добавлен диагностический фон (отключен по умолчанию). Активируйте его через инспектор если AR камера не отображает фон.");
-
         // Проверяем наличие пользовательского шейдера или материала для ARCameraBackground
         if (sceneConfig != null && sceneConfig.arCameraBackgroundMaterial != null)
         {
