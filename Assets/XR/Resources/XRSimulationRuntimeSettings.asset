@@ -21,12 +21,12 @@ MonoBehaviour:
     m_MaximumHitDistance: 12
     m_MinimumHitDistance: 0.05
   m_PlaneFindingParams:
-    m_MinimumPlaneUpdateTime: 0.13
-    m_MinPointsPerSqMeter: 30
+    m_MinimumPlaneUpdateTime: 0.1
+    m_MinPointsPerSqMeter: 20
     m_MinSideLength: 0.11
-    m_InLayerMergeDistance: 0.2
-    m_CrossLayerMergeDistance: 0.05
-    m_CheckEmptyArea: 0
+    m_InLayerMergeDistance: 0.4
+    m_CrossLayerMergeDistance: 0.02
+    m_CheckEmptyArea: 1
     m_AllowedEmptyAreaCurve:
       serializedVersion: 2
       m_Curve:
@@ -52,9 +52,16 @@ MonoBehaviour:
       m_PostInfinity: 2
       m_RotationOrder: 4
     m_PointUpdateDropoutRate: 0.4
-    m_NormalToleranceAngle: 15
+    m_NormalToleranceAngle: 25
     m_VoxelSize: 0.1
   m_TrackedImageDiscoveryParams:
     m_TrackingUpdateInterval: 0.09
+  m_EnvironmentProbeDiscoveryParams:
+    m_MinUpdateTime: 0.2
+    m_MaxDiscoveryDistance: 3
+    m_DiscoveryDelayTime: 1
+    m_CubemapFaceSize: 16
+  m_AnchorDiscoveryParams:
+    m_MinTimeUntilUpdate: 0.2
   m_UseXRay: 1
   m_FlipXRayDirection: 0

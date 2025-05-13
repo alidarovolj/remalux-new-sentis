@@ -133,6 +133,9 @@ public class ARManagerInitializer : MonoBehaviour
             {
                   SessionManager.StartSession();
             }
+
+            // Настройка ARPlaneManager для автоматического назначения материалов
+            SetupARPlaneManager();
       }
 
       // Метод для создания корректной структуры AR компонентов
@@ -562,5 +565,65 @@ public class ARManagerInitializer : MonoBehaviour
             Debug.Log($"Финальная проверка XROrigin завершена: " +
                     $"Camera: {(xrOrigin.Camera != null ? xrOrigin.Camera.name : "null")}, " +
                     $"CameraFloorOffsetObject: {(xrOrigin.CameraFloorOffsetObject != null ? xrOrigin.CameraFloorOffsetObject.name : "null")}");
+      }
+
+      // Метод для настройки ARPlaneManager
+      private void SetupARPlaneManager()
+      {
+            ARPlaneManager planeManager = FindObjectOfType<ARPlaneManager>();
+            if (planeManager == null)
+            {
+                  Debug.LogWarning("ARPlaneManager не найден, невозможно настроить материалы для плоскостей");
+                  return;
+            }
+
+            // Подписываемся на событие создания плоскостей
+            planeManager.planesChanged += OnPlanesChanged;
+
+            Debug.Log("ARPlaneManager настроен, подписка на события создания плоскостей активирована");
+      }
+
+      // Обработчик события изменения плоскостей
+      private void OnPlanesChanged(ARPlanesChangedEventArgs args)
+      {
+            // Обработка только добавленных плоскостей
+            foreach (ARPlane plane in args.added)
+            {
+                  SetupPlaneVisualization(plane.gameObject);
+            }
+      }
+
+      // Настройка визуализации для одной плоскости
+      private void SetupPlaneVisualization(GameObject planeObject)
+      {
+            if (planeObject == null) return;
+
+            // Настройка MeshRenderer
+            MeshRenderer meshRenderer = planeObject.GetComponent<MeshRenderer>();
+            if (meshRenderer != null && meshRenderer.sharedMaterial == null)
+            {
+                  // Создаем дефолтный материал с прозрачностью
+                  Material defaultMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                  if (defaultMaterial != null)
+                  {
+                        defaultMaterial.color = new Color(1f, 1f, 1f, 0.5f);
+                        meshRenderer.sharedMaterial = defaultMaterial;
+                        Debug.Log($"Материал для MeshRenderer назначен для {planeObject.name}");
+                  }
+            }
+
+            // Настройка LineRenderer
+            LineRenderer lineRenderer = planeObject.GetComponent<LineRenderer>();
+            if (lineRenderer != null && lineRenderer.sharedMaterial == null)
+            {
+                  // Создаем дефолтный материал для линий
+                  Material lineMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+                  if (lineMaterial != null)
+                  {
+                        lineMaterial.color = Color.white;
+                        lineRenderer.sharedMaterial = lineMaterial;
+                        Debug.Log($"Материал для LineRenderer назначен для {planeObject.name}");
+                  }
+            }
       }
 }

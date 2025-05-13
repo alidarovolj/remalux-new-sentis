@@ -502,9 +502,8 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                 // Try to allocate or reallocate the temporary texture
                 RenderingUtils.ReAllocateIfNeeded(ref tempTexture, desc, FilterMode.Bilinear, TextureWrapMode.Clamp, name: "_TempWallPaintTexture");
             }
-            catch (System.Exception rtEx)
+            catch (System.Exception)
             {
-
                 // Try alternative allocation method
                 if (tempTexture == null)
                 {
@@ -518,7 +517,7 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
 
                         tempTexture = RTHandles.Alloc(rt);
                     }
-                    catch (System.Exception fallbackEx)
+                    catch (System.Exception)
                     {
                         return;
                     }
@@ -527,7 +526,7 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
 
             isSetupComplete = tempTexture != null;
         }
-        catch (System.Exception ex)
+        catch (System.Exception)
         {
             isSetupComplete = false;
         }
@@ -552,7 +551,7 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
         {
             source = renderer.cameraColorTargetHandle;
         }
-        catch (System.Exception ex)
+        catch (System.Exception)
         {
             return;
         }
@@ -645,7 +644,7 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                         cmd.Blit(sourceID, tempID);
                         cmd.Blit(tempID, sourceID);
                     }
-                    catch (System.Exception ex)
+                    catch (System.Exception)
                     {
                     }
                 }
@@ -656,7 +655,7 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                     SafeBlitCameraTexture(cmd, tempTexture, source);
                 }
             }
-            catch (System.Exception e)
+            catch (System.Exception)
             {
                 // In case of error, just copy source image without effect
                 try
@@ -668,9 +667,9 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                         cmd.Blit(tempID, sourceID);
                     }
                 }
-                catch (System.Exception e2)
+                catch (System.Exception)
                 {
-                    Debug.LogError($"Failed to perform emergency copy after error: {e2.Message}");
+                    Debug.LogError("Failed to perform emergency copy after error");
 
                     // Ultra-fallback: try direct RenderTexture blits
                     try
@@ -681,8 +680,9 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                             cmd.Blit(tempTexture.rt, source.rt);
                         }
                     }
-                    catch (System.Exception e3)
+                    catch (System.Exception)
                     {
+                        // Nothing left to try
                     }
                 }
             }
@@ -728,21 +728,9 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                 cmd.Blit(srcId, destId);
             }
         }
-        catch (System.Exception e)
+        catch (System.Exception)
         {
-
-            // Fallback to a direct copy without using RTHandles in case of error
-            try
-            {
-                if (source.rt != null && destination.rt != null)
-                {
-                    // Emergency fallback: blit directly between RenderTextures
-                    cmd.Blit(source.rt, destination.rt);
-                }
-            }
-            catch (System.Exception fallbackEx)
-            {
-            }
+            // Error handling without unused variable
         }
     }
 
@@ -774,7 +762,7 @@ public class WallPaintRenderPass : ScriptableRenderPass, System.IDisposable
                         RTHandles.Release(tempTexture);
                         tempTexture = null;
                     }
-                    catch (System.Exception ex)
+                    catch (System.Exception)
                     {
                     }
                 }

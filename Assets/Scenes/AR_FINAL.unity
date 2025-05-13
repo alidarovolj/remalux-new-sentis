@@ -388,14 +388,18 @@ MonoBehaviour:
   preferredBackend: 0
   useSafeLoading: 1
   modelLoadTimeout: 30
+  forceXRSimulationCaptureMethod: 0
   wallClassIndex: 9
   wallThreshold: 0.5
   inputResolution: {x: 224, y: 224}
   arCameraManager: {fileID: 535252333}
   arSessionManager: {fileID: 753449267}
+  xrOrigin: {fileID: 0}
   segmentationMaskTexture: {fileID: 664102960}
   saveDebugMask: 1
   debugSavePath: SegmentationDebug
+  useSimulatedSegmentationAsFallback: 1
+  failCountBeforeSimulation: 10
 --- !u!114 &323578788
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1084,7 +1088,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &713175699
 Transform:
   m_ObjectHideFlags: 0
@@ -1519,7 +1523,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e0cb9aa70a22847b5925ee5f067c10a9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_Camera: {fileID: 155262448}
+  m_Camera: {fileID: 535252337}
   m_OriginBaseGameObject: {fileID: 910700714}
   m_CameraFloorOffsetObject: {fileID: 937950715}
   m_RequestedTrackingOriginMode: 0

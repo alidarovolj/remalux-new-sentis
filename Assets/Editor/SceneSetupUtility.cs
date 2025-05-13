@@ -465,9 +465,32 @@ public class SceneSetupUtility : EditorWindow
             GameObject planePrefab = new GameObject("AR Plane Visualization");
             planePrefab.AddComponent<ARPlane>();
             planePrefab.AddComponent<MeshFilter>();
-            planePrefab.AddComponent<MeshRenderer>();
+
+            // Добавляем и настраиваем MeshRenderer с материалом
+            MeshRenderer meshRenderer = planePrefab.AddComponent<MeshRenderer>();
+            Material defaultMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            defaultMaterial.color = new Color(1f, 1f, 1f, 0.5f);
+            meshRenderer.sharedMaterial = defaultMaterial;
+
             planePrefab.AddComponent<ARPlaneMeshVisualizer>();
-            planePrefab.AddComponent<LineRenderer>();
+
+            // Добавляем и настраиваем LineRenderer с материалом
+            LineRenderer lineRenderer = planePrefab.AddComponent<LineRenderer>();
+            Material lineMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+            lineMaterial.color = Color.white;
+            lineRenderer.startWidth = 0.01f;
+            lineRenderer.endWidth = 0.01f;
+            lineRenderer.sharedMaterial = lineMaterial;
+
+            // Сохраняем материалы как ассеты
+            string materialsPath = "Assets/Materials/AR";
+            if (!Directory.Exists(materialsPath))
+            {
+                Directory.CreateDirectory(materialsPath);
+            }
+            AssetDatabase.CreateAsset(defaultMaterial, $"{materialsPath}/ARPlaneMaterial.mat");
+            AssetDatabase.CreateAsset(lineMaterial, $"{materialsPath}/ARPlaneLineMaterial.mat");
+            AssetDatabase.SaveAssets();
 
             // Сохраняем префаб
             string prefabPath = "Assets/Prefabs/AR/ARPlaneVisualization.prefab";

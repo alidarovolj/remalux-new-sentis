@@ -12,8 +12,13 @@ Material:
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords:
+  - DEBUG_OVERLAY
   - USE_MASK
-  m_InvalidKeywords: []
+  m_InvalidKeywords:
+  - USE_AR_LIGHTING
+  - USE_AR_WORLD_SPACE
+  - USE_SEGMENTATION_MASK
+  - USE_YIQ
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
@@ -40,7 +45,7 @@ Material:
     m_Floats:
     - _BlendFactor: 0.5
     - _DebugGrid: 10
-    - _DebugOverlay: 0
+    - _DebugOverlay: 1
     - _UseMask: 1
     m_Colors:
     - _PaintColor: {r: 1, g: 1, b: 1, a: 1}

@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Collections.Generic;
 using System.Collections;
 using System.Linq;
+using UnityEngine.XR.ARFoundation;
 
 [RequireComponent(typeof(Camera))]
 public class WallPaintEffect : MonoBehaviour
@@ -15,12 +16,26 @@ public class WallPaintEffect : MonoBehaviour
     [SerializeField] private float blendFactor = 0.5f;
     [SerializeField] private bool useMask = true;
     [SerializeField] private ARSessionManager arSessionManager; // Ссылка на ARSessionManager
+    [SerializeField] private bool attachToARPlanes = true; // Опция для крепления материала к AR-плоскостям
+    [SerializeField] private bool showARPlaneDebugVisuals = true;
 
     private Camera mainCamera; // Added missing camera field
     private WallPaintFeature wallPaintFeature;
     private bool isInitialized = false;
     private bool isSegmentationReady = false;
     private bool shouldInitialize = false; // Flag to track when AR session is ready
+    private ARPlaneManager planeManager; // Хранит ссылку на ARPlaneManager
+
+    // Добавляем поле для отслеживания последней использованной маски
+    private RenderTexture lastUsedMask;
+    private int framesSinceLastSegmentationUpdate = 0;
+    [SerializeField] private bool debugMode = false;
+
+    // Добавляем поле для ARLightEstimation
+    private ARLightEstimation lightEstimation;
+
+    // Список плоскостей, к которым был применен материал
+    private readonly List<ARPlane> processedPlanes = new List<ARPlane>();
 
     private void Start()
     {
@@ -35,6 +50,19 @@ public class WallPaintEffect : MonoBehaviour
         if (arSessionManager == null)
         {
             arSessionManager = FindObjectOfType<ARSessionManager>();
+        }
+
+        // Находим ARPlaneManager
+        planeManager = FindObjectOfType<ARPlaneManager>();
+        if (planeManager != null && attachToARPlanes)
+        {
+            // Подписываемся на события создания/обновления плоскостей
+            planeManager.planesChanged += OnPlanesChanged;
+            Debug.Log("[WallPaintEffect LOG] Подписка на события ARPlaneManager.planesChanged выполнена");
+        }
+        else if (attachToARPlanes)
+        {
+            Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager не найден, невозможно подписаться на события planesChanged");
         }
 
         // Добавляем задержку для инициализации на iOS, чтобы убедиться, что AR сессия запустилась
@@ -56,6 +84,88 @@ public class WallPaintEffect : MonoBehaviour
         shouldInitialize = true;
         InitializeComponents();
 #endif
+    }
+
+    // Обработчик события изменения плоскостей
+    private void OnPlanesChanged(ARPlanesChangedEventArgs args)
+    {
+        if (!attachToARPlanes || !isInitialized) return;
+
+        // Обработка новых плоскостей
+        foreach (ARPlane plane in args.added)
+        {
+            ApplyMaterialToPlane(plane);
+        }
+
+        // Обработка обновленных плоскостей
+        foreach (ARPlane plane in args.updated)
+        {
+            // Проверяем, изменился ли тип плоскости (например, из горизонтальной в вертикальную)
+            if (!processedPlanes.Contains(plane) ||
+                plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical)
+            {
+                ApplyMaterialToPlane(plane);
+            }
+        }
+
+        // Удаляем из списка обработанных плоскостей те, которые были удалены из сцены
+        foreach (ARPlane plane in args.removed)
+        {
+            processedPlanes.Remove(plane);
+        }
+    }
+
+    // Метод для применения материала к отдельной плоскости
+    private void ApplyMaterialToPlane(ARPlane plane)
+    {
+        // Проверяем, является ли плоскость стеной (вертикальной плоскостью)
+        if (plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical)
+        {
+            MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
+            if (renderer != null)
+            {
+                // Создаем экземпляр материала для каждой плоскости, чтобы избежать взаимного влияния
+                Material planeMaterial = new Material(wallPaintMaterial);
+                renderer.material = planeMaterial;
+
+                // Включаем ключевые слова для привязки к AR-пространству
+                planeMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+
+                // Если включен режим отладки, делаем линии границы плоскости более заметными
+                if (showARPlaneDebugVisuals)
+                {
+                    LineRenderer lineRenderer = plane.GetComponent<LineRenderer>();
+                    if (lineRenderer != null)
+                    {
+                        lineRenderer.startWidth = 0.05f;
+                        lineRenderer.endWidth = 0.05f;
+                        lineRenderer.startColor = Color.yellow;
+                        lineRenderer.endColor = Color.yellow;
+                    }
+
+                    // Делаем материал плоскости более заметным
+                    planeMaterial.SetFloat("_BlendFactor", 0.8f);
+                    planeMaterial.SetColor("_PaintColor", new Color(1f, 0.5f, 0f, 0.8f)); // Оранжевый цвет для отладки
+
+                    // Включаем режим отладки
+                    planeMaterial.EnableKeyword("DEBUG_OVERLAY");
+                }
+
+                // Если есть ARLightEstimation, добавляем материал для обновления освещения
+                if (lightEstimation != null)
+                {
+                    lightEstimation.AddMaterial(planeMaterial);
+                }
+
+                // Добавляем плоскость в список обработанных, если её там еще нет
+                if (!processedPlanes.Contains(plane))
+                {
+                    processedPlanes.Add(plane);
+                }
+
+                Debug.Log($"[WallPaintEffect LOG] Применен материал к вертикальной AR плоскости: {plane.name}");
+            }
+        }
     }
 
     // Ответ на сообщение от ARSessionManager
@@ -184,6 +294,18 @@ public class WallPaintEffect : MonoBehaviour
 
         // Запускаем отладочную корутину после небольшой задержки, если включено
         // StartCoroutine(DebugAfterDelay());
+
+        // Ищем ARLightEstimation, если он есть
+        lightEstimation = FindObjectOfType<ARLightEstimation>();
+        if (lightEstimation != null)
+        {
+            Debug.Log("[WallPaintEffect LOG] Найден компонент ARLightEstimation. Добавляем материал в список для освещения.");
+            lightEstimation.AddMaterial(wallPaintMaterial);
+        }
+        else
+        {
+            Debug.Log("[WallPaintEffect LOG] ARLightEstimation не найден. Будет использовано стандартное освещение.");
+        }
     }
 
     // Корутина для запуска отладки с задержкой
@@ -348,50 +470,45 @@ public class WallPaintEffect : MonoBehaviour
             DebugSegmentationStatus();
         }
 
-        // Проверяем, что у нас есть сегментация и она готова
-        if (wallSegmentation != null)
+        // Проверяем изменения в маске сегментации
+        if (wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
         {
-            if (!isSegmentationReady && wallSegmentation.IsModelInitialized)
+            // Если маска изменилась или прошло больше 10 кадров с последнего обновления
+            if (lastUsedMask != wallSegmentation.segmentationMaskTexture || framesSinceLastSegmentationUpdate > 10)
             {
-                // Сегментация только что стала доступна
-                isSegmentationReady = true;
-                Debug.Log("WallPaintEffect: Сегментация стен готова к использованию");
-
-                // Получаем текстуру из сегментации и устанавливаем как параметр материала
-                if (wallSegmentation.segmentationMaskTexture != null && wallPaintMaterial != null)
+                if (debugMode)
                 {
-                    // Устанавливаем маску сегментации в материал
-                    wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
-
-                    // Log для отладки
-                    Debug.Log($"WallPaintEffect: Установлена маска сегментации размером {wallSegmentation.segmentationMaskTexture.width}x{wallSegmentation.segmentationMaskTexture.height}");
-
-                    // Проверяем, что материал доступен в WallPaintFeature
-                    if (wallPaintFeature != null && !ReferenceEquals(wallPaintFeature.passMaterial, wallPaintMaterial))
-                    {
-                        wallPaintFeature.SetPassMaterial(wallPaintMaterial);
-                    }
+                    Debug.Log("[WallPaintEffect LOG] Обнаружено обновление маски сегментации. Обновляем материал.");
                 }
-                else
+
+                // Обновляем ссылку на последнюю использованную маску
+                lastUsedMask = wallSegmentation.segmentationMaskTexture;
+                framesSinceLastSegmentationUpdate = 0;
+
+                // Принудительно обновляем материал
+                EnsureTexturesInitialized();
+                UpdatePaintParameters();
+
+                if (!isSegmentationReady && lastUsedMask != null)
                 {
-                    Debug.LogError("WallPaintEffect: Маска сегментации недоступна, хотя сегментация готова");
+                    isSegmentationReady = true;
+                    if (debugMode)
+                    {
+                        Debug.Log("[WallPaintEffect LOG] Сегментация стала доступна, статус эффекта: " + IsReady());
+                    }
                 }
             }
-            else if (isSegmentationReady)
+            else
             {
-                // Сегментация уже была готова, проверяем, что маска обновлена в материале
-                if (wallSegmentation.segmentationMaskTexture != null && wallPaintMaterial != null &&
-                    wallPaintMaterial.GetTexture("_SegmentationMask") != wallSegmentation.segmentationMaskTexture)
-                {
-                    // Обновляем маску
-                    wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
-
-                    // Обновляем материал в WallPaintFeature
-                    if (wallPaintFeature != null)
-                    {
-                        wallPaintFeature.SetPassMaterial(wallPaintMaterial);
-                    }
-                }
+                framesSinceLastSegmentationUpdate++;
+            }
+        }
+        else if (isSegmentationReady)
+        {
+            isSegmentationReady = false;
+            if (debugMode)
+            {
+                Debug.Log("[WallPaintEffect LOG] Сегментация стала недоступна, статус эффекта: " + IsReady());
             }
         }
 
@@ -418,6 +535,12 @@ public class WallPaintEffect : MonoBehaviour
                     wallPaintMaterial.SetFloat("_BlendFactor", 0.1f);
                 }
             }
+        }
+
+        // Пытаемся настроить освещение, если еще не сделали этого
+        if (lightEstimation == null && isInitialized && mainCamera != null)
+        {
+            TrySetupLightEstimation();
         }
     }
 
@@ -497,11 +620,11 @@ public class WallPaintEffect : MonoBehaviour
         // Убедимся, что шейдер правильный перед установкой параметров
         if (wallPaintMaterial.shader == null || !wallPaintMaterial.shader.name.Contains("Custom/WallPaint"))
         {
-             Debug.LogWarning($"[WallPaintEffect LOG] UpdatePaintParameters: У материала '{wallPaintMaterial.name}' неправильный шейдер ({wallPaintMaterial.shader?.name}). Пропускаем установку параметров.");
-             // Можно попытаться назначить правильный шейдер, но это рискованно
-             // Shader correctShader = Shader.Find("Custom/WallPaint");
-             // if (correctShader) wallPaintMaterial.shader = correctShader;
-             return; // Лучше прервать, чем работать с неправильным шейдером
+            Debug.LogWarning($"[WallPaintEffect LOG] UpdatePaintParameters: У материала '{wallPaintMaterial.name}' неправильный шейдер ({wallPaintMaterial.shader?.name}). Пропускаем установку параметров.");
+            // Можно попытаться назначить правильный шейдер, но это рискованно
+            // Shader correctShader = Shader.Find("Custom/WallPaint");
+            // if (correctShader) wallPaintMaterial.shader = correctShader;
+            return; // Лучше прервать, чем работать с неправильным шейдером
         }
 
         // Ensure textures are initialized before setting other parameters
@@ -518,46 +641,91 @@ public class WallPaintEffect : MonoBehaviour
             {
                 Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: USE_MASK is true, segmentation mask is available. Setting texture and enabling keyword.");
                 wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
-                wallPaintMaterial.EnableKeyword("USE_MASK");
+                wallPaintMaterial.EnableKeyword("USE_SEGMENTATION_MASK");
             }
             else
             {
                 Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: USE_MASK is true, but segmentation mask is NULL. Disabling keyword.");
-                wallPaintMaterial.DisableKeyword("USE_MASK");
+                wallPaintMaterial.DisableKeyword("USE_SEGMENTATION_MASK");
             }
         }
         else
         {
             Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: USE_MASK is false. Disabling keyword.");
-            wallPaintMaterial.DisableKeyword("USE_MASK");
+            wallPaintMaterial.DisableKeyword("USE_SEGMENTATION_MASK");
         }
+
+        // Включаем поддержку привязки к AR-пространству
+        wallPaintMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+
+        // Применяем материал к AR плоскостям, если они есть
+        ApplyMaterialToARPlanes();
 
         // Обновляем материал в WallPaintFeature, если он уже найден
         if (wallPaintFeature != null)
         {
-             // Дополнительная проверка перед установкой
+            // Дополнительная проверка перед установкой
             if (wallPaintFeature.passMaterial != wallPaintMaterial)
             {
-                Debug.Log($"[WallPaintEffect LOG] UpdatePaintParameters: Обновляем материал в WallPaintFeature. Текущий: {wallPaintFeature.passMaterial?.name}, Новый: {wallPaintMaterial?.name}");
                 wallPaintFeature.SetPassMaterial(wallPaintMaterial);
+                Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: обновлен passMaterial в WallPaintFeature.");
             }
-             else {
-                // Debug.Log($"[WallPaintEffect LOG] UpdatePaintParameters: Материал в WallPaintFeature уже {wallPaintMaterial?.name}. Пропуск SetPassMaterial.");
-             }
-        }
-        else
-        {
-            Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: wallPaintFeature is NULL. Cannot set pass material yet.");
-            // Попробуем найти фичу еще раз на всякий случай
-            FindAndSetupWallPaintFeature();
-             if (wallPaintFeature != null) {
-                 Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: WallPaintFeature найден повторно. Устанавливаем материал.");
-                 wallPaintFeature.SetPassMaterial(wallPaintMaterial);
-             }
         }
     }
 
-    // New method to ensure textures are properly initialized
+    // Новый метод для применения материала к AR плоскостям
+    private void ApplyMaterialToARPlanes()
+    {
+        // Если функция прикрепления к плоскостям отключена, выходим
+        if (!attachToARPlanes) return;
+
+        // Получаем ARPlaneManager, если он еще не сохранен
+        if (planeManager == null)
+        {
+            planeManager = FindObjectOfType<ARPlaneManager>();
+            if (planeManager == null)
+            {
+                Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager не найден в сцене.");
+                return;
+            }
+            else if (!planeManager.enabled)
+            {
+                Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager найден, но не активен.");
+                return;
+            }
+
+            // Подписываемся на события плоскостей, если еще не подписаны
+            planeManager.planesChanged += OnPlanesChanged;
+        }
+
+        // Проверяем, есть ли материал для AR плоскостей
+        if (planeManager.planePrefab == null)
+        {
+            Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager не имеет назначенного префаба.");
+            return;
+        }
+
+        // Настраиваем материал для привязки к AR-пространству
+        wallPaintMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+
+        // Применяем материал ко всем существующим вертикальным плоскостям
+        ARPlane[] planes = FindObjectsOfType<ARPlane>();
+        if (planes.Length == 0)
+        {
+            Debug.Log("[WallPaintEffect LOG] AR плоскости не найдены в сцене.");
+            return;
+        }
+
+        // Очищаем список обработанных плоскостей и заполняем его заново
+        processedPlanes.Clear();
+
+        foreach (ARPlane plane in planes)
+        {
+            ApplyMaterialToPlane(plane);
+        }
+    }
+
+    // Обновляем метод EnsureTexturesInitialized для более надежного обновления маски
     private void EnsureTexturesInitialized()
     {
         Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized() called.");
@@ -575,24 +743,38 @@ public class WallPaintEffect : MonoBehaviour
         }
 
         // Ensure _SegmentationMask is initialized if needed
-        if (useMask && wallPaintMaterial.GetTexture("_SegmentationMask") == null)
+        if (useMask)
         {
             if (wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
             {
-                Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is true, _SegmentationMask is null. Assigning from wallSegmentation.");
-                wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
+                // Проверяем, отличается ли текущая маска от той, что уже установлена в материале
+                Texture currentMask = wallPaintMaterial.GetTexture("_SegmentationMask");
+                if (currentMask != wallSegmentation.segmentationMaskTexture)
+                {
+                    Debug.Log($"[WallPaintEffect LOG] EnsureTexturesInitialized: Обновляем маску сегментации для материала (Текущая: {currentMask}, Новая: {wallSegmentation.segmentationMaskTexture})");
+                    wallPaintMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
+                    wallPaintMaterial.EnableKeyword("USE_SEGMENTATION_MASK");
+                    lastUsedMask = wallSegmentation.segmentationMaskTexture;
+                }
             }
-            else
+            else if (wallPaintMaterial.GetTexture("_SegmentationMask") == null)
             {
-                Debug.LogWarning("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is true, _SegmentationMask is null, AND wallSegmentation/mask is also null. Setting default black transparent texture.");
-                wallPaintMaterial.SetTexture("_SegmentationMask", Texture2D.blackTexture); // Default to a black (transparent if shader handles alpha correctly)
+                Debug.LogWarning("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is true, но маска недоступна. Устанавливаем временную черную текстуру.");
+                wallPaintMaterial.SetTexture("_SegmentationMask", Texture2D.blackTexture);
+                wallPaintMaterial.EnableKeyword("USE_SEGMENTATION_MASK");
             }
         }
-        else if (!useMask && wallPaintMaterial.IsKeywordEnabled("USE_MASK"))
+        else if (wallPaintMaterial.IsKeywordEnabled("USE_SEGMENTATION_MASK"))
         {
-            Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is false, but USE_MASK keyword is enabled. Disabling and clearing texture.");
-            wallPaintMaterial.DisableKeyword("USE_MASK");
-            // wallPaintMaterial.SetTexture("_SegmentationMask", null); // Optionally clear
+            Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: useMask is false, отключаем USE_SEGMENTATION_MASK keyword.");
+            wallPaintMaterial.DisableKeyword("USE_SEGMENTATION_MASK");
+        }
+
+        // Включаем YIQ цветовое пространство для лучшего сохранения яркости текстуры
+        if (!wallPaintMaterial.IsKeywordEnabled("USE_YIQ"))
+        {
+            Debug.Log("[WallPaintEffect LOG] EnsureTexturesInitialized: Включаем USE_YIQ keyword для лучшего сохранения текстуры.");
+            wallPaintMaterial.EnableKeyword("USE_YIQ");
         }
     }
 
@@ -647,27 +829,39 @@ public class WallPaintEffect : MonoBehaviour
     // Метод для принудительного обновления материала
     public void ForceUpdateMaterial()
     {
-        if (!isInitialized)
+        Debug.Log("[WallPaintEffect LOG] ForceUpdateMaterial called.");
+
+        if (wallPaintMaterial == null)
         {
-            Debug.LogWarning("WallPaintEffect не инициализирован, нельзя обновить материал");
+            Debug.LogError("[WallPaintEffect LOG] ForceUpdateMaterial: wallPaintMaterial is null!");
             return;
         }
 
-        // Обновить существующий материал и его параметры
+        // Принудительно сбрасываем счетчики для обновления маски на следующем кадре
+        lastUsedMask = null;
+        framesSinceLastSegmentationUpdate = 100; // Большое значение для гарантированного обновления
+
+        // Обновляем параметры и текстуры
+        EnsureTexturesInitialized();
         UpdatePaintParameters();
 
-        // Пересоздать связь с WallPaintFeature
-        if (wallPaintFeature != null && wallPaintMaterial != null)
+        // Если у нас есть доступ к WallPaintFeature, обновляем материал там тоже
+        if (wallPaintFeature != null)
         {
             wallPaintFeature.SetPassMaterial(wallPaintMaterial);
-            Debug.Log("Материал принудительно обновлен в WallPaintFeature");
+            Debug.Log("[WallPaintEffect LOG] ForceUpdateMaterial: Материал обновлен в WallPaintFeature.");
         }
         else
         {
-            Debug.LogWarning("WallPaintFeature недоступен, обновление невозможно");
+            Debug.LogWarning("[WallPaintEffect LOG] ForceUpdateMaterial: wallPaintFeature is null, не можем обновить материал в рендер-пайплайне.");
+            FindAndSetupWallPaintFeature();
         }
 
-        DebugSegmentationStatus();
+        // Обновляем материал в ARLightEstimation
+        if (lightEstimation != null && wallPaintMaterial != null)
+        {
+            lightEstimation.AddMaterial(wallPaintMaterial);
+        }
     }
 
     // Метод для проверки и исправления текстур
@@ -678,7 +872,7 @@ public class WallPaintEffect : MonoBehaviour
             Debug.LogError("FixMaterialTextures: Материал не найден");
             return;
         }
-         Debug.Log("[WallPaintEffect LOG] FixMaterialTextures() called.");
+        Debug.Log("[WallPaintEffect LOG] FixMaterialTextures() called.");
 
         // Убедимся, что текстуры правильно установлены
         EnsureTexturesInitialized();
@@ -836,13 +1030,13 @@ public class WallPaintEffect : MonoBehaviour
 
         if (useMaskValue)
         {
-            wallPaintMaterial.EnableKeyword("USE_MASK");
-            Debug.Log("WallPaintEffect: Включен режим USE_MASK");
+            wallPaintMaterial.EnableKeyword("USE_SEGMENTATION_MASK");
+            Debug.Log("WallPaintEffect: Включен режим USE_SEGMENTATION_MASK");
         }
         else
         {
-            wallPaintMaterial.DisableKeyword("USE_MASK");
-            Debug.Log("WallPaintEffect: Отключен режим USE_MASK");
+            wallPaintMaterial.DisableKeyword("USE_SEGMENTATION_MASK");
+            Debug.Log("WallPaintEffect: Отключен режим USE_SEGMENTATION_MASK");
         }
 
         // Force material update
@@ -866,5 +1060,193 @@ public class WallPaintEffect : MonoBehaviour
 
         // Force material update
         ForceUpdateMaterial();
+    }
+
+    // Добавляем метод для создания компонента ARLightEstimation, если он отсутствует
+    private void TrySetupLightEstimation()
+    {
+        if (lightEstimation != null)
+            return;
+
+        // Ищем ARCameraManager с явным указанием типа из ARFoundation
+        UnityEngine.XR.ARFoundation.ARCameraManager cameraManager = FindObjectOfType<UnityEngine.XR.ARFoundation.ARCameraManager>();
+        if (cameraManager != null)
+        {
+            // Проверяем, есть ли уже ARLightEstimation на этом объекте
+            lightEstimation = cameraManager.GetComponent<ARLightEstimation>();
+
+            // Если нет, то создаем
+            if (lightEstimation == null)
+            {
+                lightEstimation = cameraManager.gameObject.AddComponent<ARLightEstimation>();
+                Debug.Log("[WallPaintEffect LOG] Автоматически добавлен компонент ARLightEstimation к камере AR");
+            }
+
+            // Добавляем материал в список для обновления освещения
+            if (wallPaintMaterial != null)
+            {
+                lightEstimation.AddMaterial(wallPaintMaterial);
+            }
+        }
+    }
+
+    // Метод для включения/отключения привязки к AR плоскостям
+    public void SetAttachToARPlanes(bool attach)
+    {
+        if (attachToARPlanes == attach) return;
+
+        attachToARPlanes = attach;
+
+        if (attach)
+        {
+            // Если функция включается, находим менеджер плоскостей и подписываемся на события
+            if (planeManager == null)
+            {
+                planeManager = FindObjectOfType<ARPlaneManager>();
+            }
+
+            if (planeManager != null)
+            {
+                planeManager.planesChanged += OnPlanesChanged;
+                // Применяем материал к существующим плоскостям
+                ApplyMaterialToARPlanes();
+            }
+        }
+        else
+        {
+            // Если функция отключается, отписываемся от событий
+            if (planeManager != null)
+            {
+                planeManager.planesChanged -= OnPlanesChanged;
+            }
+        }
+    }
+
+    private void OnDestroy()
+    {
+        // Отписываемся от событий при уничтожении объекта
+        if (planeManager != null)
+        {
+            planeManager.planesChanged -= OnPlanesChanged;
+        }
+    }
+
+    // Debug function that can be called from the Unity Editor to test plane visualization
+    [ContextMenu("Create Test Plane At Camera")]
+    private void CreateTestPlaneAtCamera()
+    {
+        if (mainCamera == null) mainCamera = GetComponent<Camera>();
+        if (mainCamera == null)
+        {
+            Debug.LogError("Main camera not found!");
+            return;
+        }
+
+        // Find ARPlaneManager
+        ARPlaneManager planeManager = FindObjectOfType<ARPlaneManager>();
+        if (planeManager == null || planeManager.planePrefab == null)
+        {
+            Debug.LogError("ARPlaneManager or planePrefab not found!");
+            return;
+        }
+
+        // Create a new GameObject with the same prefab as AR planes
+        GameObject testPlaneObj = Instantiate(planeManager.planePrefab);
+        testPlaneObj.name = "TestPlane_" + System.DateTime.Now.Ticks;
+
+        // Position it 2 meters in front of the camera
+        Vector3 cameraPosition = mainCamera.transform.position;
+        Vector3 cameraForward = mainCamera.transform.forward;
+        testPlaneObj.transform.position = cameraPosition + cameraForward * 2f;
+
+        // Rotate it to face the camera
+        testPlaneObj.transform.rotation = Quaternion.LookRotation(-cameraForward);
+
+        // Set a reasonable size
+        testPlaneObj.transform.localScale = new Vector3(2f, 2f, 1f);
+
+        // Add a mesh if it doesn't have one
+        MeshFilter meshFilter = testPlaneObj.GetComponent<MeshFilter>();
+        if (meshFilter == null)
+        {
+            meshFilter = testPlaneObj.AddComponent<MeshFilter>();
+        }
+
+        if (meshFilter.sharedMesh == null)
+        {
+            // Create a simple quad mesh
+            Mesh quadMesh = new Mesh();
+            quadMesh.vertices = new Vector3[] {
+                new Vector3(-0.5f, -0.5f, 0),
+                new Vector3(0.5f, -0.5f, 0),
+                new Vector3(0.5f, 0.5f, 0),
+                new Vector3(-0.5f, 0.5f, 0)
+            };
+            quadMesh.triangles = new int[] { 0, 1, 2, 0, 2, 3 };
+            quadMesh.uv = new Vector2[] {
+                new Vector2(0, 0),
+                new Vector2(1, 0),
+                new Vector2(1, 1),
+                new Vector2(0, 1)
+            };
+            quadMesh.RecalculateNormals();
+            meshFilter.sharedMesh = quadMesh;
+        }
+
+        // Ensure it has a MeshRenderer
+        MeshRenderer renderer = testPlaneObj.GetComponent<MeshRenderer>();
+        if (renderer == null)
+        {
+            renderer = testPlaneObj.AddComponent<MeshRenderer>();
+        }
+
+        // Apply material to the test plane
+        Material testMaterial = new Material(wallPaintMaterial);
+        testMaterial.SetColor("_PaintColor", Color.green);
+        testMaterial.SetFloat("_BlendFactor", 0.7f);
+        renderer.material = testMaterial;
+
+        Debug.Log("Created test plane at camera position + 2m forward");
+
+        // Add test plane to simulated ARPlane list for processing
+        ARPlane testARPlane = testPlaneObj.GetComponent<ARPlane>();
+        if (testARPlane != null && !processedPlanes.Contains(testARPlane))
+        {
+            processedPlanes.Add(testARPlane);
+        }
+    }
+
+    // Добавляем публичный метод для включения режима отладки
+    public void EnableDebugMode()
+    {
+        Debug.Log("WallPaintEffect: Включаем режим отладки");
+
+        // Включаем отображение отладочной сетки
+        if (wallPaintMaterial != null)
+        {
+            wallPaintMaterial.EnableKeyword("DEBUG_OVERLAY");
+            wallPaintMaterial.SetFloat("_DebugGridSize", 10f);
+        }
+
+        // Увеличиваем контрастность материала для лучшей видимости
+        SetBlendFactor(0.9f);
+
+        // Применяем яркий цвет для отладки
+        SetPaintColor(Color.green);
+
+        // Принудительно пересоздаем тестовую плоскость
+        CreateTestPlaneAtCamera();
+
+        // Обновляем материалы на всех AR плоскостях
+        ARPlane[] planes = FindObjectsOfType<ARPlane>();
+        foreach (ARPlane plane in planes)
+        {
+            ApplyMaterialToPlane(plane);
+        }
+
+        // Форсированно обновляем материал
+        ForceUpdateMaterial();
+
+        Debug.Log("WallPaintEffect: Режим отладки включен. Тестовая плоскость создана.");
     }
 }
