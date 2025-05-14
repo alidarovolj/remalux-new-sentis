@@ -1,206 +1,182 @@
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 
 [RequireComponent(typeof(WallPaintEffect))]
 public class WallPaintDebugPanel : MonoBehaviour
 {
-      private WallPaintEffect wallPaintEffect;
-      private bool showDebugPanel = true;
-      private bool showAdvanced = false;
-      private Color paintColor = Color.magenta;
+    [Header("Ссылки на компоненты")]
+    [SerializeField] private WallPaintDebugger debugger;
+    [SerializeField] private WallPaintEffect wallPaintEffect;
+    [SerializeField] private ARWallPainter wallPainter;
 
-      void Start()
-      {
-            wallPaintEffect = GetComponent<WallPaintEffect>();
-            if (wallPaintEffect == null)
-            {
-                  Debug.LogError("WallPaintDebugPanel: No WallPaintEffect component found!");
-                  enabled = false;
-            }
-      }
+    [Header("UI Элементы")]
+    [SerializeField] private Toggle useMaskToggle;
+    [SerializeField] private Slider blendSlider;
+    [SerializeField] private TMP_Text blendValueText;
+    [SerializeField] private Image colorPreview;
+    [SerializeField] private Toggle debugOverlayToggle;
+    [SerializeField] private Toggle showPlanesToggle;
+    [SerializeField] private Toggle highlightVerticalToggle;
+    [SerializeField] private Toggle showNormalsToggle;
+    [SerializeField] private Button redButton;
+    [SerializeField] private Button greenButton;
+    [SerializeField] private Button blueButton;
+    [SerializeField] private Button yellowButton;
+    [SerializeField] private Button purpleButton;
+    [SerializeField] private Button whiteButton;
+    [SerializeField] private Button resetButton;
+    [SerializeField] private RectTransform mainPanel;
 
-      void OnGUI()
-      {
-            if (!showDebugPanel) return;
+    private bool isPanelVisible = true;
+    private bool isInitialized = false;
 
-            // Create a panel in the top-right corner
-            GUILayout.BeginArea(new Rect(Screen.width - 230, 10, 220, showAdvanced ? 700 : 360));
-            GUILayout.BeginVertical("box");
+    void Start()
+    {
+        // Проверяем, есть ли необходимые компоненты
+        if (debugger == null) debugger = FindObjectOfType<WallPaintDebugger>();
+        if (wallPaintEffect == null) wallPaintEffect = FindObjectOfType<WallPaintEffect>();
+        if (wallPainter == null) wallPainter = FindObjectOfType<ARWallPainter>();
 
-            GUILayout.Label("Wall Paint Debug", GUI.skin.box);
+        if (debugger == null || wallPaintEffect == null || wallPainter == null)
+        {
+            Debug.LogError("WallPaintDebugPanel: Не удалось найти необходимые компоненты");
+            return;
+        }
 
-            // Toggle panel visibility
-            if (GUILayout.Button(showAdvanced ? "Hide Advanced Options" : "Show Advanced Options"))
-            {
-                  showAdvanced = !showAdvanced;
-            }
+        // Настраиваем начальное состояние UI
+        if (useMaskToggle != null) useMaskToggle.isOn = true;
+        if (debugOverlayToggle != null) debugOverlayToggle.isOn = false;
+        if (showPlanesToggle != null) showPlanesToggle.isOn = true;
+        if (highlightVerticalToggle != null) highlightVerticalToggle.isOn = true;
+        if (showNormalsToggle != null) showNormalsToggle.isOn = true;
+        
+        if (blendSlider != null)
+        {
+            blendSlider.value = 0.5f;
+            UpdateBlendValueText(0.5f);
+        }
 
-            GUILayout.Space(10);
-            GUILayout.Label("Quick Fixes:", GUI.skin.box);
+        // Назначаем обработчики событий
+        if (useMaskToggle != null) useMaskToggle.onValueChanged.AddListener(OnUseMaskToggleChanged);
+        if (blendSlider != null) blendSlider.onValueChanged.AddListener(OnBlendSliderChanged);
+        if (debugOverlayToggle != null) debugOverlayToggle.onValueChanged.AddListener(OnDebugOverlayToggleChanged);
+        if (showPlanesToggle != null) showPlanesToggle.onValueChanged.AddListener(OnShowPlanesToggleChanged);
+        if (highlightVerticalToggle != null) highlightVerticalToggle.onValueChanged.AddListener(OnHighlightVerticalToggleChanged);
+        if (showNormalsToggle != null) showNormalsToggle.onValueChanged.AddListener(OnShowNormalsToggleChanged);
 
-            // Fix rendering mode button
-            if (GUILayout.Button("Fix Rendering Mode"))
-            {
-                  wallPaintEffect.FixRenderingMode();
-            }
+        // Настраиваем кнопки цветов
+        if (redButton != null) redButton.onClick.AddListener(() => SetColor(Color.red));
+        if (greenButton != null) greenButton.onClick.AddListener(() => SetColor(new Color(0, 0.8f, 0)));
+        if (blueButton != null) blueButton.onClick.AddListener(() => SetColor(new Color(0, 0.5f, 1f)));
+        if (yellowButton != null) yellowButton.onClick.AddListener(() => SetColor(new Color(1f, 0.9f, 0)));
+        if (purpleButton != null) purpleButton.onClick.AddListener(() => SetColor(new Color(0.8f, 0, 0.8f)));
+        if (whiteButton != null) whiteButton.onClick.AddListener(() => SetColor(Color.white));
+        if (resetButton != null) resetButton.onClick.AddListener(OnResetButtonClicked);
 
-            // Toggle debug visualization
-            if (GUILayout.Button(IsDebugOverlayEnabled() ? "Disable Checkerboard" : "Enable Checkerboard"))
-            {
-                  ToggleDebugOverlay();
-            }
+        // Устанавливаем начальный цвет
+        SetColor(Color.red);
 
-            // Toggle mask usage
-            if (GUILayout.Button(IsMaskEnabled() ? "Disable Mask" : "Enable Mask"))
-            {
-                  wallPaintEffect.SetUseMaskMode(!IsMaskEnabled());
-            }
+        // Настраиваем панель
+        isPanelVisible = true;
+        isInitialized = true;
+    }
 
-            // Force update material
-            if (GUILayout.Button("Force Update Material"))
-            {
-                  wallPaintEffect.ForceUpdateMaterial();
-            }
+    private void Update()
+    {
+        // Проверяем клавишу для скрытия/показа отладочной панели
+        if (Input.GetKeyDown(KeyCode.D))
+        {
+            TogglePanel();
+        }
+    }
 
-            // Color adjustments
-            GUILayout.Space(10);
-            GUILayout.Label("Color Settings:", GUI.skin.box);
+    // Переключение видимости панели
+    public void TogglePanel()
+    {
+        isPanelVisible = !isPanelVisible;
+        if (mainPanel != null)
+        {
+            mainPanel.gameObject.SetActive(isPanelVisible);
+        }
+    }
 
-            // Red color button
-            if (GUILayout.Button("Red (30%)"))
-            {
-                  wallPaintEffect.SetColorAndOpacity(Color.red, 0.3f);
-            }
+    // Обработчик изменения переключателя использования маски сегментации
+    private void OnUseMaskToggleChanged(bool value)
+    {
+        if (!isInitialized || wallPaintEffect == null) return;
+        wallPaintEffect.SetUseMask(value);
+    }
 
-            // Green color button
-            if (GUILayout.Button("Green (30%)"))
-            {
-                  wallPaintEffect.SetColorAndOpacity(Color.green, 0.3f);
-            }
+    // Обработчик изменения ползунка интенсивности покраски
+    private void OnBlendSliderChanged(float value)
+    {
+        if (!isInitialized || wallPainter == null) return;
+        wallPainter.SetBlendFactor(value);
+        UpdateBlendValueText(value);
+    }
 
-            // Blue color button
-            if (GUILayout.Button("Blue (30%)"))
-            {
-                  wallPaintEffect.SetColorAndOpacity(Color.blue, 0.3f);
-            }
+    // Обработчик изменения переключателя отладочного режима
+    private void OnDebugOverlayToggleChanged(bool value)
+    {
+        if (!isInitialized || wallPaintEffect == null) return;
+        
+        if (value)
+            wallPaintEffect.EnableDebugMode();
+        else
+            wallPaintEffect.DisableDebugMode();
+    }
 
-            // Magenta color button
-            if (GUILayout.Button("Magenta (30%)"))
-            {
-                  wallPaintEffect.SetColorAndOpacity(Color.magenta, 0.3f);
-            }
+    // Обработчик изменения переключателя отображения плоскостей
+    private void OnShowPlanesToggleChanged(bool value)
+    {
+        if (!isInitialized || debugger == null) return;
+        debugger.ToggleDebugVisuals();
+    }
 
-            // Advanced options
-            if (showAdvanced)
-            {
-                  GUILayout.Space(10);
-                  GUILayout.Label("Advanced Settings:", GUI.skin.box);
+    // Обработчик изменения переключателя подсветки вертикальных плоскостей
+    private void OnHighlightVerticalToggleChanged(bool value)
+    {
+        if (!isInitialized || debugger == null) return;
+        debugger.SetHighlightVerticalPlanes(value);
+    }
 
-                  // Blend factor slider
-                  GUILayout.BeginHorizontal();
-                  GUILayout.Label("Blend: ", GUILayout.Width(50));
-                  float blendFactor = wallPaintEffect.GetBlendFactor();
-                  float newBlendFactor = GUILayout.HorizontalSlider(blendFactor, 0.0f, 1.0f);
-                  if (newBlendFactor != blendFactor)
-                  {
-                        wallPaintEffect.SetBlendFactor(newBlendFactor);
-                  }
-                  GUILayout.Label(newBlendFactor.ToString("F2"), GUILayout.Width(40));
-                  GUILayout.EndHorizontal();
+    // Обработчик изменения переключателя отображения нормалей
+    private void OnShowNormalsToggleChanged(bool value)
+    {
+        if (!isInitialized || debugger == null) return;
+        debugger.SetShowNormals(value);
+    }
 
-                  // Color picker
-                  GUILayout.BeginHorizontal();
-                  GUILayout.Label("R: ", GUILayout.Width(20));
-                  paintColor.r = GUILayout.HorizontalSlider(paintColor.r, 0f, 1f);
-                  GUILayout.EndHorizontal();
+    // Обновление текста, отображающего значение blend factor
+    private void UpdateBlendValueText(float value)
+    {
+        if (blendValueText != null)
+        {
+            blendValueText.text = value.ToString("F2");
+        }
+    }
 
-                  GUILayout.BeginHorizontal();
-                  GUILayout.Label("G: ", GUILayout.Width(20));
-                  paintColor.g = GUILayout.HorizontalSlider(paintColor.g, 0f, 1f);
-                  GUILayout.EndHorizontal();
+    // Установка цвета для покраски
+    private void SetColor(Color color)
+    {
+        if (!isInitialized || wallPainter == null) return;
+        
+        wallPainter.SetPaintColor(color);
+        
+        // Обновляем предпросмотр цвета
+        if (colorPreview != null)
+        {
+            colorPreview.color = color;
+        }
+    }
 
-                  GUILayout.BeginHorizontal();
-                  GUILayout.Label("B: ", GUILayout.Width(20));
-                  paintColor.b = GUILayout.HorizontalSlider(paintColor.b, 0f, 1f);
-                  GUILayout.EndHorizontal();
-
-                  if (GUILayout.Button("Apply Custom Color"))
-                  {
-                        wallPaintEffect.SetPaintColor(paintColor);
-                  }
-
-                  GUILayout.Space(10);
-                  GUILayout.Label("Diagnostic Actions:", GUI.skin.box);
-
-                  if (GUILayout.Button("Log Debug Info"))
-                  {
-                        Debug.Log($"Current Color: {wallPaintEffect.GetPaintColor()}, Blend: {wallPaintEffect.GetBlendFactor()}");
-                        wallPaintEffect.ForceUpdateMaterial();
-                  }
-
-                  if (GUILayout.Button("Fix Material Textures"))
-                  {
-                        wallPaintEffect.FixMaterialTextures();
-                  }
-
-                  if (GUILayout.Button("Reinitialize Material"))
-                  {
-                        wallPaintEffect.SetPaintColor(wallPaintEffect.GetPaintColor());
-                        wallPaintEffect.SetBlendFactor(wallPaintEffect.GetBlendFactor());
-                        wallPaintEffect.ForceUpdateMaterial();
-                        Debug.Log("Material reinitialized");
-                  }
-            }
-
-            GUILayout.Space(10);
-            if (GUILayout.Button("Hide Debug Panel"))
-            {
-                  showDebugPanel = false;
-            }
-
-            GUILayout.EndVertical();
-            GUILayout.EndArea();
-
-            // Small button to re-show panel if hidden
-            if (!showDebugPanel && GUI.Button(new Rect(Screen.width - 120, 10, 110, 30), "Show Debug"))
-            {
-                  showDebugPanel = true;
-            }
-      }
-
-      private bool IsDebugOverlayEnabled()
-      {
-            var material = wallPaintEffect.GetMaterial();
-            if (material != null && material.HasProperty("_DebugOverlay"))
-            {
-                  return material.IsKeywordEnabled("DEBUG_OVERLAY");
-            }
-            return false;
-      }
-
-      private void ToggleDebugOverlay()
-      {
-            var material = wallPaintEffect.GetMaterial();
-            if (material != null && material.HasProperty("_DebugOverlay"))
-            {
-                  if (material.IsKeywordEnabled("DEBUG_OVERLAY"))
-                  {
-                        wallPaintEffect.DisableDebugMode();
-                  }
-                  else
-                  {
-                        material.EnableKeyword("DEBUG_OVERLAY");
-                        wallPaintEffect.ForceUpdateMaterial();
-                  }
-            }
-      }
-
-      private bool IsMaskEnabled()
-      {
-            var material = wallPaintEffect.GetMaterial();
-            if (material != null)
-            {
-                  return material.IsKeywordEnabled("USE_MASK");
-            }
-            return false;
-      }
+    // Обработчик нажатия кнопки сброса
+    private void OnResetButtonClicked()
+    {
+        if (!isInitialized || wallPainter == null) return;
+        wallPainter.ResetAllWalls();
+    }
 }

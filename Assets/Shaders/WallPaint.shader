@@ -9,6 +9,8 @@ Shader "Custom/WallPaint"
         [Toggle(USE_MASK)] _UseMask ("Use Segmentation Mask", Float) = 1
         [Toggle(DEBUG_OVERLAY)] _DebugOverlay ("Debug Overlay", Float) = 0
         _DebugGrid ("Debug Grid Size", Range(5, 30)) = 10
+        [Toggle(USE_AR_WORLD_SPACE)] _UseARSpace ("Use AR World Space", Float) = 0
+        _PlaneID ("Plane ID", Float) = 0
     }
     SubShader
     {
@@ -30,6 +32,7 @@ Shader "Custom/WallPaint"
             // Feature toggles
             #pragma multi_compile _ USE_MASK
             #pragma multi_compile _ DEBUG_OVERLAY
+            #pragma multi_compile _ USE_AR_WORLD_SPACE
             
             // Platform specifics
             #pragma multi_compile_instancing
@@ -62,6 +65,12 @@ Shader "Custom/WallPaint"
             float _BlendFactor;
             float4 _MainTex_ST;
             float _DebugGrid;
+            float4x4 _PlaneToWorldMatrix;
+            float4x4 _WorldToCameraMatrix;
+            float4x4 _CameraToWorldMatrix;
+            float3 _PlaneNormal;
+            float3 _PlaneCenter;
+            float _PlaneID;
 
             Varyings vert(Attributes IN)
             {
@@ -69,7 +78,13 @@ Shader "Custom/WallPaint"
                 UNITY_SETUP_INSTANCE_ID(IN);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
                 
-                OUT.positionHCS = TransformObjectToHClip(IN.positionOS.xyz);
+                #ifdef USE_AR_WORLD_SPACE
+                    float4 worldPos = mul(_PlaneToWorldMatrix, float4(IN.positionOS.xyz, 1.0));
+                    OUT.positionHCS = TransformWorldToHClip(worldPos.xyz);
+                #else
+                    OUT.positionHCS = TransformObjectToHClip(IN.positionOS.xyz);
+                #endif
+                
                 OUT.uv = TRANSFORM_TEX(IN.uv, _MainTex);
                 return OUT;
             }
@@ -84,8 +99,14 @@ Shader "Custom/WallPaint"
                 // Debug overlay mode - show checkerboard pattern
                 #ifdef DEBUG_OVERLAY
                     float checker = (fmod(floor(IN.uv.x * _DebugGrid), 2) == 0) ^ (fmod(floor(IN.uv.y * _DebugGrid), 2) == 0);
-                    half4 debugColor = lerp(half4(1,0,0,0.5), half4(0,1,0,0.5), checker);
-                    return debugColor;
+                    #ifdef USE_AR_WORLD_SPACE
+                        half4 debugColor = lerp(half4(1,0,0,0.5), half4(0,1,0,0.5), checker);
+                        debugColor = lerp(debugColor, half4(0,0,1,0.5), frac(_PlaneID * 0.1));
+                        return debugColor;
+                    #else
+                        half4 debugColor = lerp(half4(1,0,0,0.5), half4(0,1,0,0.5), checker);
+                        return debugColor;
+                    #endif
                 #endif
                 
                 #ifdef USE_MASK

@@ -16,7 +16,7 @@ MonoBehaviour:
     type: 3}
   xrOriginPrefab: {fileID: 8615858895843980298, guid: 83754a0b0e2f1844ab622d8c9b21d14b,
     type: 3}
-  arPlanePrefab: {fileID: 7439297936621471134, guid: ee62f21ebb4c2e2469ebb373d517fac9,
+  arPlanePrefab: {fileID: 7343140448444131710, guid: 79b954db4415ba74aa113ccbe6ff21ac,
     type: 3}
   uiPrefab: {fileID: 3932747992230222002, guid: abed281d544571547b481e06195deefe,
     type: 3}

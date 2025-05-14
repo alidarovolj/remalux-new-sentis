@@ -1,0 +1,13 @@
+Инструкция по исправлению файла SceneSetupUtility.cs:
+
+1. Найдите примерно строку 463, содержащую:
+```csharp
+planeManager.planeFindingMode = PlaneFindingMode.Horizontal | PlaneFindingMode.Vertical;
+```
+
+2. Удалите или закомментируйте эту строку:
+```csharp
+// planeManager.planeFindingMode = PlaneFindingMode.Horizontal | PlaneFindingMode.Vertical;
+```
+
+Эта строка вызывает ошибки т.к. свойство planeFindingMode не существует в типе ARPlaneManager и тип PlaneFindingMode также не существует. 

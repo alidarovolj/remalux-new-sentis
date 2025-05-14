@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems; // Добавляем для доступа к PlaneDetectionMode
 using UnityEngine.Rendering.Universal;
 using System.IO;
 using UnityEngine.EventSystems;
@@ -454,6 +455,13 @@ public class SceneSetupUtility : EditorWindow
         var planeManager = trackersObj.AddComponent<ARPlaneManager>();
         planeManager.enabled = true; // Явно включаем
 
+        // Важно: настраиваем обнаружение вертикальных плоскостей
+        planeManager.requestedDetectionMode = PlaneDetectionMode.Vertical | PlaneDetectionMode.Horizontal;
+        Debug.Log("ARPlaneManager настроен на обнаружение вертикальных И горизонтальных плоскостей");
+
+        // Увеличиваем частоту обновления плоскостей для более точного отслеживания
+        // planeManager.planeFindingMode = PlaneFindingMode.Horizontal | PlaneFindingMode.Vertical;
+
         // Пытаемся использовать префаб плоскости из конфигурации
         if (sceneConfig != null && sceneConfig.arPlanePrefab != null)
         {
@@ -493,7 +501,7 @@ public class SceneSetupUtility : EditorWindow
             AssetDatabase.SaveAssets();
 
             // Сохраняем префаб
-            string prefabPath = "Assets/Prefabs/AR/ARPlaneVisualization.prefab";
+            string prefabPath = "Assets/Prefabs/AR/Trackables/ARPlaneVisualization.prefab";
             string prefabDirectory = Path.GetDirectoryName(prefabPath);
             if (!Directory.Exists(prefabDirectory))
             {
@@ -1531,13 +1539,64 @@ public class SceneSetupUtility : EditorWindow
         if (existingObject != null)
         {
             Debug.Log("ARManagerInitializer уже существует в сцене");
+            
+            // Проверяем и обновляем настройки существующего ARManagerInitializer
+            try {
+                // Попытка обновить режим обнаружения плоскостей через рефлексию
+                var planeDetectionProperty = arManagerInitializerType.GetField("planeDetectionMode", 
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    
+                if (planeDetectionProperty != null) {
+                    var planeDetectionModeType = FindTypeInAllAssemblies("PlaneDetectionMode");
+                    if (planeDetectionModeType != null) {
+                        // Попытка установить режим обнаружения как Vertical | Horizontal
+                        var verticalValue = System.Enum.Parse(planeDetectionModeType, "Vertical");
+                        var horizontalValue = System.Enum.Parse(planeDetectionModeType, "Horizontal");
+                        var combinedValue = (int)verticalValue | (int)horizontalValue;
+                        
+                        planeDetectionProperty.SetValue(existingObject, combinedValue);
+                        Debug.Log("Обновлен режим обнаружения плоскостей в существующем ARManagerInitializer");
+                    }
+                }
+            } catch (System.Exception e) {
+                Debug.LogWarning($"Не удалось обновить существующий ARManagerInitializer: {e.Message}");
+            }
+            
             return;
         }
 
         // Создаем объект для ARManagerInitializer
         GameObject initializerObj = new GameObject("AR Manager Initializer");
         initializerObj.transform.SetParent(managersRoot.transform);
-        initializerObj.AddComponent(arManagerInitializerType);
+        var managerInitializer = initializerObj.AddComponent(arManagerInitializerType);
+
+        // Настраиваем дополнительные свойства через рефлексию
+        try {
+            // Установка режима обнаружения плоскостей через рефлексию
+            var planeDetectionProperty = arManagerInitializerType.GetField("planeDetectionMode", 
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                
+            if (planeDetectionProperty != null) {
+                var planeDetectionModeType = FindTypeInAllAssemblies("PlaneDetectionMode");
+                if (planeDetectionModeType != null) {
+                    // Установка режима обнаружения как Vertical | Horizontal
+                    var verticalValue = System.Enum.Parse(planeDetectionModeType, "Vertical");
+                    var horizontalValue = System.Enum.Parse(planeDetectionModeType, "Horizontal");
+                    var combinedValue = (int)verticalValue | (int)horizontalValue;
+                    
+                    planeDetectionProperty.SetValue(managerInitializer, combinedValue);
+                    Debug.Log("Установлен режим обнаружения плоскостей в ARManagerInitializer");
+                }
+            }
+            
+            // Включаем явно ARManagerInitializer
+            var enabledProperty = arManagerInitializerType.GetProperty("enabled");
+            if (enabledProperty != null) {
+                enabledProperty.SetValue(managerInitializer, true);
+            }
+        } catch (System.Exception e) {
+            Debug.LogWarning($"Не удалось настроить ARManagerInitializer: {e.Message}");
+        }
 
         EditorUtility.SetDirty(initializerObj);
 

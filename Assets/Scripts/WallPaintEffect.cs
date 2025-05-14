@@ -602,7 +602,7 @@ public class WallPaintEffect : MonoBehaviour
         Debug.Log($"[WallPaintEffect] Статус: {segmentationState}\n{maskInfo}\n{materialInfo}");
     }
 
-    private void UpdatePaintParameters()
+    public void UpdatePaintParameters()
     {
         Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters() called.");
         if (wallPaintMaterial == null)
@@ -1248,5 +1248,71 @@ public class WallPaintEffect : MonoBehaviour
         ForceUpdateMaterial();
 
         Debug.Log("WallPaintEffect: Режим отладки включен. Тестовая плоскость создана.");
+    }
+
+    /// <summary>
+    /// Принудительно обновляет все AR плоскости и применяет к ним материалы.
+    /// Используется для синхронизации с ARPlaneDebugger.
+    /// </summary>
+    public void ForceRefreshARPlanes()
+    {
+        if (!isInitialized)
+        {
+            Debug.LogWarning("[WallPaintEffect LOG] ForceRefreshARPlanes: компонент не инициализирован");
+            return;
+        }
+        
+        Debug.Log("[WallPaintEffect LOG] ForceRefreshARPlanes: начато принудительное обновление AR плоскостей");
+        
+        // Обновляем параметры материала
+        UpdatePaintParameters();
+        
+        // Применяем материал ко всем плоскостям
+        ApplyMaterialToARPlanes();
+        
+        Debug.Log("[WallPaintEffect LOG] ForceRefreshARPlanes: принудительное обновление AR плоскостей завершено");
+    }
+
+    /// <summary>
+    /// Окрашивает указанную AR плоскость (стену) в заданный цвет
+    /// </summary>
+    /// <param name="plane">AR плоскость для окрашивания</param>
+    /// <param name="color">Цвет для окрашивания</param>
+    /// <param name="blendFactor">Коэффициент смешивания (0-1)</param>
+    public void PaintPlane(ARPlane plane, Color color, float blendFactor)
+    {
+        if (!isInitialized || plane == null)
+        {
+            Debug.LogWarning("[WallPaintEffect LOG] PaintPlane: компонент не инициализирован или плоскость null");
+            return;
+        }
+
+        // Устанавливаем параметры покраски
+        SetPaintColor(color);
+        SetBlendFactor(blendFactor);
+        
+        // Обновляем параметры материала
+        UpdatePaintParameters();
+        
+        // Добавляем идентификатор плоскости в список обработанных, если он еще не там
+        if (!processedPlanes.Contains(plane))
+        {
+            processedPlanes.Add(plane);
+        }
+        
+        // Проверяем, имеет ли плоскость MeshRenderer для применения материала
+        MeshRenderer meshRenderer = plane.GetComponent<MeshRenderer>();
+        if (meshRenderer != null)
+        {
+            // Если у плоскости есть материал, обновляем его
+            Material planeMaterial = new Material(wallPaintMaterial);
+            meshRenderer.material = planeMaterial;
+            
+            Debug.Log($"[WallPaintEffect LOG] Применен материал покраски к плоскости {plane.trackableId}");
+        }
+        else
+        {
+            Debug.LogWarning($"[WallPaintEffect LOG] У плоскости {plane.trackableId} отсутствует MeshRenderer");
+        }
     }
 }
