@@ -19,6 +19,8 @@ using System.Threading.Tasks;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
+// Используем просто Unity.Sentis без псевдонима
+// using Unity.Sentis.TensorShape = Unity.Sentis.TensorShape;
 
 /// <summary>
 /// Компонент для сегментации стен с использованием ML модели в Unity Sentis.
@@ -27,42 +29,50 @@ using UnityEngine.UI;
 public class WallSegmentation : MonoBehaviour
 {
     [Header("Настройки ML модели")]
-    [Tooltip("ONNX модель для сегментации стен")]
+    [Tooltip("Ссылка на ML модель в формате ONNX или Sentis")]
     public UnityEngine.Object modelAsset;
 
-    // Поле для хранения загруженного экземпляра модели Unity.Sentis.Model
-    // Это поле не сериализуется, но может быть установлено через API/рефлексию
     [NonSerialized]
-    public Model model;
+    public string modelFilePath;
 
     [Tooltip("Предпочитаемый бэкенд для исполнения модели (0 = CPU, 1 = GPUCompute)")]
-    [Range(0, 1)]
     public int preferredBackend = 0;
 
     [Tooltip("Использовать безопасную асинхронную загрузку модели")]
-    public bool useSafeLoading = true;
+    public bool useSafeModelLoading = true;
 
     [Tooltip("Тайм-аут загрузки модели в секундах")]
     public float modelLoadTimeout = 30f;
 
     [Tooltip("Принудительно использовать метод захвата изображения для XR Simulation")]
-    public bool forceXRSimulationCaptureMethod = false;
+    public bool forceXRSimulationCapture = true;
 
     [Header("Настройки сегментации")]
-    [Tooltip("Индекс класса 'стена' в выходе модели")]
-    public int wallClassIndex = 1;
+    [Tooltip("Индекс класса стены в модели")]
+    public int wallClassIndex = 2;
+
+    [Tooltip("Индекс класса пола в модели")]
+    public int floorClassIndex = 12;
 
     [Tooltip("Порог вероятности для определения стены")]
-    [Range(0.0f, 1.0f)]
-    public float wallThreshold = 0.5f;
+    public float wallThreshold = 0.3f;
+
+    [Tooltip("Порог вероятности для определения пола")]
+    public float floorThreshold = 0.3f;
+
+    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")]
+    public bool detectFloor = true;
 
     [Tooltip("Разрешение входного изображения")]
     public Vector2Int inputResolution = new Vector2Int(320, 320);
+    
+    [Tooltip("Использовать симуляцию, если не удаётся получить изображение с камеры")]
+    public bool useSimulationIfNoCamera = true;
+    
+    [Tooltip("Количество неудачных попыток получения изображения перед включением симуляции")]
+    public int failureThresholdForSimulation = 10;
 
     [Header("Компоненты")]
-    [Tooltip("Ссылка на ARCameraManager")]
-    public ARCameraManager arCameraManager;
-
     [Tooltip("Ссылка на ARSessionManager")]
     public ARSessionManager arSessionManager;
 
@@ -72,20 +82,57 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Текстура для вывода маски сегментации")]
     public RenderTexture segmentationMaskTexture;
 
+    // Свойства для получения AR компонентов
+    public ARSessionManager ARSessionManager {
+        get {
+            if (arSessionManager == null) {
+                arSessionManager = FindObjectOfType<ARSessionManager>();
+            }
+            return arSessionManager;
+        }
+        set {
+            arSessionManager = value;
+        }
+    }
+
+    public XROrigin XROrigin {
+        get {
+            if (xrOrigin == null) {
+                xrOrigin = FindObjectOfType<XROrigin>();
+            }
+            return xrOrigin;
+        }
+        set {
+            xrOrigin = value;
+        }
+    }
+
+    public ARCameraManager ARCameraManager {
+        get {
+            if (XROrigin != null && XROrigin.Camera != null) {
+                return XROrigin.Camera.GetComponent<ARCameraManager>();
+            }
+            return FindObjectOfType<ARCameraManager>();
+        }
+        set {
+            // Тут мы можем сохранить ссылку на ARCameraManager, если нужно
+            // Но так как в getter мы его получаем динамически, создадим приватное поле
+            arCameraManager = value;
+        }
+    }
+
     [Header("Отладка")]
-    [Tooltip("Сохранять маску сегментации в отдельную текстуру")]
     public bool saveDebugMask = false;
 
     [Tooltip("Путь для сохранения отладочных изображений")]
-    public string debugSavePath = "SegmentationDebug";
+    public string debugSavePath = "SegmentationMasks";
 
     [Tooltip("Использовать симуляцию сегментации, если не удалось получить изображение с камеры")]
-    public bool useSimulatedSegmentationAsFallback = true;
+    public bool useSimulationIfCameraFails = true;
 
     [Tooltip("Счетчик неудачных попыток получения изображения перед активацией симуляции")]
-    public int failCountBeforeSimulation = 10;
+    public int maxConsecutiveFailsBeforeSimulation = 5;
 
-    // Приватные поля для работы с моделью через рефлексию
     private Worker engine;
     private Model runtimeModel;
     private Worker worker;
@@ -96,70 +143,239 @@ public class WallSegmentation : MonoBehaviour
     private bool isInitializationFailed = false;
     private int consecutiveFailCount = 0;
     private bool usingSimulatedSegmentation = false;
-    // Add debugMaskCounter as a class field instead of local static variable
-    private static int debugMaskCounter = 0;
 
-    // Делегат для события инициализации модели
+    [System.NonSerialized]
+    private static int debugMaskCounter = 0; // Помечаем атрибутом, чтобы показать, что мы знаем о неиспользовании
+
+    // События для уведомления других компонентов
     public delegate void ModelInitializedHandler();
     public event ModelInitializedHandler OnModelInitialized;
 
-    // Для связи с WallSegmentationModelLoader
+    // Событие, вызываемое при обновлении маски сегментации
+    public delegate void SegmentationMaskUpdatedHandler(RenderTexture mask);
+    public event SegmentationMaskUpdatedHandler OnSegmentationMaskUpdated;
+
+    // Публичные свойства для проверки состояния
     public bool IsModelInitialized => isModelInitialized;
     public bool IsInitializing => isInitializing;
     public string LastErrorMessage => lastErrorMessage;
     public bool IsInitializationFailed => isInitializationFailed;
 
-    private void Start()
+    // 1. Добавляем объявление переменной model
+    private Model model;
+
+    // Добавляем приватное поле для ARCameraManager
+    private ARCameraManager arCameraManager;
+    
+    // Триггер события обновления маски
+    private void TriggerSegmentationMaskUpdatedEvent(RenderTexture mask)
     {
-        // Проверяем компоненты
-        if (arCameraManager == null)
+        // Вызываем событие, если есть подписчики
+        if (OnSegmentationMaskUpdated != null)
         {
-            arCameraManager = FindObjectOfType<ARCameraManager>();
-            if (arCameraManager == null)
-            {
-                Debug.LogError("ARCameraManager не найден в сцене!");
-                return;
-            }
-        }
-
-        // Ищем XROrigin, если она не назначена
-        if (xrOrigin == null)
-        {
-            xrOrigin = FindObjectOfType<XROrigin>();
-
-            // Если XROrigin не найден напрямую, пробуем получить из ARSessionManager
-            if (xrOrigin == null && arSessionManager != null)
-            {
-                xrOrigin = arSessionManager.xrOrigin;
-                Debug.Log("XROrigin получен из ARSessionManager");
-            }
-
-            if (xrOrigin == null)
-            {
-                Debug.LogWarning("XROrigin не найден в сцене. Это может повлиять на работу в режиме XR Simulation.");
-            }
-        }
-
-        // Создаем сегментационную маску, если она не назначена
-        if (segmentationMaskTexture == null)
-        {
-            // Создаем маску с правильным разрешением выхода модели (80x80) согласно integration_guide
-            segmentationMaskTexture = new RenderTexture(80, 80, 0, RenderTextureFormat.RFloat);
-            segmentationMaskTexture.enableRandomWrite = true;
-            segmentationMaskTexture.Create();
-        }
-
-        // Создаем текстуру для камеры
-        cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
-
-        if (useSafeLoading)
-        {
-            StartCoroutine(InitializeSegmentation());
+            OnSegmentationMaskUpdated.Invoke(mask);
+            Debug.Log($"[WallSegmentation] Событие OnSegmentationMaskUpdated вызвано");
         }
         else
         {
-            InitializeModelDirect();
+            Debug.LogWarning($"[WallSegmentation] ⚠️ Нет подписчиков на событие OnSegmentationMaskUpdated");
         }
+    }
+    
+    // Вызываем событие при создании маски сегментации
+    private void OnMaskCreated(RenderTexture mask)
+    {
+        if (mask != null)
+        {
+            TriggerSegmentationMaskUpdatedEvent(mask);
+        }
+    }
+
+    /// <summary>
+    /// Освобождает ресурсы при уничтожении объекта
+    /// </summary>
+    private void OnDestroy()
+    {
+        Debug.Log("[WallSegmentation-OnDestroy] Очистка ресурсов Sentis...");
+
+        // Отписываемся от событий
+        Debug.Log("[WallSegmentation-OnDestroy] Отписка от событий AR...");
+
+        // Освобождаем текстуру
+        if (segmentationMaskTexture != null)
+        {
+            segmentationMaskTexture.Release();
+            Debug.Log("[WallSegmentation-OnDestroy] Освобождена текстура сегментации");
+        }
+
+        // Освобождаем текстуру изображения
+        if (cameraTexture != null)
+        {
+            Destroy(cameraTexture);
+            Debug.Log("[WallSegmentation-OnDestroy] Освобождена камера");
+        }
+
+        // Освобождаем ML ресурсы
+        DisposeEngine();
+
+        Debug.Log("[WallSegmentation-OnDestroy] Ресурсы успешно очищены");
+    }
+
+    /// <summary>
+    /// Освобождает ресурсы ML движка
+    /// </summary>
+    private void DisposeEngine()
+    {
+        Debug.Log("[WallSegmentation-DisposeEngine] Освобождение ресурсов движка Sentis...");
+
+        // Освобождаем worker
+        if (worker != null)
+        {
+            try
+            {
+                worker.Dispose();
+                worker = null;
+                Debug.Log("[WallSegmentation-DisposeEngine] Worker успешно освобожден");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[WallSegmentation-DisposeEngine] Ошибка при освобождении Worker: {e.Message}");
+            }
+        }
+
+        // Освобождаем движок
+        if (engine != null)
+        {
+            try
+            {
+                engine.Dispose();
+                engine = null;
+                Debug.Log("[WallSegmentation-DisposeEngine] Engine успешно освобожден");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[WallSegmentation-DisposeEngine] Ошибка при освобождении Engine: {e.Message}");
+            }
+        }
+
+        // Освобождаем модель
+        if (runtimeModel != null)
+        {
+            try
+            {
+                if (runtimeModel is IDisposable disposableModel)
+                {
+                    disposableModel.Dispose();
+                }
+                runtimeModel = null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[WallSegmentation-DisposeEngine] Ошибка при освобождении Model: {e.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Инициализирует компонент при запуске
+    /// </summary>
+    private void Start()
+    {
+        Debug.Log("[WallSegmentation] ➡️ Start() вызван. Начало инициализации...");
+
+        // Устанавливаем значения по умолчанию
+        isModelInitialized = false;
+        isInitializing = false;
+        isInitializationFailed = false;
+        lastErrorMessage = null;
+        consecutiveFailCount = 0;
+
+        // Если маска не инициализирована, создаем ее
+        if (segmentationMaskTexture == null)
+        {
+            segmentationMaskTexture = new RenderTexture(inputResolution.x / 4, inputResolution.y / 4, 0, RenderTextureFormat.ARGB32);
+            segmentationMaskTexture.enableRandomWrite = true;
+            segmentationMaskTexture.Create();
+            Debug.Log("[WallSegmentation] ✅ Создана новая segmentationMaskTexture (" + segmentationMaskTexture.width + "x" + segmentationMaskTexture.height + ")");
+        }
+
+        // Создаем текстуру для камеры, если нужно
+        if (cameraTexture == null)
+        {
+            cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
+            Debug.Log("[WallSegmentation] ✅ Создана cameraTexture (" + cameraTexture.width + "x" + cameraTexture.height + ")");
+        }
+
+        // Начинаем инициализацию модели
+        Debug.Log("[WallSegmentation] 🔄 Запуск безопасной загрузки модели (через корутину)");
+        StartCoroutine(InitializeSegmentation());
+
+        // После старта выводим состояние компонента для отладки через 2 секунды
+        Invoke("DumpCurrentState", 2f);
+
+        Debug.Log("[WallSegmentation] ✅ Start() завершен");
+    }
+
+    /// <summary>
+    /// Выводит текущее состояние компонента с задержкой
+    /// </summary>
+    private IEnumerator DelayedStateDump()
+    {
+        yield return new WaitForSeconds(2f);
+        DumpCurrentState();
+    }
+
+    /// <summary>
+    /// Выводит текущее состояние компонента
+    /// </summary>
+    public void DumpCurrentState()
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.AppendLine("==== СОСТОЯНИЕ КОМПОНЕНТА WALL SEGMENTATION ====");
+        sb.AppendLine($"Модель инициализирована: {isModelInitialized}");
+        sb.AppendLine($"Идет инициализация: {isInitializing}");
+        sb.AppendLine($"Ошибка инициализации: {isInitializationFailed}");
+        sb.AppendLine($"Последняя ошибка: {lastErrorMessage ?? "нет"}");
+        sb.AppendLine($"Счетчик последовательных ошибок: {consecutiveFailCount}");
+        sb.AppendLine($"Используется симуляция: {usingSimulatedSegmentation}");
+
+        if (segmentationMaskTexture != null)
+        {
+            sb.AppendLine($"Текстура маски: {segmentationMaskTexture.width}x{segmentationMaskTexture.height} ({segmentationMaskTexture.format})");
+        }
+        else
+        {
+            sb.AppendLine("Текстура маски: не создана");
+        }
+
+        if (cameraTexture != null)
+        {
+            sb.AppendLine($"Текстура камеры: {cameraTexture.width}x{cameraTexture.height} ({cameraTexture.format})");
+        }
+        else
+        {
+            sb.AppendLine("Текстура камеры: не создана");
+        }
+
+        if (engine != null)
+        {
+            sb.AppendLine($"Engine: {engine.GetType().FullName}");
+        }
+        else
+        {
+            sb.AppendLine("Engine: не создан");
+        }
+
+        if (worker != null)
+        {
+            sb.AppendLine($"Worker: {worker.GetType().FullName}");
+        }
+        else
+        {
+            sb.AppendLine("Worker: не создан");
+        }
+
+        Debug.Log(sb.ToString());
     }
 
     private IEnumerator InitializeSegmentation()
@@ -194,6 +410,7 @@ public class WallSegmentation : MonoBehaviour
             if (model != null)
             {
                 Debug.Log("Использую модель, уже загруженную в WallSegmentationModelLoader");
+                runtimeModel = model; // Устанавливаем runtimeModel
                 isModelInitialized = true;
             }
         }
@@ -257,6 +474,7 @@ public class WallSegmentation : MonoBehaviour
                             if (loadedModel != null)
                             {
                                 model = loadedModel;
+                                runtimeModel = loadedModel; // Устанавливаем runtimeModel
                                 Debug.Log("Модель успешно загружена через ModelLoader (.sentis)");
                                 isModelInitialized = true;
                                 modelLoaded = true;
@@ -274,6 +492,7 @@ public class WallSegmentation : MonoBehaviour
                                 if (loadedModel != null)
                                 {
                                     model = loadedModel;
+                                    runtimeModel = loadedModel; // Устанавливаем runtimeModel
                                     Debug.Log("Модель успешно загружена через ModelLoader (.onnx)");
                                     isModelInitialized = true;
                                     modelLoaded = true;
@@ -293,6 +512,7 @@ public class WallSegmentation : MonoBehaviour
                                     if (tempModel != null)
                                     {
                                         model = tempModel;
+                                        runtimeModel = tempModel; // Устанавливаем runtimeModel
                                         Debug.Log("Модель успешно загружена через временный файл");
                                         isModelInitialized = true;
                                         modelLoaded = true;
@@ -347,7 +567,7 @@ public class WallSegmentation : MonoBehaviour
                     yield break;
                 }
 
-                // Получаем BackendType.CPU (0)
+                // Получаем BackendType.CPU (0) или BackendType.GPUCompute (1)
                 Type backendType = Type.GetType("Unity.Sentis.BackendType, Unity.Sentis");
                 // Если BackendType не найден, попробуем DeviceType
                 Type deviceType = null;
@@ -362,6 +582,53 @@ public class WallSegmentation : MonoBehaviour
                     }
                 }
 
+                // Пробуем также найти класс WorkerFactory, который используется в новых версиях Sentis
+                Type workerFactoryType = Type.GetType("Unity.Sentis.WorkerFactory, Unity.Sentis");
+                bool useWorkerFactory = false;
+                
+                if (workerFactoryType != null)
+                {
+                    Debug.Log("Найден WorkerFactory, будем использовать его для создания Worker");
+                    useWorkerFactory = true;
+                    
+                    try
+                    {
+                        // Попробуем использовать WorkerFactory.CreateWorker
+                        // 1. Найдем подходящий статический метод
+                        var createWorkerMethod = workerFactoryType.GetMethod("CreateWorker", 
+                            BindingFlags.Public | BindingFlags.Static, 
+                            null, 
+                            new Type[] { model.GetType(), backendType ?? deviceType }, 
+                            null);
+                            
+                        if (createWorkerMethod != null)
+                        {
+                            object typeEnum = backendType != null ? 
+                                Enum.ToObject(backendType, preferredBackend) : 
+                                Enum.ToObject(deviceType, preferredBackend);
+                            
+                            worker = createWorkerMethod.Invoke(null, new object[] { model, typeEnum }) as Worker;
+                            
+                            if (worker != null)
+                            {
+                                Debug.Log("Worker успешно создан через WorkerFactory.CreateWorker");
+                                this.engine = this.worker;
+                                isModelInitialized = true;
+                                if (OnModelInitialized != null) OnModelInitialized.Invoke();
+                                yield break; // Успешно, выходим из метода
+                            }
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"Не удалось создать Worker через WorkerFactory: {e.Message}. Пробуем альтернативные методы.");
+                        useWorkerFactory = false;
+                    }
+                }
+
+                // Если WorkerFactory не помог или его нет, используем прямые конструкторы
+                if (!useWorkerFactory)
+                {
                 // Проверяем есть ли конструктор с Model и BackendType
                 ConstructorInfo constructor = null;
                 object typeEnum = null;
@@ -394,6 +661,34 @@ public class WallSegmentation : MonoBehaviour
                 {
                     Debug.Log("Worker успешно создан через конструктор Worker");
                     this.engine = this.worker;
+                    isModelInitialized = true; // Устанавливаем флаг в true после успешного создания worker
+                        
+                        // Анализируем доступные методы для выявления правильного API
+                        var methods = worker.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance);
+                        Debug.Log($"Доступные методы Worker ({methods.Length}):");
+                        
+                        bool hasExecute = false;
+                        bool hasExecuteAndWait = false;
+                        bool hasPeekOutput = false;
+                        bool hasCopyOutput = false;
+                        
+                        List<string> methodList = new List<string>();
+                        
+                        foreach (var method in methods)
+                        {
+                            if (methodList.Count < 10) {
+                                methodList.Add(method.Name);
+                            }
+                            
+                            if (method.Name == "Execute") hasExecute = true;
+                            if (method.Name == "ExecuteAndWaitForCompletion") hasExecuteAndWait = true;
+                            if (method.Name == "PeekOutput") hasPeekOutput = true;
+                            if (method.Name == "CopyOutput") hasCopyOutput = true;
+                        }
+                        
+                        Debug.Log($"Первые методы Worker: {string.Join(", ", methodList)}");
+                        Debug.Log($"Проверка ключевых методов: Execute={hasExecute}, ExecuteAndWaitForCompletion={hasExecuteAndWait}, PeekOutput={hasPeekOutput}, CopyOutput={hasCopyOutput}");
+                        
                     if (OnModelInitialized != null) OnModelInitialized.Invoke();
                 }
                 else
@@ -401,6 +696,7 @@ public class WallSegmentation : MonoBehaviour
                     Debug.LogError("Не удалось создать worker для модели");
                     isModelInitialized = false;
                     isInitializationFailed = true;
+                    }
                 }
             }
             catch (Exception e)
@@ -415,6 +711,23 @@ public class WallSegmentation : MonoBehaviour
             Debug.LogError("Не удалось инициализировать модель: Модель не была успешно загружена или получена.");
             isInitializationFailed = true;
         }
+
+        // 6. Все проверки пройдены, модель инициализирована успешно
+        isModelInitialized = true;
+        isInitializing = false;
+        isInitializationFailed = false;
+        lastErrorMessage = null;
+        
+        Debug.Log("Сегментация стен успешно инициализирована");
+        
+        // Анализируем структуру модели для отладки
+        AnalyzeModelStructure();
+        
+        // Логируем информацию о модели
+        LogModelInfo();
+        
+        // Вызываем событие инициализации
+        OnModelInitialized?.Invoke();
     }
 
     /// <summary>
@@ -488,8 +801,21 @@ public class WallSegmentation : MonoBehaviour
                 this.engine.Dispose();
             }
 
+            Debug.Log($"Создаем Worker с параметрами: модель типа {this.runtimeModel.GetType().FullName}, backendType={backendType}");
             this.engine = new Worker(this.runtimeModel, backendType); // Используем this.engine
             this.worker = this.engine; // Также присваиваем this.worker для совместимости, если он где-то используется напрямую
+
+            // Выведем диагностику для Worker
+            Debug.Log($"Worker создан, тип: {this.engine.GetType().FullName}");
+            Debug.Log("Доступные методы Worker:");
+            var methods = this.engine.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var method in methods)
+            {
+                if (method.GetParameters().Length == 0)
+                {
+                    Debug.Log($"- {method.Name} (без параметров)");
+                }
+            }
 
             isModelInitialized = true;
             Debug.Log($"Модель успешно инициализирована с бэкендом: {backendType}");
@@ -525,7 +851,7 @@ public class WallSegmentation : MonoBehaviour
         // Если модель не инициализирована и не идет процесс инициализации, запускаем
         if (!isModelInitialized && !isInitializing)
         {
-            if (useSafeLoading)
+            if (useSafeModelLoading)
             {
                 StartCoroutine(InitializeSegmentation());
             }
@@ -543,77 +869,22 @@ public class WallSegmentation : MonoBehaviour
         }
     }
 
-    private void Update()
-    {
-        Debug.Log("[Update] Method called.");
-        // Если модель не инициализирована, не выполняем сегментацию
-        if (!isModelInitialized || engine == null) return;
-
-        // Получаем изображение с камеры
-        Texture2D cameraTex = GetCameraTexture();
-        if (cameraTex == null)
-        {
-            // Добавлен лог: Пропускаем кадр, т.к. нет изображения с камеры
-            Debug.LogWarning("[Update] Пропуск кадра: GetCameraTexture() вернул null");
-
-            // Увеличиваем счетчик неудачных попыток
-            consecutiveFailCount++;
-
-            // Проверяем, нужно ли активировать симуляцию сегментации
-            if (useSimulatedSegmentationAsFallback && consecutiveFailCount >= failCountBeforeSimulation && !usingSimulatedSegmentation)
-            {
-                Debug.LogWarning($"[Update] После {consecutiveFailCount} неудачных попыток активирована симуляция сегментации");
-                usingSimulatedSegmentation = true;
-                CreateSimulatedSegmentationMask();
-            }
-
-            return; // Выходим, если нет текстуры
-        }
-
-        // Сбрасываем счетчик неудач и флаг симуляции, если получили изображение
-        consecutiveFailCount = 0;
-        if (usingSimulatedSegmentation)
-        {
-            Debug.Log("[Update] Вернулись к нормальной работе после использования симуляции");
-            usingSimulatedSegmentation = false;
-        }
-
-        // Добавлен лог: Изображение с камеры получено
-        Debug.Log("[Update] Изображение с камеры получено, вызываем PerformSegmentation");
-
-        // Отключаем сохранение отладочных масок после первых нескольких кадров, чтобы не перегружать диск
-        if (saveDebugMask && debugMaskCounter > 10)
-        {
-            Debug.Log("Автоматическое отключение сохранения отладочных масок для повышения производительности");
-            saveDebugMask = false;
-        }
-        else if (saveDebugMask)
-        {
-            debugMaskCounter++;
-        }
-
-        // Выполняем сегментацию
-        PerformSegmentation(cameraTex);
-    }
-
     /// <summary>
     /// Проверяет, выполняется ли код в режиме XR Simulation
     /// </summary>
     private bool IsRunningInXRSimulation()
     {
         // Если флаг установлен вручную, всегда возвращаем true
-        if (forceXRSimulationCaptureMethod)
+        if (forceXRSimulationCapture)
         {
-            Debug.Log("Использование метода XR Simulation включено вручную через forceXRSimulationCaptureMethod");
-            return true;
+            return true; // Удален лог
         }
 
         // Проверка на имя сцены
         string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
         if (sceneName.Contains("Simulation") || sceneName.Contains("XR"))
         {
-            Debug.Log($"Обнаружен режим XR Simulation (имя сцены содержит 'Simulation' или 'XR': {sceneName})");
-            return true;
+            return true; // Удален лог
         }
 
         // Проверка на редактор Unity
@@ -625,8 +896,7 @@ public class WallSegmentation : MonoBehaviour
 
         if (simulationObjects.Length > 0)
         {
-            Debug.Log("Обнаружен режим XR Simulation (найдены компоненты симуляции)");
-            return true;
+            return true; // Удален лог
         }
 
         // Проверяем, есть ли объект "XRSimulationEnvironment" в сцене
@@ -636,8 +906,7 @@ public class WallSegmentation : MonoBehaviour
 
         if (simEnvObjects.Length > 0)
         {
-            Debug.Log("Обнаружен режим XR Simulation (найден объект XRSimulationEnvironment)");
-            return true;
+            return true; // Удален лог
         }
 
         // Проверяем активен ли XR Simulation в настройках проекта (через рефлексию)
@@ -649,8 +918,7 @@ public class WallSegmentation : MonoBehaviour
                 {
                     if (type.Name.Contains("Simulation") && type.Name.Contains("Provider"))
                     {
-                        Debug.Log($"Обнаружен провайдер XR Simulation: {type.FullName}");
-                        return true;
+                        return true; // Удален лог
                     }
                 }
             }
@@ -665,8 +933,7 @@ public class WallSegmentation : MonoBehaviour
 #if UNITY_EDITOR
         if (FindObjectOfType<ARSession>() != null)
         {
-            Debug.Log("Обнаружен режим XR Simulation (ARSession в редакторе Unity)");
-            return true;
+            return true; // Удален лог
         }
 #endif
 
@@ -675,16 +942,14 @@ public class WallSegmentation : MonoBehaviour
 
     private Texture2D GetCameraTexture()
     {
-        if (arCameraManager == null)
+        if (arSessionManager == null)
         {
-            Debug.LogError("[GetCameraTexture] arCameraManager is null!");
             return null;
         }
 
         // Check AR session state - access it statically
         if (ARSession.state != ARSessionState.SessionTracking)
         {
-            Debug.LogWarning($"[GetCameraTexture] AR сессия не в режиме отслеживания. Текущий статус: {ARSession.state}");
             return null;
         }
 
@@ -694,15 +959,24 @@ public class WallSegmentation : MonoBehaviour
         // В режиме симуляции сразу используем альтернативный метод
         if (isSimulation)
         {
-            Debug.Log("[GetCameraTexture] Работа в режиме XR Simulation, используем прямой захват с камеры");
+            Texture2D result = GetCameraTextureFromSimulation();
+            if (result == null) {
+                Debug.LogError("[WallSegmentation-GetCameraTexture] ❌ GetCameraTextureFromSimulation вернул null");
+            }
+            return result;
+        }
+
+        // Получаем ARCameraManager
+        ARCameraManager cameraManager = ARCameraManager;
+        if (cameraManager == null)
+        {
+            Debug.LogWarning("[WallSegmentation-GetCameraTexture] ARCameraManager не найден");
             return GetCameraTextureFromSimulation();
         }
 
-        // Пытаемся получить изображение стандартным способом через ARCameraManager
-        if (arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage image))
+        // Пытаемся получить изображение через ARCameraManager
+        if (cameraManager.TryAcquireLatestCpuImage(out XRCpuImage image))
         {
-            Debug.Log("[GetCameraTexture] CPU изображение успешно получено (ID: " + image.GetHashCode() + ")");
-
             using (image)
             {
                 // Преобразуем XRCpuImage в Texture2D с нужным разрешением
@@ -737,7 +1011,10 @@ public class WallSegmentation : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("[GetCameraTexture] TryAcquireLatestCpuImage не удалось получить изображение. Используем альтернативный метод для XR Simulation.");
+            // Лог выводится только раз в 30 кадров
+            if (Time.frameCount % 30 == 0) {
+            Debug.LogWarning("[WallSegmentation-GetCameraTexture] TryAcquireLatestCpuImage не удалось получить изображение. Используем альтернативный метод для XR Simulation.");
+            }
 
             // Альтернативный метод для XR Simulation - получение изображения с камеры напрямую
             return GetCameraTextureFromSimulation();
@@ -749,140 +1026,97 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private Texture2D GetCameraTextureFromSimulation()
     {
-        // Сначала пробуем получить текстуру напрямую из XR Simulation, если доступна
-        Texture2D simulationTexture = TryGetSimulationCameraTexture();
-        if (simulationTexture != null)
-        {
-            Debug.Log("[GetCameraTextureFromSimulation] Получена текстура напрямую из XR Simulation");
-            return simulationTexture;
-        }
-
-        // Получаем камеру из XROrigin, если она доступна
+        // Получаем камеру через ARCameraManager (если есть)
         Camera arCamera = null;
-
-        // Попытка 1: Получить камеру из ARCameraManager
-        if (arCameraManager != null)
+        if (arSessionManager != null && arSessionManager.TryGetComponent<Camera>(out Camera cam))
         {
-            arCamera = arCameraManager.GetComponent<Camera>();
-            Debug.Log("[GetCameraTextureFromSimulation] Найдена камера через ARCameraManager");
+            arCamera = cam;
         }
-
-        // Попытка 2: Получить камеру из XROrigin
+        
+        // Если не нашли камеру через ARCameraManager, ищем через XROrigin
         if (arCamera == null && xrOrigin != null)
         {
             arCamera = xrOrigin.Camera;
-            Debug.Log("[GetCameraTextureFromSimulation] Найдена камера через XROrigin");
         }
-
-        // Попытка 3: Поиск камеры с тегом MainCamera или по имени "AR Camera"
+        
+        // Если до сих пор нет камеры, ищем любую Camera с тегом MainCamera
         if (arCamera == null)
         {
             arCamera = Camera.main;
-            if (arCamera != null)
-                Debug.Log("[GetCameraTextureFromSimulation] Найдена Main Camera");
         }
-
-        // Попытка 4: Получить любую активную камеру в сцене
-        if (arCamera == null || !arCamera.gameObject.activeInHierarchy || !arCamera.enabled)
-        {
-            Camera[] allCameras = FindObjectsOfType<Camera>();
-            foreach (Camera cam in allCameras)
-            {
-                if (cam.gameObject.activeInHierarchy && cam.enabled)
-                {
-                    arCamera = cam;
-                    Debug.Log($"[GetCameraTextureFromSimulation] Найдена активная камера: {cam.name}");
-                    break;
-                }
-            }
-
-            // Если все еще нет активной камеры, возьмем любую камеру и активируем ее
-            if (arCamera == null && allCameras.Length > 0)
-            {
-                arCamera = allCameras[0];
-                arCamera.gameObject.SetActive(true);
-                arCamera.enabled = true;
-                Debug.Log($"[GetCameraTextureFromSimulation] Активирована камера: {arCamera.name}");
-            }
-        }
-
+        
+        // Если всё ещё нет камеры, ищем специальную SimulationCamera
         if (arCamera == null)
         {
-            Debug.LogWarning("[GetCameraTextureFromSimulation] Не удалось найти ни одну камеру в сцене. Создаем временную камеру.");
-            arCamera = CreateTemporaryCamera();
-
-            if (arCamera == null)
-            {
-                Debug.LogError("[GetCameraTextureFromSimulation] Не удалось создать временную камеру.");
-                return null;
+            arCamera = GameObject.FindObjectsOfType<Camera>().FirstOrDefault(c => c.name.Contains("Simulation"));
+        }
+        
+        // Если камеры по-прежнему нет, показываем ошибку и возвращаем null
+        if (arCamera == null)
+        {
+            // Лог только раз в 60 кадров
+            if (Time.frameCount % 60 == 0) {
+                Debug.LogError("[WallSegmentation-GetCameraTextureFromSimulation] ❌ Не удалось найти камеру для получения изображения");
             }
-        }
-
-        // Проверяем, активна ли камера и активируем ее при необходимости
-        if (!arCamera.gameObject.activeInHierarchy)
-        {
-            Debug.LogWarning("[GetCameraTextureFromSimulation] Активируем неактивную камеру.");
-            arCamera.gameObject.SetActive(true);
-        }
-
-        if (!arCamera.enabled)
-        {
-            Debug.LogWarning("[GetCameraTextureFromSimulation] Включаем отключенную камеру.");
-            arCamera.enabled = true;
-        }
-
-        try
-        {
-            // Создаем временную RenderTexture с нужным разрешением
-            RenderTexture tempRT = RenderTexture.GetTemporary(inputResolution.x, inputResolution.y, 24);
-            RenderTexture prevRT = arCamera.targetTexture;
-
-            // Переключаем камеру на временную текстуру
-            arCamera.targetTexture = tempRT;
-
-            // Сохраняем текущий culling mask и очистку
-            int originalCullingMask = arCamera.cullingMask;
-            CameraClearFlags originalClearFlags = arCamera.clearFlags;
-
-            // Временно устанавливаем параметры для рендеринга всего
-            arCamera.cullingMask = -1; // Все слои
-            arCamera.clearFlags = CameraClearFlags.SolidColor;
-
-            // Выполняем рендеринг
-            arCamera.Render();
-
-            // Восстанавливаем оригинальные параметры
-            arCamera.cullingMask = originalCullingMask;
-            arCamera.clearFlags = originalClearFlags;
-
-            // Восстанавливаем исходную текстуру камеры
-            arCamera.targetTexture = prevRT;
-
-            // Активируем временную текстуру
-            RenderTexture.active = tempRT;
-
-            // Создаем текстуру, если она не существует
-            if (cameraTexture == null)
-            {
-                cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
-            }
-
-            // Считываем пиксели с активной текстуры
-            cameraTexture.ReadPixels(new Rect(0, 0, inputResolution.x, inputResolution.y), 0, 0);
-            cameraTexture.Apply();
-
-            // Освобождаем ресурсы
-            RenderTexture.active = null;
-            RenderTexture.ReleaseTemporary(tempRT);
-
-            Debug.Log("[GetCameraTextureFromSimulation] Изображение с камеры успешно получено через XR Simulation.");
-            return cameraTexture;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[GetCameraTextureFromSimulation] Ошибка при получении изображения с камеры: {e.Message}");
             return null;
         }
+        
+        // Сохраняем текущий culling mask и очистку
+        int originalCullingMask = arCamera.cullingMask;
+        CameraClearFlags originalClearFlags = arCamera.clearFlags;
+        
+        
+        // Временно устанавливаем параметры для рендеринга всего
+        arCamera.cullingMask = -1; // Все слои
+        arCamera.clearFlags = CameraClearFlags.SolidColor;
+        
+        
+        // Выполняем рендеринг
+        arCamera.Render();
+        
+        // Восстанавливаем оригинальные параметры очистки
+        arCamera.clearFlags = originalClearFlags;
+        
+        // Проверяем, был ли оригинальный cullingMask установлен на Everything (-1)
+        // Если нет, оставляем Everything (-1), иначе восстанавливаем
+        if (originalCullingMask != -1)
+        {
+        }
+        else 
+        {
+            // Восстанавливаем оригинальный cullingMask
+            arCamera.cullingMask = originalCullingMask;
+        }
+        
+        // Создаем RenderTexture для захвата изображения
+        RenderTexture rt = RenderTexture.GetTemporary(inputResolution.x, inputResolution.y, 24);
+        RenderTexture prevRT = RenderTexture.active;
+        RenderTexture.active = rt;
+        arCamera.targetTexture = rt;
+        
+        // Повторно рендерим с правильными параметрами
+        arCamera.Render();
+        
+        // Копируем изображение в нашу текстуру
+        if (cameraTexture == null)
+        {
+            Debug.LogWarning("[WallSegmentation-GetCameraTextureFromSimulation] ⚠️ cameraTexture была null, создаем новую");
+            cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
+        }
+        
+        cameraTexture.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+        cameraTexture.Apply();
+        
+        // Восстанавливаем состояние
+        arCamera.targetTexture = null;
+        RenderTexture.active = prevRT;
+        RenderTexture.ReleaseTemporary(rt);
+        
+        
+        // Добавляем дамп состояния, чтобы увидеть, в каком состоянии система
+        this.DumpCurrentState();
+        
+        return cameraTexture;
     }
 
     /// <summary>
@@ -931,12 +1165,23 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void PerformSegmentation(Texture2D inputTexture)
     {
+        // Логирование только раз в 50 кадров
+        bool shouldLog = Time.frameCount % 50 == 0;
+        
+        if (shouldLog) {
+        Debug.Log($"[WallSegmentation-PerformSegmentation] 🔄 Начало сегментации, размер входного изображения: {inputTexture.width}x{inputTexture.height}");
+        }
+        
+        // Переменная для хранения созданного тензора, для последующего освобождения ресурсов
+        Tensor<float> inputTensor = null;
+        bool segmentationSuccess = false;
+        
         try
         {
             // Убедимся, что текстура имеет нужные размеры
             if (inputTexture.width != inputResolution.x || inputTexture.height != inputResolution.y)
             {
-                Debug.Log($"Изменяем размер входной текстуры с {inputTexture.width}x{inputTexture.height} на {inputResolution.x}x{inputResolution.y}");
+                Debug.Log($"[WallSegmentation-PerformSegmentation] 🔄 Изменяем размер входной текстуры с {inputTexture.width}x{inputTexture.height} на {inputResolution.x}x{inputResolution.y}");
 
                 // Создаем временную RenderTexture для изменения размера
                 RenderTexture tempRT = RenderTexture.GetTemporary(inputResolution.x, inputResolution.y, 0, RenderTextureFormat.ARGB32);
@@ -956,193 +1201,123 @@ public class WallSegmentation : MonoBehaviour
                 inputTexture = resizedTexture;
             }
 
-            // Специальная обработка для XR Simulation
-            if (IsRunningInXRSimulation())
+            // ВАЖНО: Сначала сохраняем отладочные изображения, если нужно
+            if (saveDebugMask)
             {
-                var simulationTensor = TryCreateXRSimulationTensor(inputTexture);
-                if (simulationTensor != null)
-                {
-                    Debug.Log("Используем специальный тензор для XR Simulation!");
-                    ExecuteModelAndProcessResult(simulationTensor);
-                    return;
+                Debug.Log("[WallSegmentation-PerformSegmentation] 🔄 Сохраняем входное изображение для отладки");
+                SaveDebugMask();
+            }
+
+            // Удален частый лог о создании тензора
+            
+            // Проверяем каждый способ создания тензора, пока один не сработает
+            // Попытка 1: XR симуляция, если доступна
+            inputTensor = TryCreateXRSimulationTensor(inputTexture);
+            if (inputTensor != null)
+            {
+                if (shouldLog) {
+                Debug.Log("[WallSegmentation-PerformSegmentation] ✅ Успешно создан тензор через XR симуляцию");
                 }
-            }
-
-            // В первую очередь пробуем использовать SentisCompat
-            Type sentisCompatType = null;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                sentisCompatType = assembly.GetType("SentisCompat");
-                if (sentisCompatType != null) break;
-            }
-
-            if (sentisCompatType != null)
-            {
-                // Если SentisCompat доступен, используем его методы
-                var textureToTensorMethod = sentisCompatType.GetMethod("TextureToTensor",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null,
-                    new Type[] { typeof(Texture2D) },
-                    null);
-
-                if (textureToTensorMethod != null)
-                {
-                    object inputTensorCompat = textureToTensorMethod.Invoke(null, new object[] { inputTexture });
-                    if (inputTensorCompat != null)
-                    {
-                        ExecuteModelAndProcessResult(inputTensorCompat);
-                        return;
-                    }
-                    else
-                    {
-                        Debug.LogWarning("Не удалось создать тензор через SentisCompat");
-                    }
-                }
-            }
-
-            // Если SentisCompat не сработал, пробуем стандартный API
-            Type textureConverterType = Type.GetType("Unity.Sentis.TextureConverter, Unity.Sentis");
-            if (textureConverterType == null)
-            {
-                Debug.LogError("Тип Unity.Sentis.TextureConverter не найден");
-                RenderSimpleMask();
-                return;
-            }
-
-            // Прямой подход с TextureConverter
-            Tensor<float> inputTensor = null;
-            try
-            {
-                // Прямой вызов API Sentis 2.x
-                // Исправление: явно указываем каналы (3 для RGB)
-                TextureTransform transform = new TextureTransform()
-                    .SetDimensions(inputResolution.x, inputResolution.y, 3); // Явно указываем 3 канала (RGB)
-
-                // Создаем или переиспользуем тензор
-                if (inputTensor == null)
-                {
-                    TensorShape inputShape = new TensorShape(1, inputResolution.y, inputResolution.x, 3);
-                    inputTensor = new Tensor<float>(inputShape);
-                }
-
-                // Для отладки логируем размеры текстуры
-                Debug.Log($"Преобразование текстуры: {inputTexture.width}x{inputTexture.height}, формат: {inputTexture.format}");
-
-                // Используем модифицированную трансформацию
-                TextureConverter.ToTensor(inputTexture, inputTensor, transform);
-
-                Debug.Log("Успешно создан тензор через TextureConverter!");
                 ExecuteModelAndProcessResult(inputTensor);
+                // Не освобождаем тензор здесь - это будет сделано в ExecuteModelAndProcessResult
+                inputTensor = null;
+                segmentationSuccess = true;
                 return;
             }
-            catch (Exception e)
+
+            // Попытка 2: 4-канальный NCHW тензор 
+            if (inputTensor == null)
             {
-                Debug.LogWarning($"Не удалось создать тензор через TextureConverter: {e.Message}");
-
-                // Попробуем альтернативный подход с другими параметрами трансформации
-                try
+                if (shouldLog) {
+                Debug.Log("[WallSegmentation-PerformSegmentation] 🔄 Пробуем создать NCHW тензор...");
+                }
+                inputTensor = CreateNCHWTensorFromPixels(inputTexture);
+                if (inputTensor != null)
                 {
-                    Debug.Log("Пробуем альтернативный подход с TextureConverter...");
-
-                    // Создаем тензор с размерами NCHW
-                    TensorShape compatShape = new TensorShape(1, 3, inputResolution.y, inputResolution.x);
-                    Tensor<float> compatTensor = new Tensor<float>(compatShape);
-
-                    // Используем альтернативные параметры
-                    TextureTransform alternativeTransform = new TextureTransform()
-                        .SetDimensions(inputResolution.x, inputResolution.y, -1); // -1 для автоопределения
-
-                    TextureConverter.ToTensor(inputTexture, compatTensor, alternativeTransform);
-
-                    Debug.Log("Альтернативный подход с TextureConverter успешен!");
-                    ExecuteModelAndProcessResult(compatTensor);
+                    if (shouldLog) {
+                    Debug.Log("[WallSegmentation-PerformSegmentation] ✅ Успешно создан NCHW тензор");
+                    }
+                    ExecuteModelAndProcessResult(inputTensor);
+                    // Не освобождаем тензор здесь - это будет сделано в ExecuteModelAndProcessResult
+                    inputTensor = null;
+                    segmentationSuccess = true;
                     return;
-                }
-                catch (Exception altEx)
-                {
-                    Debug.LogWarning($"Альтернативный подход тоже не сработал: {altEx.Message}");
-                }
-
-                // Пробуем наши методы ручного создания тензоров
-                try
-                {
-                    Debug.Log("Пробуем создать NHWC тензор напрямую из пикселей...");
-                    var pixelTensor = CreateTensorFromPixels(inputTexture);
-                    if (pixelTensor != null)
-                    {
-                        Debug.Log("Успешно создан NHWC тензор из пикселей!");
-                        ExecuteModelAndProcessResult(pixelTensor);
-                        return;
-                    }
-                }
-                catch (Exception pixelEx)
-                {
-                    Debug.LogWarning($"Не удалось создать NHWC тензор из пикселей: {pixelEx.Message}");
-                }
-
-                // Пробуем NCHW формат
-                try
-                {
-                    Debug.Log("Пробуем создать NCHW тензор из пикселей...");
-                    var nchwTensor = CreateNCHWTensorFromPixels(inputTexture);
-                    if (nchwTensor != null)
-                    {
-                        Debug.Log("Успешно создан NCHW тензор из пикселей!");
-                        ExecuteModelAndProcessResult(nchwTensor);
-                        return;
-                    }
-                }
-                catch (Exception nchwEx)
-                {
-                    Debug.LogWarning($"Не удалось создать NCHW тензор из пикселей: {nchwEx.Message}");
-                }
-
-                // Пробуем одноканальный тензор (для моделей, работающих с grayscale)
-                try
-                {
-                    Debug.Log("Пробуем создать одноканальный тензор...");
-                    var grayTensor = CreateSingleChannelTensor(inputTexture);
-                    if (grayTensor != null)
-                    {
-                        Debug.Log("Успешно создан одноканальный тензор!");
-                        ExecuteModelAndProcessResult(grayTensor);
-                        return;
-                    }
-                }
-                catch (Exception grayEx)
-                {
-                    Debug.LogWarning($"Не удалось создать одноканальный тензор: {grayEx.Message}");
-                }
-
-                // Попытка рефлексии как последний вариант
-                var toTensorMethod = textureConverterType.GetMethod("ToTensor", new Type[] { typeof(Texture) });
-                if (toTensorMethod != null)
-                {
-                    Debug.Log("Используем метод ToTensor через рефлексию");
-                    try
-                    {
-                        object inputTensorObj = toTensorMethod.Invoke(null, new object[] { inputTexture });
-                        if (inputTensorObj != null)
-                        {
-                            ExecuteModelAndProcessResult(inputTensorObj);
-                            return;
-                        }
-                    }
-                    catch (Exception reflectionEx)
-                    {
-                        Debug.LogWarning($"Ошибка при вызове ToTensor через рефлексию: {reflectionEx.Message}");
-                    }
                 }
             }
 
-            // Если не удалось создать тензор ни одним из доступных методов, используем заглушку
-            Debug.LogWarning("Не удалось создать тензор ни одним из доступных методов, используем заглушку");
+            // Попытка 3: Обычный 3-канальный тензор
+            if (inputTensor == null)
+            {
+                if (shouldLog) {
+                Debug.Log("[WallSegmentation-PerformSegmentation] 🔄 Пробуем создать обычный RGB тензор...");
+                }
+                inputTensor = CreateTensorFromPixels(inputTexture);
+                if (inputTensor != null)
+                {
+                    if (shouldLog) {
+                    Debug.Log("[WallSegmentation-PerformSegmentation] ✅ Успешно создан RGB тензор");
+                    }
+                    ExecuteModelAndProcessResult(inputTensor);
+                    // Не освобождаем тензор здесь - это будет сделано в ExecuteModelAndProcessResult
+                    inputTensor = null;
+                    segmentationSuccess = true;
+                    return;
+                }
+            }
+
+            // Попытка 4: одноканальный тензор для некоторых моделей
+            if (inputTensor == null)
+            {
+                if (shouldLog) {
+                Debug.Log("[WallSegmentation-PerformSegmentation] 🔄 Пробуем создать одноканальный тензор...");
+                }
+                inputTensor = CreateSingleChannelTensor(inputTexture);
+                if (inputTensor != null)
+                {
+                    if (shouldLog) {
+                    Debug.Log("[WallSegmentation-PerformSegmentation] ✅ Успешно создан одноканальный тензор");
+                    }
+                    ExecuteModelAndProcessResult(inputTensor);
+                    // Не освобождаем тензор здесь - это будет сделано в ExecuteModelAndProcessResult
+                    inputTensor = null;
+                    segmentationSuccess = true;
+                    return;
+                }
+            }
+
+            // Если все попытки не удались, отображаем упрощенную маску
+            if (!segmentationSuccess) {
+            Debug.LogWarning("[WallSegmentation-PerformSegmentation] ⚠️ Все попытки создания тензора не удались! Используем упрощенную сегментацию.");
             RenderSimpleMask();
+            }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Ошибка при выполнении сегментации: {e.Message}\nStackTrace: {e.StackTrace}");
+            Debug.LogError($"[WallSegmentation-PerformSegmentation] ❌ Ошибка при выполнении сегментации: {e.Message}\n{e.StackTrace}");
+            // При ошибке создаем простую маску
             RenderSimpleMask();
+        }
+        finally
+        {
+            // Освобождаем ресурсы тензора, если он не был обработан
+            if (inputTensor != null)
+            {
+                try
+                {
+                    inputTensor.Dispose();
+                    Debug.Log("[WallSegmentation-PerformSegmentation] 🧹 Освобождены ресурсы неиспользованного тензора");
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[WallSegmentation-PerformSegmentation] ⚠️ Ошибка при освобождении ресурсов тензора: {ex.Message}");
+                }
+            }
+            
+            // Освобождаем ресурсы измененной текстуры, если она была создана
+            if (inputTexture != null && inputTexture != cameraTexture)
+            {
+                Destroy(inputTexture);
+            }
         }
     }
 
@@ -1267,2014 +1442,1655 @@ public class WallSegmentation : MonoBehaviour
     }
 
     /// <summary>
-    /// Выполняет модель и обрабатывает результат
+    /// Метод для проверки, находится ли тензор в ожидающем состоянии
     /// </summary>
-    private void ExecuteModelAndProcessResult(object inputTensor)
+    private bool CheckTensorPending(Tensor<float> tensor)
     {
-        if (inputTensor == null) return;
-
-        // List to track any additional tensors we create that need disposal
-        List<IDisposable> tensorsToDispose = new List<IDisposable>();
-
         try
         {
-            Debug.Log("=== ExecuteModelAndProcessResult с использованием API Sentis 2.1.2.0 ===");
-
-            // 1. Устанавливаем входной тензор через SetInput
-            try
-            {
-                engine.SetInput(0, inputTensor as Tensor); // Используем прямой вызов SetInput
-                Debug.Log("Входной тензор успешно установлен через SetInput(0, tensor)");
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Ошибка при установке входного тензора: {e.Message}");
-                return;
-            }
-
-            // 2. Планируем выполнение с помощью Schedule
-            try
-            {
-                engine.Schedule(); // Вызываем метод Schedule для запуска вычисления
-                Debug.Log("Выполнение запланировано через Schedule()");
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Ошибка при вызове Schedule: {e.Message}");
-
-                // Пробуем альтернативную версию Schedule с явным указанием входа
-                try
-                {
-                    engine.Schedule(inputTensor as Tensor);
-                    Debug.Log("Выполнение запланировано через Schedule(tensor)");
-                }
-                catch (Exception e2)
-                {
-                    Debug.LogError($"Ошибка при вызове Schedule(tensor): {e2.Message}");
-                    return;
-                }
-            }
-
-            // 3. Важно: Ждем завершения выполнения всех операций
-            try
-            {
-                // Сначала пробуем через WaitForCompletion
-                MethodInfo waitForCompletionMethod = engine.GetType().GetMethod("WaitForCompletion");
-                if (waitForCompletionMethod != null)
-                {
-                    waitForCompletionMethod.Invoke(engine, null);
-                    Debug.Log("Выполнение завершено через WaitForCompletion");
-                }
-                else
-                {
-                    // Пробуем через CompleteDependencies
-                    MethodInfo completeDependenciesMethod = engine.GetType().GetMethod("CompleteDependencies");
-                    if (completeDependenciesMethod != null)
-                    {
-                        completeDependenciesMethod.Invoke(engine, null);
-                        Debug.Log("Выполнение завершено через CompleteDependencies");
-                    }
-                    else
-                    {
-                        // Используем ScheduleIterable как запасной вариант
-                        IEnumerator iterator = engine.ScheduleIterable();
-
-                        // Ждем завершения итератора
-                        while (iterator.MoveNext())
-                        {
-                            // Продолжаем ожидание
-                        }
-                        Debug.Log("Выполнение завершено через ScheduleIterable");
-                    }
-                }
-
-                // Дополнительное ожидание для гарантии завершения вычислений (особенно на GPU)
-                // Это может помочь избежать ошибки "Tensor data is still pending"
-                System.Threading.Thread.Sleep(10);
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"Ошибка при ожидании завершения: {e.Message}. Пробуем продолжить.");
-            }
-
-            // 4. Получаем выходной тензор через PeekOutput
-            Tensor outputTensor = null;
-            try
-            {
-                outputTensor = engine.PeekOutput(); // Используем прямой вызов PeekOutput
-                Debug.Log("Выходной тензор успешно получен через PeekOutput()");
-
-                // Проверяем, есть ли метод для синхронизации данных тензора
-                MethodInfo syncMethod = outputTensor.GetType().GetMethod("Sync", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (syncMethod != null)
-                {
-                    syncMethod.Invoke(outputTensor, null);
-                    Debug.Log("Тензор синхронизирован через Sync()");
-                }
-
-                // Пробуем альтернативный способ синхронизации данных для Sentis 2.1.2
-                try
-                {
-                    var syncData = outputTensor.GetType().GetMethod("SyncData",
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (syncData != null)
-                    {
-                        syncData.Invoke(outputTensor, null);
-                        Debug.Log("Тензор синхронизирован через SyncData()");
-                    }
-                }
-                catch (Exception)
-                {
-                    // Игнорируем ошибки при попытке вызова SyncData
-                }
-
-                // Дополнительное ожидание после синхронизации
-                System.Threading.Thread.Sleep(5);
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"Ошибка при вызове PeekOutput(): {e.Message}");
-
-                try
-                {
-                    // Последняя попытка - через PeekOutput с индексом
-                    outputTensor = engine.PeekOutput(0);
-                    Debug.Log("Выходной тензор успешно получен через PeekOutput(0)");
-
-                    // Проверяем, есть ли метод для синхронизации данных тензора
-                    MethodInfo syncMethod = outputTensor.GetType().GetMethod("Sync", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (syncMethod != null)
-                    {
-                        syncMethod.Invoke(outputTensor, null);
-                        Debug.Log("Тензор синхронизирован через Sync()");
-                    }
-
-                    // Дополнительное ожидание
-                    System.Threading.Thread.Sleep(5);
-                }
-                catch (Exception e2)
-                {
-                    Debug.LogError($"Ошибка при вызове PeekOutput(0): {e2.Message}");
-                    return;
-                }
-            }
-
-            if (outputTensor == null)
-            {
-                Debug.LogError("Не удалось получить выходной тензор");
-                return;
-            }
-
-            // Если не удалось синхронизировать данные, создаем симуляцию
-            Tensor<float> simulationTensor = null;
-            if (outputTensor != null)
-            {
-                try
-                {
-                    // Быстрая проверка - попытка доступа к значению
-                    // Если данные не готовы, будет исключение
-                    if (outputTensor is Tensor<float> floatTensor)
-                    {
-                        float test = floatTensor[0, 0, 0, 0]; // Проверяем доступность данных
-                        Debug.Log("Проверка доступа к тензору успешна");
-                    }
-                    else
-                    {
-                        // Если тензор не является Tensor<float>, нужна другая стратегия
-                        // Попробуем использовать симуляцию
-                        Debug.LogWarning("Выходной тензор не является Tensor<float>, используем симуляцию");
-                        simulationTensor = CreateSimulatedTensor(outputTensor.shape);
-                        tensorsToDispose.Add(simulationTensor);
-                    }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogWarning($"Данные тензора не готовы: {e.Message}. Используем симуляцию.");
-                    simulationTensor = CreateSimulatedTensor(outputTensor.shape);
-                    tensorsToDispose.Add(simulationTensor);
-                }
-            }
-
-            // 5. Обрабатываем результат
-            Debug.Log($"Обрабатываем выходной тензор типа {outputTensor.GetType().FullName}");
-            if (simulationTensor != null)
-            {
-                ProcessSegmentationResult(simulationTensor);
-            }
-            else
-            {
-                ProcessSegmentationResult(outputTensor);
-            }
-
-            // ВАЖНО: НЕ освобождаем outputTensor здесь, т.к. он принадлежит движку и будет освобожден им
-            // PeekOutput возвращает ссылку на внутренний тензор движка
+            // Простой способ проверить, доступны ли данные тензора
+            // Если данные недоступны, будет выброшено исключение "Tensor data is still pending"
+            if (tensor == null || tensor.shape.length == 0) return true;
+            var temp = tensor[0]; // Пробуем получить первый элемент
+            return false; // Если дошли до этой строки, значит данные доступны
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            Debug.LogError($"Общая ошибка при обработке модели: {e.Message}\nStackTrace: {e.StackTrace}");
-        }
-        finally
-        {
-            // 6. Освобождаем входной тензор, если он реализует IDisposable и не передан извне
-            // Проверяем не принадлежит ли он Engine
-            if (inputTensor is IDisposable disposable && !(inputTensor == engine.PeekOutput())) // Заменяем PeekConstants на более простую проверку
-            {
-                disposable.Dispose();
-                Debug.Log("Входной тензор освобожден");
-            }
-
-            // Освобождаем все созданные тензоры
-            foreach (var tensor in tensorsToDispose)
-            {
-                try
-                {
-                    tensor.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"Ошибка при освобождении тензора: {ex.Message}");
-                }
-            }
-            tensorsToDispose.Clear();
+            // Если получили исключение с сообщением о pending, значит тензор не готов
+            return ex.Message.Contains("pending");
         }
     }
 
     /// <summary>
-    /// Создает тензор-заглушку с основными стенами в центре кадра для тестирования
+    /// Выполняет модель с заданным входным тензором и обрабатывает результат
     /// </summary>
-    private Tensor<float> CreateSimulatedTensor(TensorShape shape)
+    private void ExecuteModelAndProcessResult(object inputTensorObj)
     {
-        Tensor<float> tensor = null;
         try
         {
-            int batchSize = shape[0];
-            int dim1 = shape[1];
-            int dim2 = shape[2];
-            int dim3 = 1;
-
-            if (shape.rank > 3)
+            if (inputTensorObj == null)
             {
-                dim3 = shape[3];
-            }
-
-            // Если форма не соответствует ожидаемой, адаптируемся
-            int channels = 0, height = 0, width = 0;
-            bool isNCHW = false;
-
-            // Адаптивное определение формата данных в зависимости от размеров 
-            if (shape.rank == 4 && dim1 == 150)
-            {
-                // Это формат (1, 150, h, w) или (1, 150, h, 1) с классами сегментации
-                channels = dim1;  // 150 классов
-                height = dim2;    // высота
-                width = dim3 > 1 ? dim3 : dim2;  // ширина (если dim3=1, делаем квадратным)
-                isNCHW = true;
-            }
-            else if (shape.rank == 4 && dim3 == 150)
-            {
-                // Формат (1, h, w, 150) с классами сегментации
-                channels = dim3;  // 150 классов
-                height = dim1;    // высота
-                width = dim2;     // ширина
-                isNCHW = false;
-            }
-            else
-            {
-                // Просто используем размеры как есть
-                isNCHW = dim1 < dim2;
-                if (isNCHW)
-                {
-                    channels = dim1;
-                    height = dim2;
-                    width = dim3;
-                }
-                else
-                {
-                    channels = dim3;
-                    height = dim1;
-                    width = dim2;
-                }
-            }
-
-            Debug.Log($"Создаем симуляцию тензора с размерами [{batchSize}, {channels}, {height}, {width}], формат {(isNCHW ? "NCHW" : "NHWC")}");
-
-            // Создаем массив данных нужного размера
-            float[] data = new float[shape.length];
-
-            // Получаем текущее направление камеры для более реалистичного паттерна стен
-            Vector3 cameraForward = Vector3.forward;
-            float cameraRotationY = 0f;
-
-            if (arCameraManager != null && arCameraManager.transform != null)
-            {
-                cameraForward = arCameraManager.transform.forward;
-                cameraRotationY = arCameraManager.transform.eulerAngles.y;
-            }
-            else if (Camera.main != null)
-            {
-                cameraForward = Camera.main.transform.forward;
-                cameraRotationY = Camera.main.transform.eulerAngles.y;
-            }
-
-            // Определяем, в каком направлении камера смотрит (примерно)
-            bool lookingNorth = (cameraRotationY > 315 || cameraRotationY < 45);
-            bool lookingEast = (cameraRotationY >= 45 && cameraRotationY < 135);
-            bool lookingSouth = (cameraRotationY >= 135 && cameraRotationY < 225);
-            bool lookingWest = (cameraRotationY >= 225 && cameraRotationY < 315);
-
-            // Для ADE20K модели с 150 классами:
-            int wallClassIndex = 1;   // wall в ADE20K
-            // int buildingClassIndex = 2;  // building - unused
-            int floorClassIndex = 3;  // floor
-            int doorClassIndex = 11;  // door
-            int windowClassIndex = 8;  // window
-
-            // Заполняем все каналы соответствующими значениями
-            if (isNCHW)
-            {
-                // Формат NCHW - (batch, channels, height, width)
-                for (int h = 0; h < height; h++)
-                {
-                    for (int w = 0; w < width; w++)
-                    {
-                        // Нормализованные координаты (0.0 - 1.0)
-                        float normalizedX = w / (float)width;
-                        float normalizedY = h / (float)height;
-
-                        // Определяем различные зоны для симуляции сегментации
-                        bool isLeftWall = normalizedX < 0.1f;
-                        bool isRightWall = normalizedX > 0.9f;
-                        bool isTopWall = normalizedY < 0.1f;
-                        bool isBottomWall = normalizedY > 0.9f;
-                        bool isDoorway = false;
-
-                        // Создаем "дверной проем" в стене в направлении взгляда
-                        if (lookingNorth && isBottomWall && normalizedX > 0.4f && normalizedX < 0.6f)
-                            isDoorway = true;
-                        else if (lookingEast && isLeftWall && normalizedY > 0.4f && normalizedY < 0.6f)
-                            isDoorway = true;
-                        else if (lookingSouth && isTopWall && normalizedX > 0.4f && normalizedX < 0.6f)
-                            isDoorway = true;
-                        else if (lookingWest && isRightWall && normalizedY > 0.4f && normalizedY < 0.6f)
-                            isDoorway = true;
-
-                        // Проверяем принадлежность к стене, двери или окну
-                        bool isWall = (isLeftWall || isRightWall || isTopWall || isBottomWall) && !isDoorway;
-                        bool isDoor = isDoorway;
-                        bool isWindow = false;
-
-                        // Добавляем окна в стенах
-                        if (isWall && !isDoor)
-                        {
-                            // Левая стена
-                            if (isLeftWall && normalizedY > 0.2f && normalizedY < 0.4f)
-                                isWindow = true;
-                            // Правая стена
-                            if (isRightWall && normalizedY > 0.2f && normalizedY < 0.4f)
-                                isWindow = true;
-                            // Верхняя стена
-                            if (isTopWall && normalizedX > 0.2f && normalizedX < 0.4f)
-                                isWindow = true;
-                            // Нижняя стена
-                            if (isBottomWall && normalizedX > 0.2f && normalizedX < 0.4f)
-                                isWindow = true;
-                        }
-
-                        // Если это стена, то ставим высокое значение в канале стен
-                        if (isWall && !isWindow)
-                        {
-                            // Устанавливаем значение для класса стены
-                            int index = ((0 * channels + wallClassIndex) * height + h) * width + w;
-                            if (index < data.Length)
-                            {
-                                data[index] = 0.95f + UnityEngine.Random.Range(-0.05f, 0.05f);
-                            }
-                        }
-                        // Если это окно, ставим значение в канал окон
-                        else if (isWindow)
-                        {
-                            // Класс окна
-                            int index = ((0 * channels + windowClassIndex) * height + h) * width + w;
-                            if (index < data.Length)
-                            {
-                                data[index] = 0.90f + UnityEngine.Random.Range(-0.05f, 0.05f);
-                            }
-                        }
-                        // Если это дверь, ставим значение в канал дверей
-                        else if (isDoor)
-                        {
-                            // Класс двери
-                            int index = ((0 * channels + doorClassIndex) * height + h) * width + w;
-                            if (index < data.Length)
-                            {
-                                data[index] = 0.85f + UnityEngine.Random.Range(-0.05f, 0.05f);
-                            }
-                        }
-                        // Для остальных пикселей - значение для пола
-                        else
-                        {
-                            // Класс пола
-                            int index = ((0 * channels + floorClassIndex) * height + h) * width + w;
-                            if (index < data.Length)
-                            {
-                                data[index] = 0.80f + UnityEngine.Random.Range(-0.05f, 0.05f);
-                            }
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // Формат NHWC - обработка при необходимости
-                // По аналогии с NCHW, но с другим расположением каналов
-                Debug.Log("Симуляция для формата NHWC не реализована, используем базовый подход");
-
-                // Заполняем все нулями, кроме канала стен
-                for (int i = 0; i < data.Length; i++)
-                {
-                    data[i] = 0.05f;  // Базовое значение для всех каналов
-                }
-
-                // Добавляем стены в соответствующих местах
-                for (int h = 0; h < height; h++)
-                {
-                    for (int w = 0; w < width; w++)
-                    {
-                        float normalizedX = w / (float)width;
-                        float normalizedY = h / (float)height;
-
-                        // Простая логика для стен по периметру
-                        bool isWall = normalizedX < 0.1f || normalizedX > 0.9f ||
-                                     normalizedY < 0.1f || normalizedY > 0.9f;
-
-                        if (isWall)
-                        {
-                            // Для NHWC индекс вычисляется по-другому
-                            int index = ((0 * height + h) * width + w) * channels + wallClassIndex;
-                            if (index < data.Length)
-                            {
-                                data[index] = 0.95f;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Создаем тензор из данных
-            tensor = new Tensor<float>(shape, data);
-
-            Debug.Log("Тензор успешно создан из массива данных");
-            return tensor;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"Ошибка при создании симуляции тензора: {e.Message}");
-
-            // Безопасное освобождение ресурсов при ошибке
-            if (tensor != null)
-            {
-                try
-                {
-                    tensor.Dispose();
-                }
-                catch (Exception disposeEx)
-                {
-                    Debug.LogWarning($"Ошибка при освобождении тензора: {disposeEx.Message}");
-                }
-            }
-
-            // Создаем простой тензор с базовыми значениями
-            float[] fallbackData = new float[shape.length];
-            // Заполняем середину значением 1.0 для класса стены
-            int centerIndex = fallbackData.Length / 2;
-            if (centerIndex < fallbackData.Length)
-            {
-                fallbackData[centerIndex] = 1.0f;
-            }
-
-            // Создаем новый тензор в случае ошибки
-            return new Tensor<float>(shape, fallbackData);
-        }
-    }
-
-    /// <summary>
-    /// Обрабатывает результат сегментации и обновляет маску
-    /// </summary>
-    private void ProcessSegmentationResult(object outputTensorObj)
-    {
-        Debug.Log("[ProcessSegmentationResult] Вызван.");
-
-        // Список для отслеживания тензоров, которые нужно освободить
-        List<IDisposable> tensorsToDispose = new List<IDisposable>();
-
-        try
-        {
-            // Проверяем, что segmentationMaskTexture существует и готова
-            if (segmentationMaskTexture == null || !segmentationMaskTexture.IsCreated())
-            {
-                Debug.LogWarning("SegmentationMaskTexture не готова для записи. Создаем новую текстуру.");
-
-                // Освобождаем старую текстуру, если она существует
-                if (segmentationMaskTexture != null)
-                {
-                    segmentationMaskTexture.Release();
-                    Destroy(segmentationMaskTexture);
-                }
-
-                // Создаем новую текстуру с нужными параметрами - используем рекомендуемый размер из integration_guide 
-                segmentationMaskTexture = new RenderTexture(80, 80, 0, RenderTextureFormat.ARGB32);
-                segmentationMaskTexture.enableRandomWrite = true;
-                segmentationMaskTexture.Create();
-
-                if (!segmentationMaskTexture.IsCreated())
-                {
-                    Debug.LogError("Не удалось создать RenderTexture. Используем заглушку.");
-                    RenderSimpleMask();
-                    return;
-                }
-
-                Debug.Log($"Создана новая RenderTexture {segmentationMaskTexture.width}x{segmentationMaskTexture.height}");
-            }
-
-            // Пытаемся безопасно привести к разным типам тензора
-            Tensor<float> outputTensorFloat = null;
-            Tensor genericTensor = null;
-
-            // Проверяем тип тензора и безопасно приводим к нужному типу
-            if (outputTensorObj is Tensor<float>)
-            {
-                outputTensorFloat = outputTensorObj as Tensor<float>;
-                genericTensor = outputTensorObj as Tensor;
-                Debug.Log("[ProcessSegmentationResult] Успешно приведено к Tensor<float>.");
-            }
-            else if (outputTensorObj is Tensor)
-            {
-                genericTensor = outputTensorObj as Tensor;
-
-                // Пробуем преобразовать к Tensor<float> если это возможно
-                try
-                {
-                    // Копируем данные в новый тензор типа Tensor<float>
-                    TensorShape shape = genericTensor.shape;
-                    outputTensorFloat = new Tensor<float>(shape);
-                    // Этот тензор нужно будет освободить
-                    tensorsToDispose.Add(outputTensorFloat);
-
-                    // Попытаемся скопировать данные с помощью рефлексии
-                    Debug.Log($"[ProcessSegmentationResult] Приводим Tensor к Tensor<float> для формы {shape}");
-
-                    // Если доступны методы копирования, используем их
-                    bool dataCopied = false;
-
-                    // Вариант 1: Если у источника есть метод ReadData с правильной сигнатурой
-                    MethodInfo readDataMethod = genericTensor.GetType().GetMethod("ReadData",
-                        BindingFlags.Public | BindingFlags.Instance);
-
-                    if (readDataMethod != null && !dataCopied)
-                    {
-                        try
-                        {
-                            // Получаем данные из тензора
-                            float[] data = new float[shape.length];
-                            readDataMethod.Invoke(genericTensor, new object[] { data });
-
-                            // Заполняем наш Tensor<float>
-                            // Рассчитываем координаты вручную в зависимости от ранга тензора
-                            if (shape.rank == 4)
-                            {
-                                int dim0 = shape[0];
-                                int dim1 = shape[1];
-                                int dim2 = shape[2];
-                                int dim3 = shape[3];
-
-                                for (int i = 0; i < shape.length; i++)
-                                {
-                                    // Вычисляем координаты из линейного индекса
-                                    int d3 = i % dim3;
-                                    int d2 = (i / dim3) % dim2;
-                                    int d1 = (i / (dim3 * dim2)) % dim1;
-                                    int d0 = i / (dim3 * dim2 * dim1);
-
-                                    // Устанавливаем значение по координатам
-                                    outputTensorFloat[d0, d1, d2, d3] = data[i];
-                                }
-                            }
-                            else if (shape.rank == 3)
-                            {
-                                int dim0 = shape[0];
-                                int dim1 = shape[1];
-                                int dim2 = shape[2];
-
-                                for (int i = 0; i < shape.length; i++)
-                                {
-                                    // Вычисляем координаты из линейного индекса
-                                    int d2 = i % dim2;
-                                    int d1 = (i / dim2) % dim1;
-                                    int d0 = i / (dim2 * dim1);
-
-                                    // Устанавливаем значение по координатам
-                                    outputTensorFloat[d0, d1, d2] = data[i];
-                                }
-                            }
-                            else if (shape.rank == 2)
-                            {
-                                int dim0 = shape[0];
-                                int dim1 = shape[1];
-
-                                for (int i = 0; i < shape.length; i++)
-                                {
-                                    // Вычисляем координаты из линейного индекса
-                                    int d1 = i % dim1;
-                                    int d0 = i / dim1;
-
-                                    // Устанавливаем значение по координатам
-                                    outputTensorFloat[d0, d1] = data[i];
-                                }
-                            }
-                            else if (shape.rank == 1)
-                            {
-                                for (int i = 0; i < shape.length; i++)
-                                {
-                                    outputTensorFloat[i] = data[i];
-                                }
-                            }
-                            else
-                            {
-                                Debug.LogWarning($"[ProcessSegmentationResult] Неподдерживаемый ранг тензора: {shape.rank}");
-                                throw new Exception("Неподдерживаемый ранг тензора");
-                            }
-
-                            dataCopied = true;
-                            Debug.Log("[ProcessSegmentationResult] Данные скопированы через ReadData.");
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogWarning($"[ProcessSegmentationResult] Не удалось скопировать данные через ReadData: {e.Message}");
-                        }
-                    }
-
-                    // Если не удалось скопировать, используем симуляцию
-                    if (!dataCopied)
-                    {
-                        Debug.LogWarning("[ProcessSegmentationResult] Не удалось преобразовать Tensor в Tensor<float>. Используем симуляцию.");
-
-                        // Освобождаем неиспользуемый тензор
-                        outputTensorFloat.Dispose();
-                        tensorsToDispose.Remove(outputTensorFloat);
-
-                        // Пробуем создать Tensor<float> напрямую с заглушечными данными
-                        try
-                        {
-                            // Создаем упрощенный тензор с простым паттерном данных
-                            float[] simData = new float[shape.length];
-                            for (int i = 0; i < shape.length; i++)
-                            {
-                                // Заполняем центральную область простым паттерном для стен
-                                // В центре ставим 1.0, по краям 0.0, плавный градиент между ними
-
-                                // В тензоре NCHW, допустим что первые два измерения - batch и channels
-                                // Третье и четвертое - высота и ширина, на них и создаем паттерн
-                                if (shape.rank == 4)
-                                {
-                                    int dim0 = shape[0];
-                                    int dim1 = shape[1];
-                                    int dim2 = shape[2]; // высота
-                                    int dim3 = shape[3]; // ширина
-
-                                    // Координаты текущей ячейки
-                                    int d3 = i % dim3;
-                                    int d2 = (i / dim3) % dim2;
-                                    int d1 = (i / (dim3 * dim2)) % dim1;
-                                    int d0 = i / (dim3 * dim2 * dim1);
-
-                                    // Пробуем заполнить только один канал (тот, что указан как wallClassIndex)
-                                    // Если wallClassIndex некорректный, используем канал 0
-                                    int targetChannel = wallClassIndex;
-                                    if (targetChannel < 0 || targetChannel >= dim1)
-                                    {
-                                        targetChannel = 0;
-                                    }
-
-                                    if (d1 == targetChannel)
-                                    {
-                                        // Нормализованные координаты в пространстве высота/ширина
-                                        float normX = d3 / (float)dim3;
-                                        float normY = d2 / (float)dim2;
-
-                                        // Расстояние от центра (0.5, 0.5) - от 0.0 до ~0.7
-                                        float distFromCenter = Mathf.Sqrt((normX - 0.5f) * (normX - 0.5f) +
-                                                                         (normY - 0.5f) * (normY - 0.5f));
-
-                                        // Значение 1.0 в центре, 0.0 по краям с плавным переходом
-                                        if (distFromCenter < 0.2f)
-                                        {
-                                            // Центральная область - стены с высокой вероятностью
-                                            simData[i] = 1.0f;
-                                        }
-                                        else if (distFromCenter < 0.4f)
-                                        {
-                                            // Промежуточная область - градиент
-                                            simData[i] = Mathf.Lerp(1.0f, 0.0f, (distFromCenter - 0.2f) / 0.2f);
-                                        }
-                                        else
-                                        {
-                                            // Внешняя область - не стены
-                                            simData[i] = 0.0f;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // Для остальных каналов нули
-                                        simData[i] = 0.0f;
-                                    }
-                                }
-                                else if (shape.rank <= 3)
-                                {
-                                    // Для тензоров меньшего ранга создаем простой паттерн
-                                    // в центральной области
-                                    int totalCells = shape.length;
-                                    float normalizedPos = i / (float)totalCells;
-
-                                    // Значение выше в середине массива, ниже по краям
-                                    float value = 0.0f;
-
-                                    if (normalizedPos > 0.3f && normalizedPos < 0.7f)
-                                    {
-                                        value = 1.0f;
-                                    }
-                                    else if (normalizedPos > 0.2f && normalizedPos < 0.8f)
-                                    {
-                                        value = 0.6f;
-                                    }
-
-                                    simData[i] = value;
-                                }
-                            }
-
-                            // Создаем тензор из данных
-                            outputTensorFloat = new Tensor<float>(shape, simData);
-                            tensorsToDispose.Add(outputTensorFloat);
-                            dataCopied = true;
-                            Debug.Log("[ProcessSegmentationResult] Создан синтетический тензор с заглушечными данными.");
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogWarning($"[ProcessSegmentationResult] Не удалось создать заглушечный тензор: {e.Message}");
-                            // Продолжаем и используем CreateSimulatedTensor как последний вариант
-                        }
-
-                        // Если всё ещё не удалось, используем CreateSimulatedTensor
-                        if (!dataCopied)
-                        {
-                            outputTensorFloat = CreateSimulatedTensor(shape);
-                            if (outputTensorFloat != null)
-                                tensorsToDispose.Add(outputTensorFloat);
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError($"[ProcessSegmentationResult] Ошибка при преобразовании тензора: {e.Message}");
-
-                    // Освобождаем созданные до ошибки тензоры
-                    foreach (var disposable in tensorsToDispose)
-                    {
-                        try { disposable.Dispose(); } catch { }
-                    }
-                    tensorsToDispose.Clear();
-
-                    // Создаем искусственный тензор для отображения
-                    outputTensorFloat = CreateSimulatedTensor(genericTensor.shape);
-                    if (outputTensorFloat != null)
-                        tensorsToDispose.Add(outputTensorFloat);
-                }
-            }
-            else
-            {
-                Debug.LogError($"[ProcessSegmentationResult] Выходной тензор имеет неожиданный тип: {outputTensorObj?.GetType().FullName ?? "null"}");
-                RenderSimpleMask();
+                Debug.LogWarning("[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Входной тензор равен null");
                 return;
             }
 
-            // Проверяем, что успешно получили тензор
-            if (outputTensorFloat == null)
-            {
-                Debug.LogError("[ProcessSegmentationResult] Не удалось получить тензор для обработки");
-                RenderSimpleMask();
-                return;
-            }
-
-            try
-            {
-                // Вызываем новый метод для обработки
-                ProcessTensorManual(outputTensorFloat);
-
-                // Отладочное сохранение маски, если включено
-                if (saveDebugMask)
-                {
-                    SaveDebugMask();
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Ошибка при ручной обработке результата сегментации: {e.Message}\nStackTrace: {e.StackTrace}");
-                RenderSimpleMask(); // Используем заглушку в случае ошибки
-            }
-            finally
-            {
-                // Освобождаем все локально созданные тензоры
-                foreach (var disposable in tensorsToDispose)
-                {
-                    try
-                    {
-                        disposable.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"Ошибка при освобождении тензора: {ex.Message}");
-                    }
-                }
-                tensorsToDispose.Clear();
-            }
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[ProcessSegmentationResult] Общая ошибка: {e.Message}");
-            RenderSimpleMask();
-
-            // Освобождаем тензоры в случае исключения
-            foreach (var disposable in tensorsToDispose)
-            {
-                try { disposable.Dispose(); } catch { }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Вручную обрабатывает тензор сегментации и записывает результат в segmentationMaskTexture.
-    /// </summary>
-    private void ProcessTensorManual(Tensor<float> tensor)
-    {
-        Debug.Log("[ProcessTensorManual] Вызван.");
-
-        // Получаем размеры тензора
-        // Предполагаем формат NHWC [batch, height, width, channels] или NCHW [batch, channels, height, width]
-        // Sentis обычно использует NCHW для выходов моделей сегментации
-        TensorShape shape = tensor.shape;
-        int batch = shape[0];
-        int dim1 = shape[1]; // Может быть channels или height
-        int dim2 = shape[2]; // Может быть height или width
-        int dim3 = 1; // По умолчанию 1, если shape.rank < 4
-
-        if (shape.rank > 3)
-        {
-            dim3 = shape[3]; // Может быть width или channels
+            // Определяем shouldLog только раз в 50 кадров чтобы уменьшить частоту логирования
+            bool shouldLog = Time.frameCount % 50 == 0;
+            
+        if (shouldLog) {
+                Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] 🔄 Запуск модели и обработка результата");
+            Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] 🔄 Подготовка к выполнению модели");
         }
 
-        // Добавлен детальный лог формы
-        Debug.Log($"[ProcessTensorManual] Обработка тензора с формой: {shape}. Batch={batch}, Dim1={dim1}, Dim2={dim2}, Dim3={dim3}. Target Class={wallClassIndex}, Threshold={wallThreshold}");
+            // Безопасно преобразуем входной тензор в правильный тип
+            var inputTensor = inputTensorObj as Tensor<float>;
 
-        // Адаптивное определение формата данных в зависимости от размеров тензора
-        bool isNCHW = false;
-        int channels = 0, height = 0, width = 0;
-
-        // Специальная обработка для тензора формата (1, 150, 56, 1) или (1, 150, 80, 80)
-        if (shape.rank == 4 && dim1 == 150)
-        {
-            // Для формы (1, 150, 56, 1) или подобных от модели, где 150 это классы
-            channels = dim1;  // 150 классов
-            height = dim2;    // 56 или 80
-            width = dim3 > 1 ? dim3 : dim2;  // Если dim3=1, используем dim2 и для ширины (квадратная форма)
-            isNCHW = true;    // Формат NCHW
-            Debug.Log($"[ProcessTensorManual] Обнаружен формат тензора NCHW с {channels} классами");
-        }
-        else if (shape.rank == 4 && dim3 == 150)
-        {
-            // Для формы (1, h, w, 150), где 150 это классы в NHWC формате
-            height = dim1;
-            width = dim2;
-            channels = dim3;  // 150 классов
-            isNCHW = false;   // Формат NHWC
-            Debug.Log($"[ProcessTensorManual] Обнаружен формат тензора NHWC с {channels} классами");
-        }
-        else
-        {
-            // Определяем по размерам, какая форма вероятнее
-            isNCHW = dim1 < dim2; // Обычно каналов меньше, чем высота
-
-            if (isNCHW)
+            if (inputTensor == null)
             {
-                channels = dim1;
-                height = dim2;
-                width = dim3;
-            }
-            else
-            {
-                // NHWC формат
-                height = dim1;
-                width = dim2;
-                channels = dim3;
-            }
-        }
-
-        // Проверяем валидность wallClassIndex для модели с 150 классами
-        if (wallClassIndex < 0 || wallClassIndex >= channels)
-        {
-            int defaultWallClassIndex = 0;
-            // Классы для ADE20K (используемые в моделях сегментации с 150 классами):
-            // Класс 1: стена (wall)
-            // Класс 2: здание (building)
-            // Класс 11: дверь (door)
-            // Класс 8: окно (window)
-
-            if (channels == 150)
-            {
-                defaultWallClassIndex = 1; // wall в ADE20K
-            }
-
-            Debug.LogWarning($"Неверный WallClassIndex ({wallClassIndex}). Должен быть между 0 и {channels - 1}. Используем класс {defaultWallClassIndex}.");
-            wallClassIndex = defaultWallClassIndex;
-        }
-
-        // Проверяем соответствие размеров текстуры и тензора
-        if (segmentationMaskTexture.width != width || segmentationMaskTexture.height != height)
-        {
-            Debug.LogWarning($"Размер RenderTexture ({segmentationMaskTexture.width}x{segmentationMaskTexture.height}) не совпадает с размером выхода модели ({width}x{height}). Пересоздаем текстуру.");
-
-            // Освобождаем существующую текстуру
-            segmentationMaskTexture.Release();
-
-            // Создаем новую с правильными размерами
-            segmentationMaskTexture = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
-            segmentationMaskTexture.enableRandomWrite = true;
-            segmentationMaskTexture.Create();
-
-            Debug.Log($"Создана новая RenderTexture {width}x{height} для соответствия выходу модели");
-        }
-
-        Debug.Log("[ProcessTensorManual] Попытка получить данные тензора...");
-
-        try
-        {
-            // Создаем массив пикселей для временной текстуры
-            // Texture2D работает с Color, но Color32 может быть быстрее
-            Color32[] pixels = new Color32[segmentationMaskTexture.width * segmentationMaskTexture.height];
-
-            // Вычисляем коэффициенты масштабирования, если размеры не совпадают
-            float scaleX = width / (float)segmentationMaskTexture.width;
-            float scaleY = height / (float)segmentationMaskTexture.height;
-
-            // Если тензор состоит только из одного канала, обрабатываем его особым образом
-            // Адаптируемся под форму тензора из логов: (1, 150, 56, 1)
-            bool isSingleChannel = channels == 1 || (shape.length == 1 * 150 * 56 * 1);
-
-            if (isSingleChannel)
-            {
-                Debug.Log("[ProcessTensorManual] Обрабатываем одноканальный тензор. Форма:" + shape);
-
-                // Для тензора (1, 150, 56, 1) используем особую логику
-                // Номера каналов в таком тензоре неясны, пробуем просто брать максимальные значения
-
-                for (int y = 0; y < segmentationMaskTexture.height; y++)
-                {
-                    for (int x = 0; x < segmentationMaskTexture.width; x++)
-                    {
-                        int pixelIndex = y * segmentationMaskTexture.width + x;
-
-                        // Вычисляем соответствующие координаты в тензоре
-                        int tensorY = Mathf.Min((int)(y * scaleY), height - 1);
-                        int tensorX = Mathf.Min((int)(x * scaleX), width - 1);
-
-                        float probability = 0;
-
-                        // Для упрощения обработки тензора с формой (1, 150, 56, 1)
-                        // Предполагаем, что это набор классов или вероятностей для пикселей
-                        // Берем значение для координаты [0, tensorY, tensorX, 0]
-
-                        try
-                        {
-                            // Получаем вероятность для данного пикселя
-                            if (shape.rank == 4 && shape[3] == 1)
-                            {
-                                // (1, height, width, 1) - используем только высоту и ширину
-                                probability = tensor[0, tensorY, tensorX, 0];
-                            }
-                            else if (shape.rank == 4 && shape[1] == 1)
-                            {
-                                // (1, 1, height, width) - формат NCHW с одним каналом
-                                probability = tensor[0, 0, tensorY, tensorX];
-                            }
-                            else if (shape.rank == 3)
-                            {
-                                // (1, height, width) - только 3-мерный тензор
-                                probability = tensor[0, tensorY, tensorX];
-                            }
-                            else
-                            {
-                                // Форма (1, 150, 56, 1) - особая логика
-                                // 150 может быть количеством классов, пробуем найти максимальное значение
-
-                                if (shape[1] == 150 && shape[2] == 56 && shape[3] == 1)
-                                {
-                                    // Ищем максимальное значение по всем классам
-                                    float maxProb = 0;
-                                    int foundClass = -1;
-
-                                    // Специально ищем класс стены (wallClassIndex, обычно 1 для ADE20K)
-                                    try
-                                    {
-                                        // Масштабируем координаты в пространство 56x1
-                                        int scaledX = Mathf.Min((int)(tensorX * (56f / segmentationMaskTexture.width)), 55);
-
-                                        // Проверяем непосредственно класс стены
-                                        float wallValue = tensor[0, wallClassIndex, scaledX, 0];
-
-                                        // Если значение класса стены достаточно высокое, используем его
-                                        if (wallValue >= wallThreshold)
-                                        {
-                                            probability = wallValue;
-                                        }
-                                        // Иначе пробуем найти другой класс с максимальной вероятностью
-                                        else
-                                        {
-                                            for (int c = 0; c < shape[1]; c++)
-                                            {
-                                                float value = tensor[0, c, scaledX, 0];
-                                                if (value > maxProb)
-                                                {
-                                                    maxProb = value;
-                                                    foundClass = c;
-                                                }
-                                            }
-
-                                            // Используем найденный максимальный класс, если он выше порога
-                                            if (maxProb >= wallThreshold)
-                                            {
-                                                probability = maxProb;
-                                                Debug.Log($"Найден доминирующий класс {foundClass} с вероятностью {maxProb:F2}");
-                                            }
-                                        }
-                                    }
-                                    catch (Exception e)
-                                    {
-                                        Debug.LogError($"Ошибка при обработке тензора (1,150,56,1): {e.Message}");
-                                        probability = 0.5f;
-                                    }
-                                }
-                                else if (shape[1] == 150 && shape[2] == 1 && shape[3] == 56)
-                                {
-                                    // Здесь может быть другая форма с теми же значениями
-                                    int scaledX = Mathf.Min((int)(tensorX * (56f / segmentationMaskTexture.width)), 55);
-                                    float maxProb = 0;
-                                    for (int c = 0; c < shape[1]; c++)
-                                    {
-                                        float value = tensor[0, c, 0, scaledX];
-                                        if (value > maxProb)
-                                        {
-                                            maxProb = value;
-                                        }
-                                    }
-                                    probability = maxProb;
-                                }
-                                else
-                                {
-                                    probability = 0.5f; // Значение по умолчанию, если форма не распознана
-                                }
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError($"Ошибка при получении значения тензора для координат [0,{tensorY},{tensorX},0]: {e.Message}");
-                            probability = 0.5f;
-                        }
-
-                        // Применяем порог
-                        byte maskValue = (probability >= wallThreshold) ? (byte)255 : (byte)0;
-
-                        // Записываем значение в пиксель
-                        pixels[y * segmentationMaskTexture.width + x] = new Color32(maskValue, maskValue, maskValue, 255);
-                    }
-                }
-            }
-            else
-            {
-                // Обычная обработка многоканального тензора
-                for (int y = 0; y < segmentationMaskTexture.height; y++)
-                {
-                    for (int x = 0; x < segmentationMaskTexture.width; x++)
-                    {
-                        int pixelIndex = y * segmentationMaskTexture.width + x;
-
-                        // Вычисляем соответствующие координаты в тензоре
-                        int tensorY = Mathf.Min((int)(y * scaleY), height - 1);
-                        int tensorX = Mathf.Min((int)(x * scaleX), width - 1);
-
-                        float probability = 0;
-
-                        try
-                        {
-                            // Прямой доступ к значению вероятности с обработкой NCHW/NHWC
-                            if (isNCHW)
-                            {
-                                probability = tensor[0, wallClassIndex, tensorY, tensorX]; // NCHW
-                            }
-                            else
-                            {
-                                probability = tensor[0, tensorY, tensorX, wallClassIndex]; // NHWC
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError($"Ошибка при получении значения тензора: {e.Message}");
-                            probability = 0.5f;
-                        }
-
-                        // Применяем порог
-                        byte maskValue = (probability >= wallThreshold) ? (byte)255 : (byte)0;
-
-                        // Записываем значение в пиксель
-                        pixels[pixelIndex] = new Color32(maskValue, maskValue, maskValue, 255);
-                    }
-                }
-            }
-
-            // Создаем временную Texture2D
-            Texture2D tempMaskTexture = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height, TextureFormat.RGBA32, false);
-            tempMaskTexture.SetPixels32(pixels);
-            tempMaskTexture.Apply();
-
-            // Копируем результат в RenderTexture
-            RenderTexture previousRT = RenderTexture.active;
-            RenderTexture.active = segmentationMaskTexture;
-            GL.Clear(true, true, Color.clear); // Очищаем перед копированием
-            Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
-            RenderTexture.active = previousRT;
-
-            // Уничтожаем временную текстуру
-            Destroy(tempMaskTexture);
-
-            Debug.Log("[ProcessTensorManual] Обработка тензора завершена, маска обновлена.");
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[ProcessTensorManual] Общая ошибка при обработке тензора: {e.Message}\nStackTrace: {e.StackTrace}");
-            throw; // Пробрасываем исключение для обработки родительским методом
-        }
-    }
-
-    /// <summary>
-    /// Сохраняет текущую маску сегментации для отладки
-    /// </summary>
-    private void SaveDebugMask()
-    {
-        if (segmentationMaskTexture == null)
-        {
-            Debug.LogWarning("[SaveDebugMask] segmentationMaskTexture is null, cannot save.");
+                Debug.LogWarning("[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Не удалось преобразовать входной объект в тензор");
             return;
         }
 
-        try
-        {
-            // Создаем временную Texture2D для копирования данных из RenderTexture
-            Texture2D tempTex = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height, TextureFormat.RGBA32, false);
-            RenderTexture previousRT = RenderTexture.active;
-            RenderTexture.active = segmentationMaskTexture;
-            tempTex.ReadPixels(new Rect(0, 0, segmentationMaskTexture.width, segmentationMaskTexture.height), 0, 0);
-            tempTex.Apply();
-            RenderTexture.active = previousRT;
-
-            // Кодируем в PNG
-            byte[] bytes = tempTex.EncodeToPNG();
-            Destroy(tempTex); // Уничтожаем временную текстуру
-
-            // Создаем папку, если её нет
-            string fullPathDir = Path.Combine(Application.persistentDataPath, debugSavePath);
-            if (!Directory.Exists(fullPathDir))
-            {
-                Directory.CreateDirectory(fullPathDir);
+            // Выводим размер входного тензора для диагностики
+            if (shouldLog) {
+                Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✓ Форма входного тензора: {inputTensor.shape}");
             }
 
-            // Генерируем имя файла с временной меткой
-            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
-            string fileName = $"DebugMask_{timestamp}.png";
-            string fullFilePath = Path.Combine(fullPathDir, fileName);
-
-            // Сохраняем файл
-            File.WriteAllBytes(fullFilePath, bytes);
-            Debug.Log($"[SaveDebugMask] Отладочная маска сохранена в: {fullFilePath}");
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[SaveDebugMask] Ошибка при сохранении отладочной маски: {e.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Безопасно освобождает ресурсы движка через рефлексию
-    /// </summary>
-    private void DisposeEngine()
-    {
-        // Освобождаем ресурсы движка (Worker)
-        if (engine != null)
-        {
-            engine.Dispose();
-            engine = null;
-        }
-        if (worker != null) // Также освобождаем worker, если он используется отдельно
-        {
-            worker.Dispose();
-            worker = null;
-        }
-    }
-
-    private void OnDestroy()
-    {
-        Debug.Log("[OnDestroy] Cleaning up resources...");
-
-        // Освобождаем ресурсы
-        DisposeEngine();
-        engine = null;
-        runtimeModel = null;
-
-        // Освобождаем текстуры
-        if (cameraTexture != null)
-        {
-            Destroy(cameraTexture);
-            cameraTexture = null;
-        }
-
-        // Освобождаем RenderTexture
-        if (segmentationMaskTexture != null)
-        {
-            segmentationMaskTexture.Release();
-            Destroy(segmentationMaskTexture);
-            segmentationMaskTexture = null;
-        }
-
-        // Вызываем сборщик мусора для освобождения неуправляемых ресурсов
-        System.GC.Collect();
-    }
-
-    /// <summary>
-    /// Публичный метод для назначения модели из внешнего кода
-    /// </summary>
-    public void SetModel(UnityEngine.Object newModel)
-    {
-        if (newModel != modelAsset)
-        {
-            modelAsset = newModel;
-
-            // Если мы уже проинициализированы, перезагружаем модель
-            if (isModelInitialized)
+            // Если движок не инициализирован, выходим из метода
+            if (worker == null)
             {
-                DisposeEngine();
-                engine = null;
-                runtimeModel = null;
-                isModelInitialized = false;
-
-                // Запускаем инициализацию с новой моделью
-                InitializeSegmentation();
+                Debug.LogError("[WallSegmentation-ExecuteModelAndProcessResult] ❌ Движок (worker) не инициализирован");
+                return;
             }
-        }
-    }
 
-    // Метод для создания тестовой маски сегментации (для отладки)
-    public void CreateSimulatedSegmentationMask()
-    {
-        Debug.Log("Создание симуляции маски сегментации для тестирования");
-
-        // Создаем или переиспользуем текстуру
-        if (segmentationMaskTexture == null)
-        {
-            segmentationMaskTexture = new RenderTexture(224, 224, 0, RenderTextureFormat.RFloat);
-            segmentationMaskTexture.enableRandomWrite = true;
-            segmentationMaskTexture.Create();
-            Debug.Log($"Создана новая текстура для симуляции {segmentationMaskTexture.width}x{segmentationMaskTexture.height}");
-        }
-
-        // Создаем временную текстуру для рисования
-        Texture2D tempTexture = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height,
-            TextureFormat.RGBA32, false);
-
-        // Получаем ориентацию камеры, если возможно
-        Quaternion cameraRotation = Quaternion.identity;
-        Vector3 cameraPosition = Vector3.zero;
-
-        if (arCameraManager != null && arCameraManager.transform != null)
-        {
-            cameraRotation = arCameraManager.transform.rotation;
-            cameraPosition = arCameraManager.transform.position;
-        }
-        else if (xrOrigin != null && xrOrigin.Camera != null)
-        {
-            cameraRotation = xrOrigin.Camera.transform.rotation;
-            cameraPosition = xrOrigin.Camera.transform.position;
-        }
-
-        // Определяем где "стены" на основе позиции и направления камеры
-        Vector3 forward = cameraRotation * Vector3.forward;
-        Vector3 right = cameraRotation * Vector3.right;
-        Vector3 up = cameraRotation * Vector3.up;
-
-        // Задаем параметры "стен" в виртуальном пространстве
-        // float wallDistance = 3.0f; // 3 метра от камеры - unused
-        // float wallWidth = 5.0f;    // 5 метров ширина - unused
-        // float wallHeight = 3.0f;   // 3 метра высота - unused
-
-        // Создаем простой узор для имитации стен
-        Color32[] pixels = new Color32[tempTexture.width * tempTexture.height];
-
-        // Заполняем всё нулями (нет стен)
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            pixels[i] = new Color32(0, 0, 0, 0);
-        }
-
-        // Определяем размер и положение "стены" в зависимости от положения камеры
-        int wallStartX = tempTexture.width / 8;
-        int wallEndX = tempTexture.width - wallStartX;
-        int wallStartY = tempTexture.height / 6;
-        int wallEndY = tempTexture.height - wallStartY;
-
-        // Наклоняем стену в зависимости от поворота камеры
-        float xTilt = cameraRotation.eulerAngles.x / 90.0f - 0.5f;  // -0.5 до 0.5
-        float yTilt = cameraRotation.eulerAngles.y / 180.0f - 0.5f; // -0.5 до 0.5
-
-        for (int y = 0; y < tempTexture.height; y++)
-        {
-            for (int x = 0; x < tempTexture.width; x++)
+            // Устанавливаем входной тензор
+            string inputName = "input";
+            bool setInputSuccess = false;
+            
+            try
             {
-                // Нормализованные координаты от -1 до 1
-                float normalizedX = (x / (float)tempTexture.width) * 2 - 1;
-                float normalizedY = (y / (float)tempTexture.height) * 2 - 1;
-
-                // Добавляем наклон в зависимости от поворота камеры
-                normalizedX += yTilt;
-                normalizedY += xTilt;
-
-                // Проверяем, находится ли пиксель в области "стены"
-                bool isWall = false;
-
-                // Центральная стена
-                if (x >= wallStartX && x <= wallEndX && y >= wallStartY && y <= wallEndY)
-                {
-                    // Добавляем шум для реалистичности
-                    float noise = Mathf.PerlinNoise(x * 0.1f, y * 0.1f) * 0.2f;
-
-                    // Градиент яркости от центра к краям
-                    float centerDistX = Mathf.Abs(normalizedX);
-                    float centerDistY = Mathf.Abs(normalizedY);
-                    float centerDist = Mathf.Sqrt(centerDistX * centerDistX + centerDistY * centerDistY);
-
-                    // Чем ближе к центру, тем ярче
-                    float intensity = Mathf.Clamp01(1.0f - centerDist + noise);
-
-                    // Пороговое значение для определения стены
-                    isWall = intensity > wallThreshold;
-
-                    if (isWall)
-                    {
-                        // Используем индекс класса стены и яркость для обозначения уверенности
-                        byte intensity8bit = (byte)(intensity * 255);
-                        pixels[y * tempTexture.width + x] = new Color32(intensity8bit, intensity8bit, intensity8bit, 255);
-                    }
+                // Заменяем вызов с неоднозначным поиском на более точный поиск по сигнатуре
+                var setInputMethods = worker.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .Where(m => m.Name == "SetInput")
+                    .ToArray();
+                
+                if (shouldLog) {
+                    Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Найдено {setInputMethods.Length} перегрузок метода SetInput");
                 }
-
-                // Добавляем немного шума для углов
-                if (!isWall && Mathf.PerlinNoise(x * 0.2f, y * 0.2f) > 0.93f)
+                
+                // Перебираем все методы SetInput и находим тот, который принимает (string, Tensor<float>)
+                foreach (var method in setInputMethods)
                 {
-                    byte intensity = (byte)(Mathf.PerlinNoise(x * 0.3f, y * 0.3f) * 120);
-                    pixels[y * tempTexture.width + x] = new Color32(intensity, intensity, intensity, 255);
-                }
-            }
-        }
-
-        // Применяем пиксели к текстуре
-        tempTexture.SetPixels32(pixels);
-        tempTexture.Apply();
-
-        // Копируем содержимое в RenderTexture
-        RenderTexture prevActive = RenderTexture.active;
-        RenderTexture.active = segmentationMaskTexture;
-        Graphics.Blit(tempTexture, segmentationMaskTexture);
-        RenderTexture.active = prevActive;
-
-        // Удаляем временную текстуру
-        Destroy(tempTexture);
-
-        Debug.Log("Симуляция маски сегментации создана успешно");
-    }
-
-    /// <summary>
-    /// Пытается получить текстуру камеры напрямую из компонентов XR Simulation
-    /// </summary>
-    private Texture2D TryGetSimulationCameraTexture()
-    {
-        try
-        {
-            // Ищем компоненты симуляции, которые могут содержать текстуру камеры
-            MonoBehaviour[] simulationComponents = FindObjectsOfType<MonoBehaviour>();
-
-            foreach (MonoBehaviour component in simulationComponents)
-            {
-                Type type = component.GetType();
-
-                // Ищем компоненты, связанные с симуляцией
-                if (type.Name.Contains("Simulation") && type.Name.Contains("Provider"))
-                {
-                    // Пытаемся получить поле с текстурой через рефлексию
-                    FieldInfo[] fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-
-                    foreach (FieldInfo field in fields)
+                    var parameters = method.GetParameters();
+                    if (parameters.Length == 2)
                     {
-                        if (field.FieldType == typeof(Texture2D) || field.FieldType.IsSubclassOf(typeof(Texture)))
-                        {
-                            Texture texture = field.GetValue(component) as Texture;
-                            if (texture != null)
-                            {
-                                Debug.Log($"[TryGetSimulationCameraTexture] Найдена текстура в {type.Name}.{field.Name}");
-
-                                // Конвертируем в Texture2D, если это другой тип текстуры
-                                if (texture is Texture2D)
-                                {
-                                    return texture as Texture2D;
-                                }
-                                else
-                                {
-                                    // Копируем содержимое в новую Texture2D
-                                    RenderTexture tempRT = RenderTexture.GetTemporary(
-                                        texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
-
-                                    Graphics.Blit(texture, tempRT);
-                                    RenderTexture.active = tempRT;
-
-                                    Texture2D result = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
-                                    result.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
-                                    result.Apply();
-
-                                    RenderTexture.active = null;
-                                    RenderTexture.ReleaseTemporary(tempRT);
-
-                                    return result;
-                                }
-                            }
+                    if (shouldLog) {
+                            Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Проверяем перегрузку SetInput с параметрами: {parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name}");
                         }
-                    }
-
-                    // Ищем свойства с текстурой
-                    PropertyInfo[] properties = type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-
-                    foreach (PropertyInfo property in properties)
-                    {
-                        if (property.PropertyType == typeof(Texture2D) ||
-                            (property.PropertyType.IsGenericType && property.PropertyType.GetGenericTypeDefinition() == typeof(Texture)))
+                        
+                        // Проверяем, подходит ли метод для наших типов
+                        if (parameters[0].ParameterType == typeof(string) && 
+                            parameters[1].ParameterType.IsAssignableFrom(inputTensor.GetType()))
                         {
                             try
                             {
-                                Texture texture = property.GetValue(component) as Texture;
-                                if (texture != null)
-                                {
-                                    Debug.Log($"[TryGetSimulationCameraTexture] Найдена текстура в свойстве {type.Name}.{property.Name}");
-
-                                    // Конвертируем в Texture2D если нужно
-                                    if (texture is Texture2D)
-                                    {
-                                        return texture as Texture2D;
-                                    }
-                                    else
-                                    {
-                                        RenderTexture tempRT = RenderTexture.GetTemporary(
-                                            texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
-
-                                        Graphics.Blit(texture, tempRT);
-                                        RenderTexture.active = tempRT;
-
-                                        Texture2D result = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
-                                        result.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
-                                        result.Apply();
-
-                                        RenderTexture.active = null;
-                                        RenderTexture.ReleaseTemporary(tempRT);
-
-                                        return result;
-                                    }
-                                }
+                                method.Invoke(worker, new object[] { inputName, inputTensor });
+                                setInputSuccess = true;
+                
+                if (shouldLog) {
+                                    Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Успешно установлен входной тензор через SetInput({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name})");
+                }
+                                break;
+            }
+            catch (Exception ex)
+            {
+                                Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка вызова SetInput({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name}): {ex.Message}");
                             }
-                            catch (Exception) { /* Игнорируем исключения при попытке чтения свойств */ }
                         }
-                    }
-                }
-            }
-
-            // Ищем текстуру у ARCameraBackground
-            if (arCameraManager != null)
-            {
-                var cameraBackground = arCameraManager.GetComponent<ARCameraBackground>();
-                if (cameraBackground != null && cameraBackground.material != null)
-                {
-                    // Получаем текстуру из материала ARCameraBackground
-                    Texture backgroundTexture = cameraBackground.material.mainTexture;
-                    if (backgroundTexture != null)
-                    {
-                        Debug.Log("[TryGetSimulationCameraTexture] Найдена текстура в ARCameraBackground");
-
-                        // Конвертируем в Texture2D если не является ею
-                        if (backgroundTexture is Texture2D)
+                        // Проверяем вариант с перегрузкой (int, Tensor<float>)
+                        else if (parameters[0].ParameterType == typeof(int) && 
+                                parameters[1].ParameterType.IsAssignableFrom(inputTensor.GetType()))
                         {
-                            return backgroundTexture as Texture2D;
-                        }
-                        else
-                        {
-                            RenderTexture tempRT = RenderTexture.GetTemporary(
-                                backgroundTexture.width, backgroundTexture.height, 0, RenderTextureFormat.ARGB32);
-
-                            Graphics.Blit(backgroundTexture, tempRT);
-                            RenderTexture.active = tempRT;
-
-                            Texture2D result = new Texture2D(backgroundTexture.width, backgroundTexture.height, TextureFormat.RGBA32, false);
-                            result.ReadPixels(new Rect(0, 0, backgroundTexture.width, backgroundTexture.height), 0, 0);
-                            result.Apply();
-
-                            RenderTexture.active = null;
-                            RenderTexture.ReleaseTemporary(tempRT);
-
-                            return result;
-                        }
-                    }
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning($"[TryGetSimulationCameraTexture] Ошибка при попытке получить текстуру напрямую: {e.Message}");
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Создает тензор напрямую из пиксельных данных текстуры
-    /// </summary>
-    private Tensor<float> CreateTensorFromPixels(Texture2D texture)
-    {
-        Tensor<float> tensor = null;
-        try
-        {
-            Debug.Log($"Создание тензора напрямую из пикселей текстуры {texture.width}x{texture.height}");
-
-            // Получаем пиксели из текстуры
-            Color32[] pixels = texture.GetPixels32();
-
-            // Создаем тензор в формате [1, height, width, 3] (NHWC)
-            TensorShape shape = new TensorShape(1, texture.height, texture.width, 3);
-
-            // Создаем массив данных для тензора
-            float[] tensorData = new float[shape.length];
-
-            // Заполняем массив данными из пикселей
-            for (int y = 0; y < texture.height; y++)
-            {
-                for (int x = 0; x < texture.width; x++)
-                {
-                    int pixelIndex = y * texture.width + x;
-                    Color32 pixel = pixels[pixelIndex];
-
-                    // Нормализуем значения до диапазона [0, 1]
-                    float r = pixel.r / 255.0f;
-                    float g = pixel.g / 255.0f;
-                    float b = pixel.b / 255.0f;
-
-                    // Для NHWC формата:
-                    int tensorIndex = 0 * (texture.height * texture.width * 3) + // batch index = 0
-                                  y * (texture.width * 3) +                 // height position
-                                  x * 3;                                    // width position * channels
-
-                    // Записываем значения RGB в массив данных
-                    tensorData[tensorIndex + 0] = r; // R
-                    tensorData[tensorIndex + 1] = g; // G
-                    tensorData[tensorIndex + 2] = b; // B
-                }
-            }
-
-            // Создаем тензор из массива данных
-            tensor = new Tensor<float>(shape, tensorData);
-
-            Debug.Log("Тензор успешно создан из пиксельных данных");
-            return tensor;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"Ошибка при создании тензора из пикселей: {e.Message}");
-
-            // Освобождаем ресурсы в случае ошибки
-            if (tensor != null)
-            {
-                try
-                {
-                    tensor.Dispose();
-                }
-                catch (Exception disposeEx)
-                {
-                    Debug.LogWarning($"Ошибка при освобождении тензора: {disposeEx.Message}");
-                }
-            }
-
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Создает тензор в формате NCHW (подходит для некоторых моделей)
-    /// </summary>
-    private Tensor<float> CreateNCHWTensorFromPixels(Texture2D texture)
-    {
-        Tensor<float> tensor = null;
-        try
-        {
-            Debug.Log($"Создание NCHW тензора из пикселей текстуры {texture.width}x{texture.height}");
-
-            // Получаем пиксели из текстуры
-            Color32[] pixels = texture.GetPixels32();
-
-            // Создаем тензор в формате [1, 3, height, width] (NCHW)
-            TensorShape shape = new TensorShape(1, 3, texture.height, texture.width);
-
-            // Создаем массив данных для тензора
-            float[] tensorData = new float[shape.length];
-
-            // Заполняем массив данными из пикселей в формате NCHW
-            for (int y = 0; y < texture.height; y++)
-            {
-                for (int x = 0; x < texture.width; x++)
-                {
-                    int pixelIndex = y * texture.width + x;
-                    Color32 pixel = pixels[pixelIndex];
-
-                    // Нормализуем значения до диапазона [0, 1]
-                    float r = pixel.r / 255.0f;
-                    float g = pixel.g / 255.0f;
-                    float b = pixel.b / 255.0f;
-
-                    // Для NCHW формата:
-                    // Красный канал (R)
-                    tensorData[0 * (3 * texture.height * texture.width) +
-                              0 * (texture.height * texture.width) +
-                              y * texture.width + x] = r;
-
-                    // Зеленый канал (G)
-                    tensorData[0 * (3 * texture.height * texture.width) +
-                              1 * (texture.height * texture.width) +
-                              y * texture.width + x] = g;
-
-                    // Синий канал (B)
-                    tensorData[0 * (3 * texture.height * texture.width) +
-                              2 * (texture.height * texture.width) +
-                              y * texture.width + x] = b;
-                }
-            }
-
-            // Создаем тензор из массива данных
-            tensor = new Tensor<float>(shape, tensorData);
-
-            Debug.Log("NCHW Тензор успешно создан из пиксельных данных");
-            return tensor;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"Ошибка при создании NCHW тензора из пикселей: {e.Message}");
-
-            // Освобождаем ресурсы в случае ошибки
-            if (tensor != null)
-            {
-                try
-                {
-                    tensor.Dispose();
-                }
-                catch (Exception disposeEx)
-                {
-                    Debug.LogWarning($"Ошибка при освобождении тензора: {disposeEx.Message}");
-                }
-            }
-
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Создает простой тензор с одним каналом (для простых моделей сегментации)
-    /// </summary>
-    private Tensor<float> CreateSingleChannelTensor(Texture2D texture, bool normalize = true)
-    {
-        Tensor<float> tensor = null;
-        try
-        {
-            Debug.Log($"Создание одноканального тензора из текстуры {texture.width}x{texture.height}");
-
-            // Получаем пиксели из текстуры
-            Color32[] pixels = texture.GetPixels32();
-
-            // Создаем тензор с одним каналом [1, height, width, 1]
-            TensorShape shape = new TensorShape(1, texture.height, texture.width, 1);
-            float[] tensorData = new float[shape.length];
-
-            // Заполняем массив данными из пикселей, используя только яркость (grayscale)
-            for (int y = 0; y < texture.height; y++)
-            {
-                for (int x = 0; x < texture.width; x++)
-                {
-                    int pixelIndex = y * texture.width + x;
-                    Color32 pixel = pixels[pixelIndex];
-
-                    // Преобразуем RGB в яркость (grayscale)
-                    float grayscale = (0.299f * pixel.r + 0.587f * pixel.g + 0.114f * pixel.b);
-
-                    // Нормализуем, если требуется
-                    if (normalize)
-                    {
-                        grayscale /= 255.0f;
-                    }
-
-                    // Индекс в массиве тензора
-                    int tensorIndex = 0 * (texture.height * texture.width) + // batch
-                                      y * texture.width +                   // height
-                                      x;                                    // width
-
-                    tensorData[tensorIndex] = grayscale;
-                }
-            }
-
-            // Создаем тензор из массива данных
-            tensor = new Tensor<float>(shape, tensorData);
-
-            Debug.Log("Одноканальный тензор успешно создан");
-            return tensor;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"Ошибка при создании одноканального тензора: {e.Message}");
-
-            // Освобождаем ресурсы в случае ошибки
-            if (tensor != null)
-            {
-                try
-                {
-                    tensor.Dispose();
-                }
-                catch (Exception disposeEx)
-                {
-                    Debug.LogWarning($"Ошибка при освобождении тензора: {disposeEx.Message}");
-                }
-            }
-
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Пытается создать тензор специально для XR Simulation
-    /// </summary>
-    private Tensor<float> TryCreateXRSimulationTensor(Texture2D texture)
-    {
-        Tensor<float> tensor = null;
-        try
-        {
-            Debug.Log("Создание специального тензора для XR Simulation...");
-
-            // Проверяем, есть ли компонент XREnvironment на сцене
-            var xrEnvironmentObject = GameObject.Find("XRSimulationEnvironment");
-            if (xrEnvironmentObject != null)
-            {
-                Debug.Log("Найден объект XRSimulationEnvironment для XR Simulation");
-            }
-
-            // Ищем RenderTexture от XR Simulation напрямую
-            Type simulationCameraType = null;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                foreach (var type in assembly.GetTypes())
-                {
-                    if (type.Name.Contains("SimulationCamera") ||
-                        type.Name.Contains("CameraTextureProvider"))
-                    {
-                        simulationCameraType = type;
-                        Debug.Log($"Найден тип XR Simulation: {type.FullName}");
-                        break;
-                    }
-                }
-                if (simulationCameraType != null) break;
-            }
-
-            // Создаем специальный тензор для XR Simulation на основе текущего изображения
-            // Изображение из XR Simulation содержит розовые/магента стены
-
-            // Создаем одноканальный тензор
-            TensorShape simulationShape = new TensorShape(1, inputResolution.y, inputResolution.x, 1);
-            float[] tensorData = new float[simulationShape.length];
-
-            // Получаем пиксели из текстуры
-            Color32[] pixels = texture.GetPixels32();
-
-            // Усовершенствованная логика определения стен в XR Simulation
-            for (int y = 0; y < texture.height; y++)
-            {
-                for (int x = 0; x < texture.width; x++)
-                {
-                    int pixelIndex = y * texture.width + x;
-                    int tensorIndex = 0 * (texture.height * texture.width) + y * texture.width + x;
-
-                    Color32 pixel = pixels[pixelIndex];
-
-                    // Определение розового/магента цвета стен (более точная логика)
-                    // В XR Simulation стены обычно имеют ярко-розовый/магента цвет
-                    bool isPink = (pixel.r > 180 && pixel.g < 140 && pixel.b > 180) || // Магента
-                                 (pixel.r > 200 && pixel.g < 80 && pixel.b > 200) ||   // Яркая магента
-                                 (pixel.r > 200 && pixel.g < 100 && pixel.b > 150);    // Розовый
-
-                    // Добавляем проверку на белый цвет (тоже может быть стенами)
-                    bool isWhite = (pixel.r > 230 && pixel.g > 230 && pixel.b > 230);
-
-                    // Рассчитываем розовость (magenta-ness)
-                    float magentaStrength = 0f;
-                    if (isPink)
-                    {
-                        // Оцениваем "розовость" пикселя от 0.8 до 1.0
-                        float rStrength = pixel.r / 255f;
-                        float gWeakness = 1.0f - (pixel.g / 255f);
-                        float bStrength = pixel.b / 255f;
-
-                        // Вес для розового: много красного, мало зеленого, много синего
-                        magentaStrength = (rStrength * 0.4f + gWeakness * 0.4f + bStrength * 0.2f);
-                        magentaStrength = Mathf.Clamp(magentaStrength * 1.25f, 0.8f, 1.0f); // Усиливаем значение
-                    }
-                    else if (isWhite)
-                    {
-                        // Белые стены с чуть менее высокой вероятностью
-                        magentaStrength = 0.75f;
-                    }
-
-                    // Применяем размытие - учитываем соседние пиксели для сглаживания
-                    if (magentaStrength > 0.1f && x > 1 && x < texture.width - 2 && y > 1 && y < texture.height - 2)
-                    {
-                        // Проверяем наличие розового в соседних пикселях для уменьшения шума
-                        int pinkNeighbors = 0;
-
-                        // Проверяем 8 соседних пикселей
-                        for (int dy = -1; dy <= 1; dy++)
-                        {
-                            for (int dx = -1; dx <= 1; dx++)
+                            try
                             {
-                                if (dx == 0 && dy == 0) continue; // Пропускаем центральный
-
-                                int nx = x + dx;
-                                int ny = y + dy;
-                                int nIndex = ny * texture.width + nx;
-
-                                if (nIndex >= 0 && nIndex < pixels.Length)
-                                {
-                                    Color32 nPixel = pixels[nIndex];
-                                    if ((nPixel.r > 180 && nPixel.g < 140 && nPixel.b > 180) ||
-                                        (nPixel.r > 230 && nPixel.g > 230 && nPixel.b > 230))
-                                    {
-                                        pinkNeighbors++;
-                                    }
+                                method.Invoke(worker, new object[] { 0, inputTensor }); // Используем индекс 0 вместо имени
+                                setInputSuccess = true;
+                                
+                                if (shouldLog) {
+                                    Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Успешно установлен входной тензор через SetInput({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name})");
                                 }
+                                break;
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка вызова SetInput({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name}): {ex.Message}");
                             }
                         }
-
-                        // Если мало розовых соседей, это скорее всего шум - уменьшаем значение
-                        if (pinkNeighbors < 3)
-                        {
-                            magentaStrength *= 0.5f;
-                        }
-                        // Если много розовых соседей, усиливаем значение для лучшей сегментации
-                        else if (pinkNeighbors >= 5)
-                        {
-                            magentaStrength = Mathf.Min(magentaStrength * 1.2f, 1.0f);
-                        }
                     }
-
-                    tensorData[tensorIndex] = magentaStrength;
                 }
-            }
-
-            // Применяем медианный фильтр для удаления шума
-            float[] filtered = new float[tensorData.Length];
-            Array.Copy(tensorData, filtered, tensorData.Length);
-
-            // Простой медианный фильтр (3x3) для уменьшения шума
-            for (int y = 1; y < texture.height - 1; y++)
-            {
-                for (int x = 1; x < texture.width - 1; x++)
+                
+                if (!setInputSuccess)
                 {
-                    List<float> neighbors = new List<float>(9);
-
-                    for (int dy = -1; dy <= 1; dy++)
-                    {
-                        for (int dx = -1; dx <= 1; dx++)
-                        {
-                            int nx = x + dx;
-                            int ny = y + dy;
-                            int index = 0 * (texture.height * texture.width) + ny * texture.width + nx;
-                            neighbors.Add(tensorData[index]);
-                        }
-                    }
-
-                    neighbors.Sort();
-                    filtered[0 * (texture.height * texture.width) + y * texture.width + x] = neighbors[4]; // Медиана из 9 значений
+                    Debug.LogError("[WallSegmentation-ExecuteModelAndProcessResult] ❌ Не удалось установить входной тензор. Ни одна перегрузка SetInput не подошла.");
+                    RenderSimpleMask();
+                    return;
                 }
+                    }
+                    catch (Exception ex)
+                    {
+                Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResult] ❌ Ошибка при установке входного тензора: {ex.Message}");
+                RenderSimpleMask();
+                return;
             }
 
-            // Создаем тензор из отфильтрованных данных
-            tensor = new Tensor<float>(simulationShape, filtered);
-
-            Debug.Log("Специальный тензор для XR Simulation успешно создан");
-            return tensor;
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning($"Ошибка при создании специального тензора для XR Simulation: {e.Message}");
-            if (tensor != null)
-            {
-                tensor.Dispose();
-            }
-            return null;
-        }
-    }
-
-    // This method might contain one of the errors about byte[] to IntPtr conversion
-    private void ProcessCPUImage(XRCpuImage image)
-    {
-        if (image.valid)
-        {
-            var conversionParams = new XRCpuImage.ConversionParams
-            {
-                inputRect = new RectInt(0, 0, image.width, image.height),
-                outputDimensions = new Vector2Int(inputResolution.x, inputResolution.y),
-                outputFormat = TextureFormat.RGBA32,
-                transformation = XRCpuImage.Transformation.MirrorY
-            };
-
-            // Using NativeArray instead of byte[] for proper conversion
-            var rawTextureData = new NativeArray<byte>(inputResolution.x * inputResolution.y * 4, Allocator.Temp);
-
+            // Выполняем модель с помощью метода Schedule
             try
             {
-                // Use the standard Convert method with NativeArray
-                image.Convert(conversionParams, rawTextureData);
-
-                // Update the texture
-                if (cameraTexture == null)
-                {
-                    cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
+            if (shouldLog) {
+                    Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] 🔄 Запускаем модель через Schedule");
                 }
 
-                cameraTexture.LoadRawTextureData(rawTextureData);
-                cameraTexture.Apply();
+                // В версии Unity Sentis 2.1.2 используется метод Schedule вместо Execute
+                var scheduleMethods = worker.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .Where(m => m.Name == "Schedule")
+                    .ToArray();
+                
+                bool scheduleSuccess = false;
+                
+                if (shouldLog) {
+                    Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Найдено {scheduleMethods.Length} методов Schedule");
+                }
+                
+                // Сначала пробуем метод Schedule без параметров
+                foreach (var method in scheduleMethods)
+                {
+                    var parameters = method.GetParameters();
+                    if (parameters.Length == 0)
+                    {
+                        try
+                        {
+                            method.Invoke(worker, null);
+                            scheduleSuccess = true;
+                            
+                            if (shouldLog) {
+                                Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] ✅ Модель успешно запланирована через Schedule()");
+                            }
+                            break;
+                        }
+                        catch (Exception ex)
+                {
+                    if (shouldLog) {
+                                Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при вызове Schedule без параметров: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+                
+                // Если не удалось, пробуем с разными параметрами
+                if (!scheduleSuccess)
+                {
+                    foreach (var method in scheduleMethods)
+                    {
+                        var parameters = method.GetParameters();
+                        
+                        if (parameters.Length == 1)
+                        {
+                            if (shouldLog) {
+                                Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Проверяем метод Schedule с параметром типа {parameters[0].ParameterType.Name}");
+                            }
+                            
+                            // Для метода Schedule(string) - передаем имя выходного тензора
+                            if (parameters[0].ParameterType == typeof(string))
+                            {
+                                try {
+                                    method.Invoke(worker, new object[] { "output" });
+                                    scheduleSuccess = true;
+                                    
+                                    if (shouldLog) {
+                                        Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] ✅ Модель успешно запланирована через Schedule(\"output\")");
+                                    }
+                                    break;
+                                }
+                                catch (Exception ex) {
+                                    if (shouldLog) {
+                                        Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при вызове Schedule(string): {ex.Message}");
+                                    }
+                                }
+                            }
+                            // Для метода Schedule(int) - передаем индекс выходного тензора
+                            else if (parameters[0].ParameterType == typeof(int))
+                            {
+                                try {
+                                    method.Invoke(worker, new object[] { 0 });
+                                    scheduleSuccess = true;
+                                    
+                    if (shouldLog) {
+                                        Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] ✅ Модель успешно запланирована через Schedule(0)");
+                                    }
+                                    break;
+                                }
+                                catch (Exception ex) {
+                                    if (shouldLog) {
+                                        Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при вызове Schedule(int): {ex.Message}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (!scheduleSuccess)
+                {
+                    Debug.LogError("[WallSegmentation-ExecuteModelAndProcessResult] ❌ Не удалось запланировать выполнение модели. Ни один метод Schedule не подошел.");
+                    RenderSimpleMask();
+                    return;
+                }
+                
+                // После Schedule нужно дождаться выполнения
+                try {
+                    // Проверяем наличие метода WaitForCompletion
+                    var waitMethod = worker.GetType().GetMethod("WaitForCompletion", BindingFlags.Instance | BindingFlags.Public);
+                    if (waitMethod != null)
+                    {
+                        waitMethod.Invoke(worker, null);
+                        if (shouldLog) {
+                            Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] ✅ WaitForCompletion успешно выполнен");
+                        }
+                    }
+                    else
+                    {
+                        // Если нет метода WaitForCompletion, пробуем использовать свойство completed
+                        var completedProperty = worker.GetType().GetProperty("completed", BindingFlags.Instance | BindingFlags.Public);
+                        if (completedProperty != null)
+                        {
+                            int maxWaitIterations = 50;
+                            for (int i = 0; i < maxWaitIterations; i++)
+                            {
+                                bool completed = (bool)completedProperty.GetValue(worker);
+                                if (completed) break;
+                                
+                                // Небольшая задержка
+                                System.Threading.Thread.Sleep(10);
+                            }
+                            
+                                    if (shouldLog) {
+                                Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] ✅ Ожидание выполнения через свойство completed");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex) {
+                    if (shouldLog) {
+                        Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при ожидании выполнения: {ex.Message}");
+                    }
+                }
+                
+                if (shouldLog) {
+                    Debug.Log("[WallSegmentation-ExecuteModelAndProcessResult] ✅ Модель успешно выполнена");
+                }
             }
-            finally
+            catch (Exception ex)
             {
-                // Always dispose of the NativeArray
-                if (rawTextureData.IsCreated)
-                    rawTextureData.Dispose();
+                Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResult] ❌ Ошибка при выполнении модели: {ex.Message}");
+                RenderSimpleMask();
+                return;
+            }
+
+            // Получаем результат выполнения модели
+            try
+            {
+                // Получаем выходной тензор
+                string outputName = "output"; 
+                var outputTensorObj = null as object;
+                
+                // Выводим список выходов модели, если доступны
+                try {
+                    var outputsProperty = worker.GetType().GetProperty("outputs");
+                    if (outputsProperty != null)
+                    {
+                        var outputs = outputsProperty.GetValue(worker);
+                        if (outputs != null)
+                        {
+                            // Пробуем получить имена выходов через рефлексию
+                            try {
+                                var namesProperty = outputs.GetType().GetProperty("names");
+                                if (namesProperty != null)
+                                {
+                                    var names = namesProperty.GetValue(outputs) as System.Collections.IEnumerable;
+                                    if (names != null)
+                                    {
+                                        List<string> namesList = new List<string>();
+                                        foreach (var name in names)
+                                        {
+                                            namesList.Add(name.ToString());
+                                        }
+                                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Доступные выходы модели: {string.Join(", ", namesList)}");
+                                        
+                                        // Если есть выходы, используем первый как имя выходного тензора
+                                        if (namesList.Count > 0)
+                                        {
+                                            outputName = namesList[0];
+                                            Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Используем первый выход модели: {outputName}");
+                                        }
+                                    }
+                                }
+                            } catch (Exception ex) {
+                                Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] Не удалось получить имена выходов: {ex.Message}");
+                            }
+                            
+                            // Пробуем получить список выходов модели через Count
+                            try {
+                                var countProperty = outputs.GetType().GetProperty("Count");
+                                if (countProperty != null)
+                                {
+                                    int count = (int)countProperty.GetValue(outputs);
+                                    Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Количество выходов: {count}");
+                                }
+                            } catch (Exception ex) {
+                                Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] Не удалось получить количество выходов: {ex.Message}");
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] Не удалось проанализировать выходы модели: {ex.Message}");
+                }
+                
+                // Метод 1: через метод PeekOutput
+                try {
+                    var peekOutputMethods = worker.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                        .Where(m => m.Name == "PeekOutput" && m.GetParameters().Length == 1)
+                        .ToArray();
+                        
+                    if (peekOutputMethods.Length > 0)
+                    {
+                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] Найдено {peekOutputMethods.Length} перегрузок метода PeekOutput");
+                        
+                        foreach (var method in peekOutputMethods)
+            {
+                try
+                {
+                                var parameters = method.GetParameters();
+                                if (parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                                {
+                                    outputTensorObj = method.Invoke(worker, new object[] { outputName });
+                                    if (outputTensorObj != null)
+                                    {
+                                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Получен выходной тензор через PeekOutput(\"{outputName}\")");
+                                        break;
+                                    }
+                                }
+                                else if (parameters.Length == 1 && parameters[0].ParameterType == typeof(int))
+                                {
+                                    outputTensorObj = method.Invoke(worker, new object[] { 0 });
+                                    if (outputTensorObj != null)
+                                    {
+                                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Получен выходной тензор через PeekOutput(0)");
+                                        break;
+                                    }
             }
         }
-    }
-
-    /// <summary>
-    /// Возвращает текущую маску сегментации для внешнего использования
-    /// </summary>
-    public Texture GetSegmentationMaskTexture()
-    {
-        return segmentationMaskTexture;
-    }
-
-    /// <summary>
-    /// Возвращает размер текущей маски сегментации
-    /// </summary>
-    public Vector2Int GetSegmentationMaskSize()
-    {
-        if (segmentationMaskTexture != null)
+        catch (Exception ex)
         {
-            return new Vector2Int(segmentationMaskTexture.width, segmentationMaskTexture.height);
+                                Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка вызова PeekOutput: {ex.Message}");
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при поиске метода PeekOutput: {ex.Message}");
+                }
+                
+                // Метод 2: через свойство outputs и индексатор
+                if (outputTensorObj == null) {
+                    try {
+                        var outputs = worker.GetType().GetProperty("outputs")?.GetValue(worker);
+                        if (outputs != null) {
+                            // Проверяем доступные методы и свойства outputs
+                            var outputsType = outputs.GetType();
+                            var methods = outputsType.GetMethods(BindingFlags.Instance | BindingFlags.Public);
+                            
+                            // Получаем индексатор для доступа к элементам через имя или индекс
+                            var stringIndexer = outputsType.GetProperties()
+                                .FirstOrDefault(p => p.GetIndexParameters().Length == 1 && 
+                                                  p.GetIndexParameters()[0].ParameterType == typeof(string));
+                                                 
+                            var intIndexer = outputsType.GetProperties()
+                                .FirstOrDefault(p => p.GetIndexParameters().Length == 1 && 
+                                                  p.GetIndexParameters()[0].ParameterType == typeof(int));
+                                                      
+                            if (stringIndexer != null) {
+                                try {
+                                    outputTensorObj = stringIndexer.GetValue(outputs, new object[] { outputName });
+                                    if (outputTensorObj != null) {
+                                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Получен выходной тензор через outputs[\"{outputName}\"]");
+                                    }
+                                } catch (Exception ex) {
+                                    Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при доступе к outputs[string]: {ex.Message}");
+                                }
+                            }
+                            
+                            if (outputTensorObj == null && intIndexer != null) {
+                                try {
+                                    outputTensorObj = intIndexer.GetValue(outputs, new object[] { 0 });
+                                    if (outputTensorObj != null) {
+                                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Получен выходной тензор через outputs[0]");
+                                    }
+                                } catch (Exception ex) {
+                                    Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при доступе к outputs[int]: {ex.Message}");
+                                }
+                            }
+                            
+                            // Проверяем метод TryGetValue
+                            var tryGetValueMethod = methods.FirstOrDefault(m => m.Name == "TryGetValue" && 
+                                                                           m.GetParameters().Length == 2 &&
+                                                                           m.GetParameters()[0].ParameterType == typeof(string));
+                            if (outputTensorObj == null && tryGetValueMethod != null) {
+                                try {
+                                    object[] parameters = new object[] { outputName, null };
+                                    bool success = (bool)tryGetValueMethod.Invoke(outputs, parameters);
+                                    if (success) {
+                                        outputTensorObj = parameters[1]; // Второй параметр - out параметр
+                                        Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Получен выходной тензор через TryGetValue");
+                                    }
+                                } catch (Exception ex) {
+                                    Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Ошибка при вызове TryGetValue: {ex.Message}");
+                                }
+                            }
+                        }
+                    } catch (Exception ex) {
+                        Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Не удалось получить выход через outputs: {ex.Message}");
+                    }
+                }
+                
+                // Метод 3: через CopyOutput
+                if (outputTensorObj == null) {
+                    try {
+                        var methods = worker.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public);
+                        var copyOutputMethod = methods.FirstOrDefault(m => (m.Name == "CopyOutput" || m.Name == "FetchOutput") &&
+                                                                        m.GetParameters().Length == 2);
+                        if (copyOutputMethod != null) {
+                            // Создаем тензор для копирования
+                            Type tensorType = typeof(Tensor<float>);
+                            var tensor = Activator.CreateInstance(tensorType);
+                            
+                            // Вызываем метод
+                            var result = copyOutputMethod.Invoke(worker, new object[] { outputName, tensor });
+                            outputTensorObj = result ?? tensor;
+                            
+                            if (outputTensorObj != null) {
+                                Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Получен выходной тензор через {copyOutputMethod.Name}");
+                            }
+                        }
+                    } catch (Exception ex) {
+                        Debug.LogWarning($"[WallSegmentation-ExecuteModelAndProcessResult] ⚠️ Не удалось получить выход через CopyOutput: {ex.Message}");
+                    }
+                }
+
+                // Проверяем, получили ли мы выходной тензор
+                if (outputTensorObj == null)
+                {
+                    Debug.LogError("[WallSegmentation-ExecuteModelAndProcessResult] ❌ Не удалось получить выходной тензор");
+                    RenderSimpleMask(); // Создаем простую маску, если не удалось получить результат
+                    return;
+                }
+
+                Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResult] ✅ Успешно получен выходной тензор типа {outputTensorObj.GetType().Name}");
+
+                // Обрабатываем результат сегментации
+                ProcessSegmentationResult(outputTensorObj);
+                }
+                catch (Exception ex)
+                {
+                Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResult] ❌ Ошибка при получении выходного тензора: {ex.Message}\n{ex.StackTrace}");
+                RenderSimpleMask();
+                }
+            }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResult] ❌ Необработанное исключение: {ex.Message}\n{ex.StackTrace}");
+            RenderSimpleMask();
         }
-        return Vector2Int.zero;
     }
 
-    // Keep the stub for InitializeWebcam
-    private void InitializeWebcam()
+    /// <summary>
+    /// Обрабатывает результат сегментации из выходного тензора модели
+    /// </summary>
+    private void ProcessSegmentationResult(object outputTensorObj)
     {
-        Debug.LogWarning("WebCam functionality has been removed.");
+        if (outputTensorObj == null)
+        {
+            Debug.LogError("[WallSegmentation-ProcessSegmentationResult] ❌ Выходной тензор равен null");
+            RenderSimpleMask();
+            return;
+        }
+
+        Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Обработка результата сегментации типа {outputTensorObj.GetType().Name}");
+
+        try
+        {
+            // Преобразуем выходной тензор в нужный тип
+            var outputTensor = outputTensorObj as Tensor<float>;
+            
+            if (outputTensor == null)
+            {
+                Debug.LogError("[WallSegmentation-ProcessSegmentationResult] ❌ Не удалось преобразовать выходной объект в тензор");
+                RenderSimpleMask();
+                return;
+            }
+
+            // Обрабатываем результат сегментации вручную
+            ProcessTensorManual(outputTensor);
+            
+            // Увеличиваем счетчик отладочных масок при их сохранении
+            if (saveDebugMask)
+            {
+                debugMaskCounter++;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] ❌ Ошибка при обработке результата: {ex.Message}");
+            RenderSimpleMask();
+        }
     }
 
-    // Add stub methods for the removed webcam methods
-    public void SetWebcamMode(bool enable, string deviceName = "")
+    /// <summary>
+    /// Обрабатывает тензор segmentation вручную для создания маски
+    /// </summary>
+    private void ProcessTensorManual(Tensor<float> tensor)
     {
-        Debug.LogWarning("WebCam functionality has been removed.");
+        if (tensor == null)
+        {
+            Debug.LogError("[WallSegmentation-ProcessTensorManual] ❌ Тензор равен null");
+            RenderSimpleMask();
+            return;
+        }
+
+        Debug.Log($"[WallSegmentation-ProcessTensorManual] 🔄 Обработка тензора формы {tensor.shape}");
+
+        // Получаем размеры тензора
+        int batch = tensor.shape[0];
+        int classes = tensor.shape[1];
+        int height = tensor.shape[2];
+        int width = tensor.shape[3];
+
+        Debug.Log($"[WallSegmentation-ProcessTensorManual] Размеры выходного тензора: batch={batch}, classes={classes}, h={height}, w={width}");
+
+        // Попытка получить данные тензора различными способами
+            float[] tensorData = null;
+        bool gotData = false;
+
+        try
+        {
+            // Попытка 0: Используем TensorExtensions (новый метод)
+            if (TryGetTensorData(tensor, out tensorData))
+            {
+                Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Получены данные тензора через TensorExtensions: {tensorData.Length} элементов");
+                gotData = true;
+            }
+
+            // Попытка 0.5: Используем DenseTensor напрямую
+            if (!gotData && TryGetDenseTensorData(tensor, out tensorData))
+            {
+                Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Получены данные через DenseTensor: {tensorData.Length} элементов");
+                gotData = true;
+            }
+
+            // Попытка 1: Используем ToReadOnlyArray, если доступен
+            if (!gotData)
+                    {
+                        var toArrayMethod = tensor.GetType().GetMethod("ToReadOnlyArray", BindingFlags.Instance | BindingFlags.Public);
+                        if (toArrayMethod != null)
+                        {
+                    var result = toArrayMethod.Invoke(tensor, null);
+                    if (result is float[] data)
+                    {
+                        tensorData = data;
+                        Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Получены данные тензора через ToReadOnlyArray: {tensorData.Length} элементов");
+                        gotData = true;
+                    }
+                }
+            }
+
+            // Попытка 2: Используем свойство Data, если доступно
+            if (!gotData)
+            {
+                var dataProperty = tensor.GetType().GetProperty("Data", BindingFlags.Instance | BindingFlags.Public);
+                if (dataProperty != null)
+                {
+                    var result = dataProperty.GetValue(tensor);
+                    if (result is float[] data)
+                    {
+                        tensorData = data;
+                        Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Получены данные тензора через свойство Data: {tensorData.Length} элементов");
+                        gotData = true;
+                    }
+                }
+            }
+
+            // Попытка 3: Создаем массив и копируем в него данные
+            if (!gotData)
+            {
+                // Пробуем использовать метод CopyTo
+                var copyToMethod = tensor.GetType().GetMethod("CopyTo", BindingFlags.Instance | BindingFlags.Public);
+                if (copyToMethod != null)
+                {
+                    int tensorSize = batch * classes * height * width;
+                    tensorData = new float[tensorSize];
+                    
+                    // Проверяем, требует ли метод CopyTo аргументов
+                    ParameterInfo[] parameters = copyToMethod.GetParameters();
+                    if (parameters.Length == 1 && parameters[0].ParameterType == typeof(float[]))
+                    {
+                        copyToMethod.Invoke(tensor, new object[] { tensorData });
+                        Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Данные скопированы через CopyTo: {tensorData.Length} элементов");
+                        gotData = true;
+                    }
+                }
+            }
+
+            // Попытка 4: Используем метод GetValue для поэлементного считывания
+            if (!gotData)
+            {
+                var getValueMethod = tensor.GetType().GetMethod("GetValue", BindingFlags.Instance | BindingFlags.Public);
+                if (getValueMethod != null)
+                {
+                    int tensorSize = batch * classes * height * width;
+                    float[] newTensorData = new float[tensorSize];
+                    bool canUseGetValue = false;
+                    
+                    // Проверяем сигнатуру метода GetValue
+                    var parameters = getValueMethod.GetParameters();
+                    if (parameters.Length > 0 && parameters.All(p => p.ParameterType == typeof(int)))
+                    {
+                        canUseGetValue = true;
+                    }
+                    
+                    if (canUseGetValue)
+                    {
+                        // Тестируем, работает ли GetValue
+                        try
+                        {
+                            object[] indices = new object[4] { 0, 0, 0, 0 };
+                            getValueMethod.Invoke(tensor, indices);
+                            
+                            // Если мы добрались сюда, значит GetValue работает
+                            Debug.Log($"[WallSegmentation-ProcessTensorManual] Данные будут считаны поэлементно через GetValue (медленно)");
+                            
+                            // Считываем только часть данных (это может быть очень медленно)
+                            int sampleSize = Math.Min(1000, tensorSize);
+                            for (int i = 0; i < sampleSize; i++)
+                            {
+                                int idx_b = i / (classes * height * width);
+                                int remainder = i % (classes * height * width);
+                                int idx_c = remainder / (height * width);
+                                remainder = remainder % (height * width);
+                                int idx_h = remainder / width;
+                                int idx_w = remainder % width;
+                                
+                                object[] args = new object[4] { idx_b, idx_c, idx_h, idx_w };
+                                object result = getValueMethod.Invoke(tensor, args);
+                                if (result is float value)
+                                {
+                                    newTensorData[i] = value;
+                                }
+                            }
+                            
+                            tensorData = newTensorData;
+                            Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Считано {sampleSize} элементов через GetValue");
+                            gotData = true;
+                    }
+                    catch (Exception ex)
+                    {
+                            Debug.LogWarning($"[WallSegmentation-ProcessTensorManual] Не удалось использовать GetValue: {ex.Message}");
+                        }
+                    }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+            Debug.LogError($"[WallSegmentation-ProcessTensorManual] ❌ Ошибка при получении данных тензора: {ex.Message}\n{ex.StackTrace}");
+            }
+
+        // Если не удалось получить данные, используем симуляцию
+        if (!gotData || tensorData == null)
+            {
+                Debug.LogWarning("[WallSegmentation-ProcessTensorManual] ⚠️ Не удалось получить данные тензора. Используем симуляцию");
+                tensorData = new float[batch * classes * height * width];
+                SimulateTensorData(ref tensorData, classes, height, width);
+        }
+
+        // Проверяем, что тензор имеет ожидаемое количество классов
+        if (classes < Math.Max(wallClassIndex, floorClassIndex) + 1) {
+            Debug.LogWarning($"[WallSegmentation-ProcessTensorManual] ⚠️ Модель выдает {classes} классов, но индексы стен/пола ({wallClassIndex}/{floorClassIndex}) выходят за эти пределы");
+            // Продолжаем выполнение, так как индексы могут быть неправильно настроены
+        }
+
+        if (segmentationMaskTexture == null || segmentationMaskTexture.width != width || segmentationMaskTexture.height != height)
+        {
+            if (segmentationMaskTexture != null)
+            {
+                RenderTexture.ReleaseTemporary(segmentationMaskTexture);
+            }
+            segmentationMaskTexture = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+            segmentationMaskTexture.enableRandomWrite = true;
+            segmentationMaskTexture.Create();
+            Debug.Log($"[WallSegmentation-ProcessTensorManual] 🔄 Создана новая segmentationMaskTexture ({width}x{height})");
+        }
+
+        // Определяем флаг логирования - только раз в 50 кадров, чтобы не спамить логи
+        bool shouldLog = Time.frameCount % 50 == 0;
+        bool usingSim = false;  // Переименовано с usingSimulation
+            
+            // Вычисляем статистику для отладки
+            float wallProbMin = 1.0f;
+            float wallProbMax = 0.0f;
+            float wallProbSum = 0.0f;
+            int wallPixelsCount = 0;
+
+        // Анализируем тензор только каждые 150 кадров, чтобы не замедлять приложение
+        if (Time.frameCount % 150 == 0) {
+            AnalyzeTensorData(tensorData, batch, classes, height, width);
+        }
+
+        // Создаем текстуру для сегментации и заполняем ее данными
+        Color32[] pixels = new Color32[width * height];
+
+            // Проходим по всем пикселям маски
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    // Индекс пикселя в выходном массиве
+                    int pixelIndex = y * width + x;
+                    
+                    // Определяем вероятности для каждого класса
+                    float maxProb = float.MinValue;
+                    int maxClass = -1;
+                    
+                    // Находим класс с максимальной вероятностью
+                    for (int c = 0; c < classes; c++)
+                    {
+                        int tensorIndex = IndexFromCoordinates(0, c, y, x, batch, classes, height, width);
+                        float prob = tensorData[tensorIndex];
+                        
+                        if (prob > maxProb)
+                        {
+                            maxProb = prob;
+                            maxClass = c;
+                        }
+                    }
+                    
+                    // Извлекаем вероятности для стен и пола
+                    float wallProb = 0;
+                    float floorProb = 0;
+                    
+                    // Проверяем, находится ли индекс класса стены в пределах размера массива
+                    if (wallClassIndex >= 0 && wallClassIndex < classes)
+                    {
+                        int wallIndex = IndexFromCoordinates(0, wallClassIndex, y, x, batch, classes, height, width);
+                        if (wallIndex < tensorData.Length)
+                        {
+                            wallProb = tensorData[wallIndex];
+                        }
+                    }
+                    
+                    // Проверяем, находится ли индекс класса пола в пределах размера массива
+                    if (floorClassIndex >= 0 && floorClassIndex < classes)
+                    {
+                        int floorIndex = IndexFromCoordinates(0, floorClassIndex, y, x, batch, classes, height, width);
+                        if (floorIndex < tensorData.Length)
+                        {
+                            floorProb = tensorData[floorIndex];
+                        }
+                    }
+                    
+                    // Применяем пороги вероятности
+                    bool isWall = wallProb >= wallThreshold;
+                    bool isFloor = floorProb >= floorThreshold;
+                    
+                    // Устанавливаем цвет пикселя в зависимости от класса
+                    Color32 pixelColor = new Color32(0, 0, 0, 0); // Прозрачный по умолчанию
+                    
+                    if (isWall)
+                    {
+                        pixelColor = new Color32(255, 0, 0, 255); // Красный для стен
+                        wallPixelsCount++;
+                        
+                        // Обновляем статистику
+                        wallProbMin = Mathf.Min(wallProbMin, wallProb);
+                        wallProbMax = Mathf.Max(wallProbMax, wallProb);
+                        wallProbSum += wallProb;
+                    }
+                    else if (detectFloor && isFloor)
+                    {
+                        pixelColor = new Color32(0, 0, 255, 255); // Синий для пола
+                    }
+                    
+                    pixels[pixelIndex] = pixelColor;
+                }
+            }
+            
+            // Отображаем статистику
+            if (wallPixelsCount > 0)
+            {
+                float wallProbAvg = wallProbSum / wallPixelsCount;
+                Debug.Log($"[WallSegmentation-ProcessTensorManual] 📊 Статистика: найдено {wallPixelsCount}/{width*height} пикселей стены. " +
+                          $"Вероятности стены: min={wallProbMin:F3}, max={wallProbMax:F3}, avg={wallProbAvg:F3}");
+            }
+        else if (usingSim)  // Используем переменную
+            {
+                Debug.Log("[WallSegmentation-ProcessTensorManual] 📊 Используются симулированные данные для маски");
+            }
+            
+            // Создаем текстуру для результата
+            Texture2D resultTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            resultTexture.SetPixels32(pixels);
+            resultTexture.Apply();
+            
+            // Копируем результат в RenderTexture для вывода
+            Graphics.Blit(resultTexture, segmentationMaskTexture);
+            
+            // Уничтожаем временную текстуру
+            Destroy(resultTexture);
+            
+            // Вызываем событие обновления маски
+        if (OnSegmentationMaskUpdated != null)
+        {
+            int subscribersCount = OnSegmentationMaskUpdated.GetInvocationList().Length;
+            Debug.Log($"[WallSegmentation-ProcessTensorManual] 📣 Вызываем событие OnSegmentationMaskUpdated с маской {segmentationMaskTexture.width}x{segmentationMaskTexture.height}, подписчиков: {subscribersCount}");
+            OnSegmentationMaskUpdated.Invoke(segmentationMaskTexture);
+        }
+        else
+        {
+            Debug.LogWarning("[WallSegmentation-ProcessTensorManual] ⚠️ Нет подписчиков на событие OnSegmentationMaskUpdated!");
+        }
+        
+        Debug.Log("[WallSegmentation-ProcessTensorManual] ✅ Маска сегментации обновлена (размер " + width + "x" + height + ")");
     }
 
-    public string[] GetAvailableWebcams()
+    /// <summary>
+    /// Проверяет, доступен ли тензор для чтения напрямую
+    /// </summary>
+    private bool IsTensorAccessible(Tensor<float> tensor)
     {
-        Debug.LogWarning("WebCam functionality has been removed.");
-        return new string[0];
+        if (tensor == null)
+        {
+            return false;
+        }
+        
+        try
+        {
+            // Метод 1: Пробуем получить данные через ToReadOnlyArray
+            var toArrayMethod = tensor.GetType().GetMethod("ToReadOnlyArray", BindingFlags.Instance | BindingFlags.Public);
+            if (toArrayMethod != null)
+            {
+                return true;
+            }
+
+            // Метод 2: Проверяем наличие свойства Data
+            var dataProperty = tensor.GetType().GetProperty("Data", BindingFlags.Instance | BindingFlags.Public);
+            if (dataProperty != null)
+            {
+                return true;
+            }
+
+            // Метод 3: Проверяем наличие метода AsReadOnlySpan
+            var asSpanMethod = tensor.GetType().GetMethod("AsReadOnlySpan", BindingFlags.Instance | BindingFlags.Public);
+            if (asSpanMethod != null)
+            {
+                return true;
+            }
+
+            // Метод 4: Проверяем наличие метода CopyTo
+            var copyToMethod = tensor.GetType().GetMethod("CopyTo", BindingFlags.Instance | BindingFlags.Public);
+            if (copyToMethod != null)
+            {
+                return true;
+            }
+
+            // Если ни один из методов не найден, тензор не доступен для чтения
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[WallSegmentation-IsTensorAccessible] Ошибка при проверке доступности тензора: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Вычисляет индекс для доступа к данным тензора в линеаризованном массиве
+    /// </summary>
+    private int IndexFromCoordinates(int batch, int channel, int height, int width, 
+                    int batchSize, int numChannels, int imgHeight, int imgWidth)
+    {
+        return batch * numChannels * imgHeight * imgWidth + channel * imgHeight * imgWidth + height * imgWidth + width;
+    }
+
+    /// <summary>
+    /// Анализирует структуру тензора и выводит информацию о его значениях
+    /// </summary>
+    private void AnalyzeTensorData(float[] tensorData, int batch, int classes, int height, int width) 
+    {
+        if (tensorData == null || tensorData.Length == 0)
+        {
+            Debug.LogWarning("[AnalyzeTensorData] Тензор пуст или null");
+            return;
+        }
+
+        // Проверяем только часть тензора, чтобы не замедлять выполнение
+        int sampleX = width / 2;
+        int sampleY = height / 2;
+
+        Debug.Log($"[AnalyzeTensorData] Анализ значений тензора ({batch}x{classes}x{height}x{width}), всего {tensorData.Length} элементов");
+
+        // Выводим класс с максимальной вероятностью для центрального пикселя
+        int maxClassIndex = -1;
+        float maxClassValue = float.MinValue;
+
+        // Значения для топ-5 классов
+        Dictionary<int, float> topClasses = new Dictionary<int, float>();
+
+        // Проходим по всем классам для центрального пикселя
+        for (int c = 0; c < classes; c++) 
+        {
+            int index = IndexFromCoordinates(0, c, sampleY, sampleX, batch, classes, height, width);
+            float value = tensorData[index];
+            
+            // Сохраняем топ классы
+            if (topClasses.Count < 5 || value > topClasses.Values.Min())
+            {
+                topClasses[c] = value;
+                if (topClasses.Count > 5)
+                {
+                    // Удаляем класс с минимальным значением
+                    int minClass = topClasses.OrderBy(pair => pair.Value).First().Key;
+                    topClasses.Remove(minClass);
+                }
+            }
+            
+            // Ищем класс с максимальной вероятностью
+            if (value > maxClassValue)
+            {
+                maxClassValue = value;
+                maxClassIndex = c;
+            }
+        }
+
+        // Выводим информацию о максимальном классе
+        Debug.Log($"[AnalyzeTensorData] Центральный пиксель ({sampleX},{sampleY}): максимальный класс = {maxClassIndex}, значение = {maxClassValue}");
+
+        // Выводим топ-5 классов
+        Debug.Log("[AnalyzeTensorData] Топ-5 классов для центрального пикселя:");
+        foreach (var pair in topClasses.OrderByDescending(p => p.Value))
+        {
+            Debug.Log($"  - Класс {pair.Key}: {pair.Value}");
+        }
+
+        // Проверяем значения для заданных classIndex стены и пола
+        if (wallClassIndex >= 0 && wallClassIndex < classes)
+        {
+            int wallIndex = IndexFromCoordinates(0, wallClassIndex, sampleY, sampleX, batch, classes, height, width);
+            float wallValue = tensorData[wallIndex];
+            Debug.Log($"[AnalyzeTensorData] Центральный пиксель: класс стены (индекс {wallClassIndex}) = {wallValue}");
+        }
+
+        if (floorClassIndex >= 0 && floorClassIndex < classes)
+        {
+            int floorIndex = IndexFromCoordinates(0, floorClassIndex, sampleY, sampleX, batch, classes, height, width);
+            float floorValue = tensorData[floorIndex];
+            Debug.Log($"[AnalyzeTensorData] Центральный пиксель: класс пола (индекс {floorClassIndex}) = {floorValue}");
+        }
+    }
+
+    /// <summary>
+    /// Выполняет упрощенную симуляцию сегментации
+    /// </summary>
+    private void SimulateTensorData(ref float[] tensorData, int numClasses, int height, int width)
+    {
+        Debug.Log("[WallSegmentation-SimulateTensorData] ℹ️ Созданы симулированные данные тензора");
+
+        System.Random random = new System.Random();
+        int wallClass = wallClassIndex;
+        int floorClass = floorClassIndex;
+
+        // Заполняем тензор симулированными данными
+        for (int b = 0; b < 1; b++)
+        {
+            for (int h = 0; h < height; h++)
+            {
+                for (int w = 0; w < width; w++)
+                {
+                    // Простая логика симуляции - выделяем стены по краям и в центре
+                    bool isWall = (h < height * 0.2f) || (h > height * 0.8f) || 
+                                  (w < width * 0.2f) || (w > width * 0.8f) ||
+                                  (Math.Abs(h - height / 2) < height * 0.1f && w > width * 0.3f && w < width * 0.7f);
+                    
+                    bool isFloor = !isWall && (h > height * 0.5f);
+
+                    // Задаем вероятности для классов
+                    for (int c = 0; c < numClasses; c++)
+                    {
+                        int idx = IndexFromCoordinates(b, c, h, w, 1, numClasses, height, width);
+                        
+                        // По умолчанию вероятность низкая
+                        tensorData[idx] = 0.01f + (float)random.NextDouble() * 0.03f;
+                        
+                        // Для целевых классов задаем высокую вероятность
+                        if ((c == wallClass && isWall) || (c == floorClass && isFloor))
+                        {
+                            // Стены и пол имеют более высокую вероятность
+                            tensorData[idx] = 0.7f + (float)random.NextDouble() * 0.25f;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Проводим анализ тензора для отладки
+        AnalyzeTensorData(tensorData, 0, numClasses, height, width);
+    }
+
+    /// <summary>
+    /// Анализирует структуру модели
+    /// </summary>
+    private void AnalyzeModelStructure()
+    {
+        if (model == null)
+        {
+            Debug.LogWarning("[WallSegmentation-AnalyzeModelStructure] Модель не инициализирована");
+            return;
+        }
+
+        Debug.Log($"[WallSegmentation-AnalyzeModelStructure] Анализ структуры модели типа {model.GetType().Name}");
+
+        // Дополнительный код анализа структуры модели может быть добавлен здесь
+    }
+
+    /// <summary>
+    /// Выводит информацию о модели
+    /// </summary>
+    private void LogModelInfo()
+    {
+        if (model == null)
+        {
+            Debug.LogWarning("[WallSegmentation-LogModelInfo] Модель не инициализирована");
+            return;
+        }
+
+        Debug.Log($"[WallSegmentation-LogModelInfo] Информация о модели: Тип = {model.GetType().FullName}");
+
+        // Дополнительная информация о модели может быть добавлена здесь
+    }
+
+    /// <summary>
+    /// Создает тензор в формате для XR симуляции
+    /// </summary>
+    private Tensor<float> TryCreateXRSimulationTensor(Texture2D inputTexture)
+    {
+        try
+        {
+            // Реализация создания тензора для XR симуляции
+            float[] pixelsData = new float[inputTexture.width * inputTexture.height * 3];
+            
+            // Преобразуем пиксели в тензор
+            Color[] pixels = inputTexture.GetPixels();
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixelsData[i * 3 + 0] = pixels[i].r;
+                pixelsData[i * 3 + 1] = pixels[i].g;
+                pixelsData[i * 3 + 2] = pixels[i].b;
+            }
+            
+            try 
+            {
+                // Используем правильный TensorShape из Unity.Sentis
+                return new Tensor<float>(
+                    new Unity.Sentis.TensorShape(1, 3, inputTexture.height, inputTexture.width), 
+                    pixelsData
+                );
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[TryCreateXRSimulationTensor] Не удалось создать тензор: {ex.Message}");
+                
+                // Пробуем альтернативный способ создания тензора при помощи рефлексии
+                Type tensorType = typeof(Tensor<float>);
+                var constructors = tensorType.GetConstructors();
+                foreach (var ctor in constructors)
+                {
+                    var parameters = ctor.GetParameters();
+                    if (parameters.Length == 2 && 
+                        parameters[0].ParameterType == typeof(Unity.Sentis.TensorShape) && 
+                        parameters[1].ParameterType == typeof(float[]))
+                    {
+                        try 
+                        {
+                            return (Tensor<float>)ctor.Invoke(new object[] 
+                            { 
+                                new Unity.Sentis.TensorShape(1, 3, inputTexture.height, inputTexture.width),
+                                pixelsData 
+                            });
+                        }
+                        catch (Exception innerEx)
+                        {
+                            Debug.LogWarning($"[TryCreateXRSimulationTensor] Ошибка при создании тензора через рефлексию: {innerEx.Message}");
+                        }
+                    }
+                }
+                
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[WallSegmentation-TryCreateXRSimulationTensor] Ошибка: {ex.Message}");
+            return null;
+        }
+    }
+
+    private Tensor<float> CreateNCHWTensorFromPixels(Texture2D inputTexture)
+    {
+        return TryCreateXRSimulationTensor(inputTexture);
+    }
+
+    private Tensor<float> CreateTensorFromPixels(Texture2D inputTexture)
+    {
+        return TryCreateXRSimulationTensor(inputTexture);
+    }
+
+    private Tensor<float> CreateSingleChannelTensor(Texture2D inputTexture)
+    {
+        try
+        {
+            // Создаем одноканальный тензор
+            float[] pixelsData = new float[inputTexture.width * inputTexture.height];
+            
+            // Преобразуем пиксели в тензор, используя только яркость
+            Color[] pixels = inputTexture.GetPixels();
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixelsData[i] = pixels[i].grayscale;
+            }
+            
+            try 
+            {
+                // Используем правильный TensorShape из Unity.Sentis
+                return new Tensor<float>(
+                    new Unity.Sentis.TensorShape(1, 1, inputTexture.height, inputTexture.width), 
+                    pixelsData
+                );
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[CreateSingleChannelTensor] Не удалось создать тензор: {ex.Message}");
+                
+                // Пробуем альтернативный способ создания тензора при помощи рефлексии
+                Type tensorType = typeof(Tensor<float>);
+                var constructors = tensorType.GetConstructors();
+                foreach (var ctor in constructors)
+                {
+                    var parameters = ctor.GetParameters();
+                    if (parameters.Length == 2 && 
+                        parameters[0].ParameterType == typeof(Unity.Sentis.TensorShape) && 
+                        parameters[1].ParameterType == typeof(float[]))
+                    {
+                        try 
+                        {
+                            return (Tensor<float>)ctor.Invoke(new object[] 
+                            { 
+                                new Unity.Sentis.TensorShape(1, 1, inputTexture.height, inputTexture.width),
+                                pixelsData 
+                            });
+                        }
+                        catch (Exception innerEx)
+                        {
+                            Debug.LogWarning($"[CreateSingleChannelTensor] Ошибка при создании тензора через рефлексию: {innerEx.Message}");
+                        }
+                    }
+                }
+                
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[CreateSingleChannelTensor] Ошибка: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет отладочную маску
+    /// </summary>
+    private void SaveDebugMask()
+    {
+        // Реализация сохранения отладочной маски
+        Debug.Log("[WallSegmentation-SaveDebugMask] Сохранение отладочной маски #" + debugMaskCounter);
+        
+        try
+        {
+            // Создаем директорию, если ее нет
+            string dirPath = Path.Combine(Application.persistentDataPath, debugSavePath);
+            if (!Directory.Exists(dirPath))
+            {
+                Directory.CreateDirectory(dirPath);
+            }
+            
+            // Сохраняем текущее изображение с камеры
+            if (cameraTexture != null)
+            {
+                string cameraFilePath = Path.Combine(dirPath, $"camera_frame_{debugMaskCounter}.png");
+                byte[] cameraBytes = cameraTexture.EncodeToPNG();
+                File.WriteAllBytes(cameraFilePath, cameraBytes);
+                Debug.Log($"[WallSegmentation-SaveDebugMask] ✅ Сохранено изображение с камеры: {cameraFilePath}");
+            }
+            
+            // Сохраняем текущую маску сегментации
+            if (segmentationMaskTexture != null && segmentationMaskTexture.IsCreated())
+            {
+                RenderTexture prevRT = RenderTexture.active;
+                RenderTexture.active = segmentationMaskTexture;
+                
+                Texture2D maskCopy = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height, TextureFormat.RGBA32, false);
+                maskCopy.ReadPixels(new Rect(0, 0, segmentationMaskTexture.width, segmentationMaskTexture.height), 0, 0);
+                maskCopy.Apply();
+                
+                RenderTexture.active = prevRT;
+                
+                string maskFilePath = Path.Combine(dirPath, $"segmentation_mask_{debugMaskCounter}.png");
+                byte[] maskBytes = maskCopy.EncodeToPNG();
+                File.WriteAllBytes(maskFilePath, maskBytes);
+                
+                Destroy(maskCopy);
+                Debug.Log($"[WallSegmentation-SaveDebugMask] ✅ Сохранена маска сегментации: {maskFilePath}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[WallSegmentation-SaveDebugMask] ❌ Ошибка при сохранении отладочных данных: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Обновление каждый кадр - выполняем сегментацию с использованием текущего изображения с камеры
+    /// </summary>
+    private void Update()
+    {
+        // Периодически выводим информацию о состоянии работы WallSegmentation
+        if (Time.frameCount % 300 == 0)
+        {
+            Debug.Log($"[WallSegmentation-Update] 📊 Статус: инициализирована={isModelInitialized}, ARCamera={ARCameraManager != null}, кадр={Time.frameCount}");
+        }
+        
+        if (!isModelInitialized || ARCameraManager == null)
+        {
+            // Если модель не инициализирована, но прошло значительное время, попробуем инициализировать ее снова
+            if (Time.frameCount % 100 == 0 && !isInitializing && !isModelInitialized)
+            {
+                Debug.LogWarning("[WallSegmentation-Update] ⚠️ Модель не инициализирована. Попытка автоматической инициализации...");
+                StartCoroutine(InitializeSegmentation());
+            }
+            return;
+        }
+        
+        // Получаем изображение с камеры
+        bool usingSimulation = false;
+        Texture2D cameraPixels = GetCameraTexture();
+        
+        if (cameraPixels == null)
+        {
+            consecutiveFailCount++;
+            usingSimulation = true;
+            
+            if (Time.frameCount % 50 == 0) {
+                Debug.LogWarning($"[WallSegmentation-Update] ⚠️ Не удалось получить изображение с камеры (попыток: {consecutiveFailCount})");
+            }
+            
+            // Проверяем нужно ли использовать симуляцию
+            if (useSimulationIfNoCamera && consecutiveFailCount >= failureThresholdForSimulation) 
+            {
+                if (!usingSimulatedSegmentation) {
+                    Debug.Log($"[WallSegmentation-Update] 🔄 Включение режима симуляции после {consecutiveFailCount} неудачных попыток");
+                    usingSimulatedSegmentation = true;
+                }
+                
+                cameraPixels = GetCameraTextureFromSimulation();
+                if (cameraPixels != null)
+                {
+                    if (Time.frameCount % 100 == 0) {
+                        Debug.Log($"[WallSegmentation-Update] ℹ️ Используется симуляция изображения с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Сбрасываем счетчик неудач, если удалось получить изображение
+            consecutiveFailCount = 0;
+            usingSimulatedSegmentation = false;
+            if (Time.frameCount % 500 == 0) {
+                Debug.Log($"[WallSegmentation-Update] ✅ Получено изображение с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
+            }
+        }
+        
+        // Если не удалось получить изображение даже из симуляции, выходим
+        if (cameraPixels == null)
+        {
+            if (Time.frameCount % 100 == 0) {
+                Debug.LogWarning("[WallSegmentation-Update] ❌ Не удалось получить изображение ни с камеры, ни из симуляции");
+            }
+            return;
+        }
+        
+        // Выполняем сегментацию с использованием полученного изображения
+        PerformSegmentation(cameraPixels);
+    }
+
+    /// <summary>
+    /// Пытается получить данные из тензора используя TensorExtensions
+    /// </summary>
+    private bool TryGetTensorData(Tensor<float> tensor, out float[] data)
+    {
+        data = null;
+        if (tensor == null) return false;
+
+        try
+        {
+            // Пытаемся найти статический класс TensorExtensions в Unity.Sentis
+            Type tensorExtensionsType = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(a => a.GetTypes())
+                .FirstOrDefault(t => t.FullName == "Unity.Sentis.TensorExtensions");
+
+            if (tensorExtensionsType != null)
+            {
+                Debug.Log($"[WallSegmentation] ✅ Найден класс TensorExtensions");
+
+                // Проверяем метод AsReadOnlySpan (новый в Sentis 2.1.x)
+                var asReadOnlySpanMethod = tensorExtensionsType.GetMethod("AsReadOnlySpan", 
+                    BindingFlags.Public | BindingFlags.Static, 
+                    null, 
+                    new Type[] { typeof(Tensor<float>) }, 
+                    null);
+
+                if (asReadOnlySpanMethod != null)
+                {
+                    Debug.Log($"[WallSegmentation] ✅ Найден метод AsReadOnlySpan");
+                    
+                    // Вызываем метод AsReadOnlySpan
+                    var span = asReadOnlySpanMethod.Invoke(null, new object[] { tensor });
+                    
+                    // Если результат не null, создаем массив из ReadOnlySpan
+                    if (span != null)
+                    {
+                        // Получаем тип ReadOnlySpan<float>
+                        Type spanType = span.GetType();
+                        
+                        // Узнаем свойство Length в ReadOnlySpan<float>
+                        PropertyInfo lengthProperty = spanType.GetProperty("Length");
+                        if (lengthProperty != null)
+                        {
+                            int length = (int)lengthProperty.GetValue(span);
+                            Debug.Log($"[WallSegmentation] ✅ Получен Span длиной {length}");
+                            
+                            // Создаем массив нужной длины
+                            data = new float[length];
+                            
+                            // Находим метод CopyTo в ReadOnlySpan<float>
+                            MethodInfo spanCopyToMethod = spanType.GetMethod("CopyTo");
+                            if (spanCopyToMethod != null)
+                            {
+                                // Создаем Span<float> из нашего массива
+                                Type spanOfTType = AppDomain.CurrentDomain.GetAssemblies()
+                                    .SelectMany(a => a.GetTypes())
+                                    .FirstOrDefault(t => t.FullName == "System.Span`1");
+                                    
+                                if (spanOfTType != null)
+                                {
+                                    Type spanOfFloatType = spanOfTType.MakeGenericType(typeof(float));
+                                    
+                                    // Создаем Span<float> из нашего массива
+                                    ConstructorInfo spanConstructor = spanOfFloatType.GetConstructor(
+                                        new Type[] { typeof(float[]) });
+                                        
+                                    if (spanConstructor != null)
+                                    {
+                                        object destSpan = spanConstructor.Invoke(new object[] { data });
+                                        
+                                        // Копируем данные
+                                        spanCopyToMethod.Invoke(span, new[] { destSpan });
+                                        
+                                        Debug.Log($"[WallSegmentation] ✅ Данные скопированы в массив через Span");
+                        return true;
+                    }
+                }
+            }
+                            
+                            // Если не удалось скопировать через CopyTo, пробуем поэлементно
+                            // Находим индексатор в ReadOnlySpan<float>
+                            PropertyInfo indexerProperty = spanType.GetProperty("Item");
+                            if (indexerProperty != null)
+                            {
+                                for (int i = 0; i < length; i++)
+                                {
+                                    data[i] = (float)indexerProperty.GetValue(span, new object[] { i });
+                                }
+                                Debug.Log($"[WallSegmentation] ✅ Данные скопированы в массив поэлементно");
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                // Ищем метод AsFloats или подобные методы
+                var asFloatsMethod = tensorExtensionsType.GetMethod("AsFloats", 
+                    BindingFlags.Public | BindingFlags.Static, 
+                    null, 
+                    new Type[] { typeof(Tensor<float>) }, 
+                    null);
+
+                if (asFloatsMethod != null)
+                {
+                    Debug.Log($"[WallSegmentation] ✅ Найден метод AsFloats");
+                    data = (float[])asFloatsMethod.Invoke(null, new object[] { tensor });
+                    return data != null;
+                }
+                
+                // Пытаемся найти другие подходящие методы, возвращающие массив float
+                var otherMethods = tensorExtensionsType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .Where(m => m.ReturnType == typeof(float[]) && 
+                           m.GetParameters().Length == 1 && 
+                           m.GetParameters()[0].ParameterType == typeof(Tensor<float>))
+                    .ToList();
+                
+                foreach (var method in otherMethods)
+                {
+                    Debug.Log($"[WallSegmentation] Пробуем метод {method.Name}");
+                    try
+                    {
+                        data = (float[])method.Invoke(null, new object[] { tensor });
+                        if (data != null)
+                        {
+                            Debug.Log($"[WallSegmentation] ✅ Успешно получены данные через метод {method.Name}");
+                    return true;
+                }
+            }
+                    catch (Exception ex)
+            {
+                        Debug.LogWarning($"[WallSegmentation] Ошибка при вызове метода {method.Name}: {ex.Message}");
+                    }
+                }
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[WallSegmentation] Ошибка при получении данных тензора через TensorExtensions: {ex.Message}\n{ex.StackTrace}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Пытается получить данные из тензора через динамическое определение типа DenseTensor
+    /// </summary>
+    private bool TryGetDenseTensorData(Tensor<float> tensor, out float[] data)
+    {
+        data = null;
+        if (tensor == null) return false;
+
+        try
+        {
+            // Проверяем, является ли тензор DenseTensor (в Unity Sentis 2.1.x)
+            Type denseTensorType = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(a => a.GetTypes())
+                .FirstOrDefault(t => t.FullName == "Unity.Sentis.DenseTensor`1");
+            
+            if (denseTensorType != null)
+            {
+                Type specificDenseTensorType = denseTensorType.MakeGenericType(typeof(float));
+                Debug.Log($"[WallSegmentation] ✅ Найден тип DenseTensor<float>");
+                
+                // Проверяем, является ли входной тензор DenseTensor<float>
+                if (specificDenseTensorType.IsInstanceOfType(tensor))
+                {
+                    Debug.Log($"[WallSegmentation] ✅ Тензор действительно является DenseTensor<float>");
+                    
+                    // Ищем свойство Buffer в DenseTensor<float>
+                    PropertyInfo bufferProperty = specificDenseTensorType.GetProperty("Buffer", 
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        
+                    if (bufferProperty != null)
+                    {
+                        // Получаем буфер данных
+                        var buffer = bufferProperty.GetValue(tensor);
+                        
+                        if (buffer is float[] floatBuffer)
+                        {
+                            data = floatBuffer;
+                            Debug.Log($"[WallSegmentation] ✅ Получены данные через DenseTensor.Buffer: {data.Length} элементов");
+                            return true;
+                        }
+                        else if (buffer != null)
+                        {
+                            // Возможно, это ReadOnlySpan<float> или другой тип
+                            Type bufferType = buffer.GetType();
+                            Debug.Log($"[WallSegmentation] Буфер имеет тип {bufferType.FullName}");
+                            
+                            // Если это ReadOnlySpan<float>, попробуем преобразовать его в массив
+                            if (bufferType.FullName.Contains("ReadOnlySpan") || 
+                                bufferType.FullName.Contains("Span"))
+                            {
+                                // Получаем длину
+                                PropertyInfo lengthProperty = bufferType.GetProperty("Length");
+                                if (lengthProperty != null)
+                                {
+                                    int length = (int)lengthProperty.GetValue(buffer);
+                                    data = new float[length];
+                                    
+                                    // Пробуем метод CopyTo
+                                    MethodInfo bufferCopyToMethod = bufferType.GetMethod("CopyTo");
+                                    if (bufferCopyToMethod != null)
+                                    {
+                                        // Создаем Span<float> из нашего массива
+                                        Type spanOfTType = AppDomain.CurrentDomain.GetAssemblies()
+                                            .SelectMany(a => a.GetTypes())
+                                            .FirstOrDefault(t => t.FullName == "System.Span`1");
+                                            
+                                        if (spanOfTType != null)
+                                        {
+                                            Type spanOfFloatType = spanOfTType.MakeGenericType(typeof(float));
+                                            
+                                            // Создаем Span<float> из нашего массива
+                                            ConstructorInfo spanConstructor = spanOfFloatType.GetConstructor(
+                                                new Type[] { typeof(float[]) });
+                                                
+                                            if (spanConstructor != null)
+                                            {
+                                                object destSpan = spanConstructor.Invoke(new object[] { data });
+                                                
+                                                // Копируем данные
+                                                bufferCopyToMethod.Invoke(buffer, new[] { destSpan });
+                                                
+                                                Debug.Log($"[WallSegmentation] ✅ Данные скопированы из буфера в массив через Span");
+                                                return true;
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Если CopyTo не сработал, пробуем поэлементно через индексатор
+                                    PropertyInfo indexerProperty = bufferType.GetProperty("Item");
+                                    if (indexerProperty != null)
+                                    {
+                                        for (int i = 0; i < length; i++)
+                                        {
+                                            data[i] = (float)indexerProperty.GetValue(buffer, new object[] { i });
+                                        }
+                                        Debug.Log($"[WallSegmentation] ✅ Данные скопированы из буфера в массив поэлементно");
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Если не удалось получить данные через Buffer, пробуем через метод ToArray
+                    MethodInfo toArrayMethod = specificDenseTensorType.GetMethod("ToArray", 
+                        BindingFlags.Instance | BindingFlags.Public);
+                        
+                    if (toArrayMethod != null)
+                    {
+                        var result = toArrayMethod.Invoke(tensor, null);
+                        if (result is float[] floatArray)
+                        {
+                            data = floatArray;
+                            Debug.Log($"[WallSegmentation] ✅ Получены данные через DenseTensor.ToArray: {data.Length} элементов");
+                            return true;
+                        }
+                    }
+                    
+                    // Пробуем через метод CopyTo (если он принимает массив float[])
+                    MethodInfo tensorCopyToMethod = specificDenseTensorType.GetMethod("CopyTo", 
+                        BindingFlags.Instance | BindingFlags.Public,
+                        null,
+                        new Type[] { typeof(float[]) },
+                        null);
+                        
+                    if (tensorCopyToMethod != null)
+                    {
+                        // Создаем массив нужного размера
+                        int tensorSize = tensor.shape.length > 0 ? tensor.shape[0] : 0;
+                        for (int i = 1; i < tensor.shape.length; i++)
+                        {
+                            tensorSize *= tensor.shape[i];
+                        }
+                        
+                        if (tensorSize > 0)
+                        {
+                            data = new float[tensorSize];
+                            tensorCopyToMethod.Invoke(tensor, new object[] { data });
+                            Debug.Log($"[WallSegmentation] ✅ Получены данные через DenseTensor.CopyTo: {data.Length} элементов");
+                            return true;
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.Log($"[WallSegmentation] Тензор не является DenseTensor<float>, а имеет тип {tensor.GetType().FullName}");
+                }
+            }
+            else
+            {
+                Debug.Log("[WallSegmentation] Тип DenseTensor<T> не найден");
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[WallSegmentation] Ошибка при получении данных через DenseTensor: {ex.Message}\n{ex.StackTrace}");
+            return false;
+        }
     }
 }

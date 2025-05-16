@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_Active: 0
   passMaterial: {fileID: 2100000, guid: 943407cff66a9a64ca8c837f71bbd10b, type: 2}
-  minTransparency: 0.3
+  minTransparency: 0.8
   useFallbackMaterial: 1
 --- !u!114 &11400000
 MonoBehaviour:

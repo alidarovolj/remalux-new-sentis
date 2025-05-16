@@ -1,3 +1,17 @@
+/*
+ * SceneSetupUtility.cs
+ * 
+ * Утилита для создания и настройки AR сцены в Unity с поддержкой перекраски стен
+ * 
+ * Последние изменения:
+ * - Добавлена система якорей (anchors) для стабильного позиционирования AR-плоскостей
+ * - Улучшено определение вертикальных поверхностей с помощью IsVerticalPlane
+ * - Оптимизированы материалы AR-плоскостей для прозрачности и производительности
+ * - Добавлен отладочный интерфейс WallPaintDebugger для мониторинга плоскостей
+ * - Оптимизированы настройки AR камеры для улучшения производительности
+ * - Исправлена проблема с привязкой плоскостей к пространству вместо камеры
+ */
+
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -310,6 +324,9 @@ public class SceneSetupUtility : EditorWindow
                 AutoAssignWallSegmentationModel();
             }
 
+            // Оптимизируем производительность
+            OptimizeARPerformance();
+
             // Сохраняем сцену
             string scenePath = "Assets/Scenes/" + sceneName + ".unity";
 
@@ -529,6 +546,9 @@ public class SceneSetupUtility : EditorWindow
 
         var anchorManager = trackersObj.AddComponent<ARAnchorManager>();
         anchorManager.enabled = true; // Явно включаем
+
+        // Настраиваем ARAnchorManager для стабилизации контента
+        SetupARAnchorManager(trackersObj);
 
         // Настройка ARSession для iOS
 #if UNITY_IOS
@@ -1338,6 +1358,500 @@ public class SceneSetupUtility : EditorWindow
             }
 
             Debug.Log("Эффект перекраски стен настроен");
+
+            // После установки WallPaintEffect, улучшаем его
+            EnhanceWallPainting(paintEffect as MonoBehaviour);
+        }
+    }
+
+    // Вспомогательный метод для определения вертикальной плоскости
+    private bool IsVerticalPlane(ARPlane plane)
+    {
+        // Проверяем нормаль плоскости
+        Vector3 planeNormal = plane.normal;
+        float dotProduct = Vector3.Dot(planeNormal, Vector3.up);
+        
+        // Если скалярное произведение с вектором вверх близко к 0, то плоскость вертикальная
+        // (cos угла между нормалью и вектором вверх близок к 0 для вертикальных плоскостей)
+        return Mathf.Abs(dotProduct) < 0.25f; // допустимое отклонение ~15 градусов
+    }
+
+    // Расширяем класс WallPaintEffect для более точного определения вертикальных поверхностей
+    private void EnhanceWallPainting(MonoBehaviour wallPaintEffect)
+    {
+        if (wallPaintEffect == null) return;
+        
+        Debug.Log("Улучшение компонента WallPaintEffect для более точного определения стен...");
+        
+        // Добавляем метод для проверки вертикальных поверхностей через C# скрипт
+        // Так как мы не можем напрямую изменить скрипт WallPaintEffect, добавим отладочный компонент
+        
+        // Создаем дополнительный компонент для отладки и улучшения работы с вертикальными плоскостями
+        GameObject debugObj = new GameObject("WallPaintDebugger");
+        debugObj.transform.SetParent(wallPaintEffect.transform.parent);
+        
+        // Добавляем компонент WallPaintDebugger
+        Type wallPaintDebuggerType = FindTypeInAllAssemblies("WallPaintDebugger");
+        if (wallPaintDebuggerType == null)
+        {
+            // Если тип не найден, создаем новый компонент
+            // Создаем класс WallPaintDebugger динамически
+            string scriptPath = "Assets/Scripts/WallPaintDebugger.cs";
+            
+            // Проверяем, существует ли директория
+            string directory = Path.GetDirectoryName(scriptPath);
+            if (!Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            
+            // Контент для скрипта WallPaintDebugger
+            string scriptContent = @"using UnityEngine;
+using UnityEngine.XR.ARFoundation;
+using System.Collections.Generic;
+
+public class WallPaintDebugger : MonoBehaviour
+{
+    public ARPlaneManager planeManager;
+    public MonoBehaviour wallPaintEffect;
+    public bool enableDebugVisualization = false;
+    
+    private List<ARPlane> verticalPlanes = new List<ARPlane>();
+    
+    void Start()
+    {
+        // Находим необходимые компоненты, если они не назначены
+        if (planeManager == null)
+        {
+            var xrOrigin = FindObjectOfType<Unity.XR.CoreUtils.XROrigin>();
+            if (xrOrigin != null)
+            {
+                var trackers = xrOrigin.transform.Find(""AR Trackers"");
+                if (trackers != null)
+                {
+                    planeManager = trackers.GetComponent<ARPlaneManager>();
+                }
+            }
+        }
+        
+        // Подписываемся на события обнаружения плоскостей
+        if (planeManager != null)
+        {
+            planeManager.planesChanged += OnPlanesChanged;
+        }
+    }
+    
+    void OnDestroy()
+    {
+        // Отписываемся от событий
+        if (planeManager != null)
+        {
+            planeManager.planesChanged -= OnPlanesChanged;
+        }
+    }
+    
+    private void OnPlanesChanged(ARPlanesChangedEventArgs args)
+    {
+        // Обрабатываем новые плоскости
+        foreach (ARPlane plane in args.added)
+        {
+            ProcessPlane(plane);
+        }
+        
+        // Обрабатываем обновленные плоскости
+        foreach (ARPlane plane in args.updated)
+        {
+            ProcessPlane(plane);
+        }
+        
+        // Удаляем отслеживание для удаленных плоскостей
+        foreach (ARPlane plane in args.removed)
+        {
+            verticalPlanes.Remove(plane);
+        }
+    }
+    
+    private void ProcessPlane(ARPlane plane)
+    {
+        // Проверяем, является ли плоскость вертикальной
+        bool isVertical = IsVerticalPlane(plane);
+        
+        if (isVertical)
+        {
+            // Если это вертикальная плоскость и её еще нет в списке
+            if (!verticalPlanes.Contains(plane))
+            {
+                verticalPlanes.Add(plane);
+                
+                // Стабилизируем плоскость с помощью якоря
+                if (plane.gameObject.GetComponent<ARAnchor>() == null)
+                {
+                    plane.gameObject.AddComponent<ARAnchor>();
+                }
+                
+                // Отключаем тени для производительности
+                Renderer renderer = plane.GetComponent<Renderer>();
+                if (renderer != null)
+                {
+                    renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    renderer.receiveShadows = false;
+                }
+                
+                // Визуальное выделение для отладки
+                if (enableDebugVisualization)
+                {
+                    // Изменяем цвет для визуализации вертикальных плоскостей
+                    LineRenderer lineRenderer = plane.GetComponent<LineRenderer>();
+                    if (lineRenderer != null)
+                    {
+                        lineRenderer.startColor = Color.green;
+                        lineRenderer.endColor = Color.green;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Удаляем плоскость из списка вертикальных, если она была там
+            verticalPlanes.Remove(plane);
+        }
+    }
+    
+    // Метод для определения вертикальной плоскости
+    private bool IsVerticalPlane(ARPlane plane)
+    {
+        // Проверяем нормаль плоскости
+        Vector3 planeNormal = plane.normal;
+        float dotProduct = Vector3.Dot(planeNormal, Vector3.up);
+        
+        // Если скалярное произведение с вектором вверх близко к 0, то плоскость вертикальная
+        return Mathf.Abs(dotProduct) < 0.25f; // допустимое отклонение ~15 градусов
+    }
+    
+    // Публичный метод для получения всех вертикальных плоскостей
+    public List<ARPlane> GetVerticalPlanes()
+    {
+        return new List<ARPlane>(verticalPlanes);
+    }
+    
+    // Отладочная визуализация в редакторе
+    void OnDrawGizmos()
+    {
+        if (!enableDebugVisualization) return;
+        
+        Gizmos.color = Color.green;
+        foreach (var plane in verticalPlanes)
+        {
+            if (plane != null)
+            {
+                Gizmos.DrawWireCube(plane.center, new Vector3(plane.size.x, plane.size.y, 0.01f));
+            }
+        }
+    }
+}
+
+public class WallPaintDebugPanel : MonoBehaviour
+{
+    public WallPaintDebugger debugger;
+    public Toggle debugVisualizationToggle;
+    
+    void Start()
+    {
+        if (debugger == null)
+        {
+            debugger = FindObjectOfType<WallPaintDebugger>();
+        }
+        
+        if (debugVisualizationToggle != null)
+        {
+            debugVisualizationToggle.isOn = debugger != null && debugger.enableDebugVisualization;
+            debugVisualizationToggle.onValueChanged.AddListener(OnToggleDebug);
+        }
+    }
+    
+    private void OnToggleDebug(bool value)
+    {
+        if (debugger != null)
+        {
+            debugger.enableDebugVisualization = value;
+        }
+    }
+    
+    // Метод для разрешения проблем с отображением плоскостей
+    public void ResetARPlanes()
+    {
+        var planeManager = FindObjectOfType<UnityEngine.XR.ARFoundation.ARPlaneManager>();
+        if (planeManager != null)
+        {
+            // Перезапускаем обнаружение плоскостей
+            bool wasEnabled = planeManager.enabled;
+            planeManager.enabled = false;
+            
+            // Небольшая задержка
+            Invoke(nameof(ReenablePlaneDetection), 0.5f);
+        }
+    }
+    
+    private void ReenablePlaneDetection()
+    {
+        var planeManager = FindObjectOfType<UnityEngine.XR.ARFoundation.ARPlaneManager>();
+        if (planeManager != null)
+        {
+            planeManager.enabled = true;
+        }
+    }
+}";
+            
+            // Создаем файл скрипта
+            File.WriteAllText(scriptPath, scriptContent);
+            AssetDatabase.ImportAsset(scriptPath);
+            
+            // Также создаем панель отладки для управления
+            string debugPanelPath = "Assets/Scripts/WallPaintDebugPanel.cs";
+            string debugPanelContent = @"using UnityEngine;
+using UnityEngine.UI;
+
+public class WallPaintDebugPanel : MonoBehaviour
+{
+    public WallPaintDebugger debugger;
+    public Toggle debugVisualizationToggle;
+    
+    void Start()
+    {
+        if (debugger == null)
+        {
+            debugger = FindObjectOfType<WallPaintDebugger>();
+        }
+        
+        if (debugVisualizationToggle != null)
+        {
+            debugVisualizationToggle.isOn = debugger != null && debugger.enableDebugVisualization;
+            debugVisualizationToggle.onValueChanged.AddListener(OnToggleDebug);
+        }
+    }
+    
+    private void OnToggleDebug(bool value)
+    {
+        if (debugger != null)
+        {
+            debugger.enableDebugVisualization = value;
+        }
+    }
+    
+    // Метод для разрешения проблем с отображением плоскостей
+    public void ResetARPlanes()
+    {
+        var planeManager = FindObjectOfType<UnityEngine.XR.ARFoundation.ARPlaneManager>();
+        if (planeManager != null)
+        {
+            // Перезапускаем обнаружение плоскостей
+            bool wasEnabled = planeManager.enabled;
+            planeManager.enabled = false;
+            
+            // Небольшая задержка
+            Invoke(nameof(ReenablePlaneDetection), 0.5f);
+        }
+    }
+    
+    private void ReenablePlaneDetection()
+    {
+        var planeManager = FindObjectOfType<UnityEngine.XR.ARFoundation.ARPlaneManager>();
+        if (planeManager != null)
+        {
+            planeManager.enabled = true;
+        }
+    }
+}";
+            
+            File.WriteAllText(debugPanelPath, debugPanelContent);
+            AssetDatabase.ImportAsset(debugPanelPath);
+            
+            // Компилируем скрипты
+            AssetDatabase.Refresh();
+            
+            // Теперь пробуем найти тип
+            wallPaintDebuggerType = FindTypeInAllAssemblies("WallPaintDebugger");
+        }
+        
+        if (wallPaintDebuggerType != null)
+        {
+            var debugger = debugObj.AddComponent(wallPaintDebuggerType);
+            
+            // Устанавливаем ссылки через рефлексию
+            SetPrivateField(debugger, "wallPaintEffect", wallPaintEffect);
+            
+            // Находим ARPlaneManager
+            ARPlaneManager planeManager = null;
+            GameObject xrOriginObj = GameObject.Find("XR Origin");
+            if (xrOriginObj != null)
+            {
+                Transform trackersTransform = xrOriginObj.transform.Find("AR Trackers");
+                if (trackersTransform != null)
+                {
+                    planeManager = trackersTransform.GetComponent<ARPlaneManager>();
+                }
+            }
+            
+            if (planeManager != null)
+            {
+                SetPrivateField(debugger, "planeManager", planeManager);
+            }
+            
+            Debug.Log("Добавлен компонент WallPaintDebugger для улучшения обнаружения вертикальных поверхностей");
+            
+            // Создаем панель отладки в UI
+            GameObject uiRoot = GameObject.Find("[UI]");
+            if (uiRoot != null)
+            {
+                GameObject canvas = uiRoot.transform.Find("Canvas")?.gameObject;
+                if (canvas != null)
+                {
+                    GameObject debugPanel = new GameObject("DebugPanel");
+                    debugPanel.transform.SetParent(canvas.transform, false);
+                    RectTransform rectTransform = debugPanel.AddComponent<RectTransform>();
+                    rectTransform.anchorMin = new Vector2(0, 0);
+                    rectTransform.anchorMax = new Vector2(0, 0);
+                    rectTransform.pivot = new Vector2(0, 0);
+                    rectTransform.anchoredPosition = new Vector2(10, 10);
+                    rectTransform.sizeDelta = new Vector2(300, 100);
+                    
+                    // Добавляем фон
+                    Image background = debugPanel.AddComponent<Image>();
+                    background.color = new Color(0, 0, 0, 0.7f);
+                    
+                    // Добавляем компонент WallPaintDebugPanel
+                    Type debugPanelType = FindTypeInAllAssemblies("WallPaintDebugPanel");
+                    if (debugPanelType != null)
+                    {
+                        var debugPanelComponent = debugPanel.AddComponent(debugPanelType);
+                        SetPrivateField(debugPanelComponent, "debugger", debugger);
+                        
+                        // Создаем переключатель отладки
+                        GameObject toggleObj = new GameObject("DebugToggle");
+                        toggleObj.transform.SetParent(debugPanel.transform, false);
+                        RectTransform toggleRect = toggleObj.AddComponent<RectTransform>();
+                        toggleRect.anchorMin = new Vector2(0, 1);
+                        toggleRect.anchorMax = new Vector2(1, 1);
+                        toggleRect.pivot = new Vector2(0.5f, 1);
+                        toggleRect.anchoredPosition = new Vector2(0, -20);
+                        toggleRect.sizeDelta = new Vector2(-20, 20);
+                        
+                        Toggle toggle = toggleObj.AddComponent<Toggle>();
+                        
+                        // Создаем фон для переключателя
+                        GameObject toggleBg = new GameObject("Background");
+                        toggleBg.transform.SetParent(toggleObj.transform, false);
+                        RectTransform toggleBgRect = toggleBg.AddComponent<RectTransform>();
+                        toggleBgRect.anchorMin = Vector2.zero;
+                        toggleBgRect.anchorMax = new Vector2(0, 1);
+                        toggleBgRect.pivot = new Vector2(0, 0.5f);
+                        toggleBgRect.anchoredPosition = Vector2.zero;
+                        toggleBgRect.sizeDelta = new Vector2(20, 20);
+                        
+                        Image toggleBgImage = toggleBg.AddComponent<Image>();
+                        toggleBgImage.color = Color.white;
+                        
+                        // Создаем маркер переключателя
+                        GameObject checkmark = new GameObject("Checkmark");
+                        checkmark.transform.SetParent(toggleBg.transform, false);
+                        RectTransform checkmarkRect = checkmark.AddComponent<RectTransform>();
+                        checkmarkRect.anchorMin = Vector2.zero;
+                        checkmarkRect.anchorMax = Vector2.one;
+                        checkmarkRect.pivot = new Vector2(0.5f, 0.5f);
+                        checkmarkRect.anchoredPosition = Vector2.zero;
+                        checkmarkRect.sizeDelta = Vector2.zero;
+                        
+                        Image checkmarkImage = checkmark.AddComponent<Image>();
+                        checkmarkImage.color = Color.green;
+                        
+                        toggle.graphic = checkmarkImage;
+                        toggle.targetGraphic = toggleBgImage;
+                        
+                        // Создаем текст
+                        GameObject textObj = new GameObject("Label");
+                        textObj.transform.SetParent(toggleObj.transform, false);
+                        RectTransform textRect = textObj.AddComponent<RectTransform>();
+                        textRect.anchorMin = new Vector2(0, 0);
+                        textRect.anchorMax = new Vector2(1, 1);
+                        textRect.pivot = new Vector2(0.5f, 0.5f);
+                        textRect.anchoredPosition = new Vector2(15, 0);
+                        textRect.sizeDelta = new Vector2(-30, 0);
+                        
+                        Text text = textObj.AddComponent<Text>();
+                        text.text = "Отладочная визуализация";
+                        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                        text.fontSize = 14;
+                        text.color = Color.white;
+                        
+                        // Создаем кнопку сброса
+                        GameObject resetButton = new GameObject("ResetButton");
+                        resetButton.transform.SetParent(debugPanel.transform, false);
+                        RectTransform resetButtonRect = resetButton.AddComponent<RectTransform>();
+                        resetButtonRect.anchorMin = new Vector2(0, 0);
+                        resetButtonRect.anchorMax = new Vector2(1, 0);
+                        resetButtonRect.pivot = new Vector2(0.5f, 0);
+                        resetButtonRect.anchoredPosition = new Vector2(0, 20);
+                        resetButtonRect.sizeDelta = new Vector2(-20, 30);
+                        
+                        Image resetButtonImage = resetButton.AddComponent<Image>();
+                        resetButtonImage.color = new Color(0.2f, 0.2f, 0.2f);
+                        
+                        Button resetButtonComponent = resetButton.AddComponent<Button>();
+                        resetButtonComponent.targetGraphic = resetButtonImage;
+                        
+                        GameObject resetButtonText = new GameObject("Text");
+                        resetButtonText.transform.SetParent(resetButton.transform, false);
+                        RectTransform resetButtonTextRect = resetButtonText.AddComponent<RectTransform>();
+                        resetButtonTextRect.anchorMin = Vector2.zero;
+                        resetButtonTextRect.anchorMax = Vector2.one;
+                        resetButtonTextRect.pivot = new Vector2(0.5f, 0.5f);
+                        resetButtonTextRect.anchoredPosition = Vector2.zero;
+                        resetButtonTextRect.sizeDelta = Vector2.zero;
+                        
+                        Text resetButtonTextComponent = resetButtonText.AddComponent<Text>();
+                        resetButtonTextComponent.text = "Сбросить плоскости";
+                        resetButtonTextComponent.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                        resetButtonTextComponent.fontSize = 14;
+                        resetButtonTextComponent.alignment = TextAnchor.MiddleCenter;
+                        resetButtonTextComponent.color = Color.white;
+                        
+                        // Добавляем обработчик нажатия через рефлексию
+                        resetButtonComponent.onClick.AddListener(() => {
+                            MethodInfo resetMethod = debugPanelType.GetMethod("ResetARPlanes");
+                            if (resetMethod != null)
+                            {
+                                resetMethod.Invoke(debugPanelComponent, null);
+                            }
+                        });
+                        
+                        // Связываем toggle с полем в компоненте
+                        SetPrivateField(debugPanelComponent, "debugVisualizationToggle", toggle);
+                    }
+                }
+            }
+        }
+        else
+        {
+            Debug.LogWarning("Не удалось создать компонент WallPaintDebugger");
+        }
+        
+        // Пытаемся оптимизировать материал WallPaint, если он доступен
+        object wallPaintMaterial = GetPrivateField(wallPaintEffect, "wallPaintMaterial");
+        if (wallPaintMaterial != null && wallPaintMaterial is Material)
+        {
+            Material material = (Material)wallPaintMaterial;
+            
+            // Убеждаемся, что включен оптимальный режим рендеринга
+            material.SetFloat("_ZWrite", 0); // Отключаем запись в Z-буфер
+            
+            // Устанавливаем оптимальную прозрачность
+            float blendFactor = 0.7f;
+            material.SetFloat("_BlendFactor", blendFactor);
+            
+            Debug.Log("Материал WallPaint оптимизирован для лучшей производительности");
+            
+            // Сохраняем изменения материала
+            EditorUtility.SetDirty(material);
         }
     }
 
@@ -1938,6 +2452,40 @@ public class SceneSetupUtility : EditorWindow
             // Если объект [Managers] не найден, создаем его
             managersRoot = new GameObject("[Managers]");
             SetupARManagerInitializer(managersRoot);
+        }
+
+        // Находим AR Trackers объект
+        Transform trackersTransform = null;
+        if (xrOrigin != null)
+        {
+            trackersTransform = xrOrigin.transform.Find("AR Trackers");
+            if (trackersTransform != null)
+            {
+                // Проверяем плоскости и якоря
+                ARPlaneManager planeManager = trackersTransform.GetComponent<ARPlaneManager>();
+                if (planeManager != null)
+                {
+                    // Исправляем привязку плоскостей
+                    FixARPlaneAnchoring(planeManager);
+                    
+                    // Проверяем и настраиваем режим обнаружения плоскостей
+                    planeManager.requestedDetectionMode = PlaneDetectionMode.Vertical | PlaneDetectionMode.Horizontal;
+                    Debug.Log("Проверен и настроен режим обнаружения плоскостей ARPlaneManager");
+                }
+                
+                // Проверяем и добавляем ARAnchorManager, если его нет
+                ARAnchorManager anchorManager = trackersTransform.GetComponent<ARAnchorManager>();
+                if (anchorManager == null)
+                {
+                    SetupARAnchorManager(trackersTransform.gameObject);
+                }
+                else
+                {
+                    // Проверяем настройки существующего ARAnchorManager
+                    anchorManager.enabled = true;
+                    Debug.Log("Проверены настройки ARAnchorManager");
+                }
+            }
         }
 
         Debug.Log("Проверка и исправление компонентов AR завершены");
@@ -3004,5 +3552,393 @@ public class SceneSetupUtility : EditorWindow
             cameraBackground.customMaterial = sceneConfig.arCameraBackgroundMaterial;
             Debug.Log("Установлен пользовательский материал для ARCameraBackground из конфигурации");
         }
+    }
+
+    // Новый метод для исправления привязки AR-плоскостей
+    private void FixARPlaneAnchoring(ARPlaneManager planeManager)
+    {
+        if (planeManager == null || planeManager.planePrefab == null) return;
+        
+        Debug.Log("Исправление привязки AR-плоскостей для правильного позиционирования в пространстве...");
+        
+        // Проверяем настройки префаба плоскости
+        GameObject planePrefab = planeManager.planePrefab;
+        
+        // Получаем или добавляем ARAnchor компонент
+        ARAnchor anchor = planePrefab.GetComponent<ARAnchor>();
+        if (anchor == null)
+        {
+            anchor = planePrefab.AddComponent<ARAnchor>();
+            Debug.Log("Добавлен компонент ARAnchor для стабилизации AR-плоскостей");
+        }
+        
+        // Находим AR Plane компонент
+        ARPlane arPlane = planePrefab.GetComponent<ARPlane>();
+        if (arPlane != null)
+        {
+            // Свойство classification доступно только для чтения, поэтому мы не можем его изменить
+            // Вместо этого добавим компонент VerticalPlaneMarker для автоматического определения вертикальных плоскостей
+            Debug.Log($"AR-плоскость настроена для работы с классификацией плоскостей");
+            
+            // Проверяем существование скрипта VerticalPlaneMarker
+            Type verticalPlaneMarkerType = FindTypeInAllAssemblies("VerticalPlaneMarker");
+            if (verticalPlaneMarkerType != null)
+            {
+                // Проверяем, есть ли уже такой компонент
+                Component existingMarker = planePrefab.GetComponent(verticalPlaneMarkerType);
+                if (existingMarker == null)
+                {
+                    // Добавляем компонент VerticalPlaneMarker
+                    Component marker = planePrefab.AddComponent(verticalPlaneMarkerType);
+                    
+                    // Настраиваем параметры через рефлексию
+                    PropertyInfo autoAddAnchorProperty = verticalPlaneMarkerType.GetProperty("autoAddAnchor");
+                    if (autoAddAnchorProperty != null && autoAddAnchorProperty.CanWrite)
+                    {
+                        autoAddAnchorProperty.SetValue(marker, true);
+                    }
+                    
+                    PropertyInfo debugVisualizeProperty = verticalPlaneMarkerType.GetProperty("debugVisualizeVertical");
+                    if (debugVisualizeProperty != null && debugVisualizeProperty.CanWrite)
+                    {
+                        debugVisualizeProperty.SetValue(marker, true);
+                    }
+                    
+                    Debug.Log("Добавлен компонент VerticalPlaneMarker для автоматического определения вертикальных поверхностей");
+                }
+                else
+                {
+                    Debug.Log("Компонент VerticalPlaneMarker уже присутствует на AR плоскости");
+                }
+            }
+            else
+            {
+                // Если скрипт не найден, выводим предупреждение
+                Debug.LogWarning("Скрипт VerticalPlaneMarker не найден в проекте. Рекомендуется добавить его для лучшего определения вертикальных поверхностей.");
+            }
+        }
+        
+        // Настраиваем MeshRenderer для оптимальной производительности
+        MeshRenderer meshRenderer = planePrefab.GetComponent<MeshRenderer>();
+        if (meshRenderer != null)
+        {
+            // Отключаем тени для улучшения производительности
+            meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            meshRenderer.receiveShadows = false;
+            
+            // Настраиваем материал для полупрозрачности
+            if (meshRenderer.sharedMaterial != null)
+            {
+                Material planeMaterial = meshRenderer.sharedMaterial;
+                planeMaterial.SetFloat("_ZWrite", 0); // Отключаем запись в z-буфер
+                planeMaterial.SetFloat("_Metallic", 0); // Убираем металличность
+                planeMaterial.SetFloat("_Smoothness", 0); // Убираем блеск
+                
+                // Настраиваем прозрачность
+                Color materialColor = planeMaterial.color;
+                materialColor.a = 0.5f; // 50% прозрачность
+                planeMaterial.color = materialColor;
+                
+                // Устанавливаем подходящий режим прозрачности
+                planeMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                planeMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                
+                // Сохраняем изменения в материале
+                EditorUtility.SetDirty(planeMaterial);
+            }
+        }
+        
+        // Обновляем префаб
+        EditorUtility.SetDirty(planePrefab);
+        PrefabUtility.SavePrefabAsset(planePrefab);
+        
+        Debug.Log("Настройка AR-плоскостей завершена. Теперь они должны правильно привязываться к пространству");
+    }
+
+    // Метод для настройки AR якорей
+    private void SetupARAnchorManager(GameObject trackersObj)
+    {
+        if (trackersObj == null) return;
+        
+        Debug.Log("Настройка ARAnchorManager для стабилизации AR контента...");
+        
+        // Добавляем ARAnchorManager, если его еще нет
+        ARAnchorManager anchorManager = trackersObj.GetComponent<ARAnchorManager>();
+        if (anchorManager == null)
+        {
+            anchorManager = trackersObj.AddComponent<ARAnchorManager>();
+        }
+        
+        // Явно включаем компонент
+        anchorManager.enabled = true;
+        
+        // Настраиваем соединение с PlaneManager для автоматического добавления якорей
+        ARPlaneManager planeManager = trackersObj.GetComponent<ARPlaneManager>();
+        if (planeManager != null)
+        {
+            // Вызываем метод для исправления привязки плоскостей
+            FixARPlaneAnchoring(planeManager);
+        }
+        
+        Debug.Log("ARAnchorManager настроен для стабилизации AR-объектов");
+    }
+
+    // Добавим метод для оптимизации производительности AR
+    private void OptimizeARPerformance()
+    {
+        Debug.Log("Оптимизация производительности AR...");
+        
+        // Обновляем материалы AR плоскостей
+        UpdateARPlaneMaterials();
+        
+        // Находим и оптимизируем настройки камеры
+        ARCameraManager[] cameraManagers = FindObjectsOfType<ARCameraManager>();
+        foreach (ARCameraManager cameraManager in cameraManagers)
+        {
+            Camera camera = cameraManager.GetComponent<Camera>();
+            if (camera != null)
+            {
+                // Используем расширенный метод оптимизации камеры
+                OptimizeARCameraSettings(camera);
+            }
+        }
+        
+        // Находим и оптимизируем настройки камеры
+        cameraManagers = FindObjectsOfType<ARCameraManager>();
+        foreach (ARCameraManager cameraManager in cameraManagers)
+        {
+            Camera camera = cameraManager.GetComponent<Camera>();
+            if (camera != null)
+            {
+                // Оптимизируем настройки камеры
+                camera.allowHDR = false;
+                camera.allowMSAA = false;
+                
+                // Отключаем пост-обработку и другие ресурсоемкие функции
+                var postProcessVolume = camera.GetComponent<UnityEngine.Rendering.Volume>();
+                if (postProcessVolume != null)
+                {
+                    postProcessVolume.enabled = false;
+                }
+            }
+        }
+        
+        Debug.Log("Оптимизация производительности AR завершена");
+    }
+
+    // Оптимизация настроек камеры для улучшения производительности
+    private void OptimizeARCameraSettings(Camera arCamera)
+    {
+        if (arCamera == null) return;
+        
+        Debug.Log("Оптимизация настроек AR камеры...");
+        
+        // Оптимизируем настройки камеры для мобильных устройств
+        arCamera.allowHDR = false;
+        arCamera.allowMSAA = false;
+        arCamera.useOcclusionCulling = true;
+        
+        // Настройка дальности видимости для улучшения производительности
+        arCamera.farClipPlane = 1000f; // Ограничиваем дальность видимости
+        
+        // Отключаем подсветку теней
+        arCamera.renderingPath = RenderingPath.Forward;
+        
+        // Настройка для AR Foundation
+        ARCameraManager cameraManager = arCamera.GetComponent<ARCameraManager>();
+        if (cameraManager != null)
+        {
+            // Отключаем ненужные свойства для улучшения производительности
+            PropertyInfo autofocusProperty = cameraManager.GetType().GetProperty("autoFocus");
+            if (autofocusProperty != null && autofocusProperty.CanWrite)
+            {
+                autofocusProperty.SetValue(cameraManager, false);
+                Debug.Log("Отключен автофокус камеры для экономии ресурсов");
+            }
+        }
+        
+        // Оптимизация AR фона камеры
+        ARCameraBackground cameraBackground = arCamera.GetComponent<ARCameraBackground>();
+        if (cameraBackground != null)
+        {
+            // Настройка режима рендеринга фона
+            PropertyInfo backgroundRenderingProperty = cameraBackground.GetType().GetProperty("backgroundRenderingMode");
+            if (backgroundRenderingProperty != null && backgroundRenderingProperty.CanWrite)
+            {
+                // Пытаемся установить оптимальный режим рендеринга
+                System.Type backgroundRenderingModeType = FindTypeInAllAssemblies("ARRenderMode");
+                if (backgroundRenderingModeType != null && backgroundRenderingModeType.IsEnum)
+                {
+                    object optimalMode = System.Enum.GetValues(backgroundRenderingModeType).GetValue(0); // Обычно первый элемент самый базовый/оптимальный
+                    backgroundRenderingProperty.SetValue(cameraBackground, optimalMode);
+                    Debug.Log("Установлен оптимальный режим рендеринга AR фона камеры");
+                }
+            }
+        }
+        
+        Debug.Log("Настройки AR камеры оптимизированы");
+    }
+
+    // Метод для обновления материалов AR плоскостей
+    private void UpdateARPlaneMaterials()
+    {
+        Debug.Log("Обновление материалов AR плоскостей...");
+        
+        // Находим ARPlaneManager
+        ARPlaneManager planeManager = FindObjectOfType<ARPlaneManager>();
+        if (planeManager == null || planeManager.planePrefab == null)
+        {
+            Debug.LogWarning("ARPlaneManager или planePrefab не найдены");
+            return;
+        }
+        
+        // Проверяем материал префаба
+        MeshRenderer meshRenderer = planeManager.planePrefab.GetComponent<MeshRenderer>();
+        if (meshRenderer == null || meshRenderer.sharedMaterial == null)
+        {
+            Debug.LogWarning("Не найден материал в префабе плоскости");
+            return;
+        }
+        
+        // Создаем или используем существующий материал для плоскостей
+        Material existingMaterial = meshRenderer.sharedMaterial;
+        
+        // Проверяем существующий материал
+        string materialNameToCheck = "ARPlaneMaterial";
+        if (existingMaterial.name.Contains(materialNameToCheck))
+        {
+            // Если материал уже правильный, просто обновляем его настройки
+            Debug.Log("Найден существующий материал для AR плоскостей, обновляем настройки");
+            
+            // Настраиваем существующий материал
+            existingMaterial.SetFloat("_Metallic", 0);
+            existingMaterial.SetFloat("_Smoothness", 0);
+            existingMaterial.SetFloat("_ZWrite", 0);
+            
+            // Настраиваем прозрачность
+            Color materialColor = existingMaterial.color;
+            materialColor.a = 0.3f; // 30% прозрачность
+            existingMaterial.color = materialColor;
+            
+            // Устанавливаем подходящий режим прозрачности
+            existingMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            existingMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            
+            // В зависимости от выбранного шейдера, устанавливаем режим прозрачности
+            if (existingMaterial.shader.name.Contains("Universal Render Pipeline"))
+            {
+                // URP-специфичные настройки
+                existingMaterial.SetFloat("_Surface", 1); // 1 - прозрачный
+                existingMaterial.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                existingMaterial.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+                existingMaterial.renderQueue = 3000; // Transparent
+            }
+            else
+            {
+                // Standard shader настройки
+                existingMaterial.SetOverrideTag("RenderType", "Transparent");
+                existingMaterial.SetInt("_Mode", 3); // Transparent
+                existingMaterial.renderQueue = 3000; // Transparent
+            }
+            
+            Debug.Log("Материал AR плоскостей обновлен с новыми настройками прозрачности");
+        }
+        else
+        {
+            // Создаем новый оптимизированный материал для AR плоскостей
+            Material newMaterial = null;
+            
+            // Пробуем найти URP шейдер
+            Shader urpTransparentShader = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpTransparentShader != null)
+            {
+                Debug.Log("Создаем новый материал AR плоскостей с URP шейдером");
+                newMaterial = new Material(urpTransparentShader);
+                newMaterial.name = "ARPlaneMaterial";
+                
+                // URP настройки
+                newMaterial.SetFloat("_Surface", 1); // 1 - прозрачный
+                newMaterial.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                newMaterial.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+                newMaterial.renderQueue = 3000; // Transparent
+            }
+            else
+            {
+                // Пробуем использовать стандартный шейдер
+                Shader standardShader = Shader.Find("Standard");
+                if (standardShader != null)
+                {
+                    Debug.Log("Создаем новый материал AR плоскостей со стандартным шейдером");
+                    newMaterial = new Material(standardShader);
+                    newMaterial.name = "ARPlaneMaterial";
+                    
+                    // Standard shader настройки
+                    newMaterial.SetOverrideTag("RenderType", "Transparent");
+                    newMaterial.SetInt("_Mode", 3); // Transparent
+                    newMaterial.renderQueue = 3000; // Transparent
+                }
+                else
+                {
+                    Debug.LogWarning("Не найдены подходящие шейдеры для создания материала AR плоскостей");
+                    return;
+                }
+            }
+            
+            // Общие настройки для любого материала
+            if (newMaterial != null)
+            {
+                newMaterial.SetFloat("_Metallic", 0);
+                newMaterial.SetFloat("_Smoothness", 0);
+                newMaterial.SetFloat("_ZWrite", 0);
+                
+                // Устанавливаем цвет и прозрачность
+                newMaterial.color = new Color(0.2f, 0.6f, 1f, 0.3f); // Голубой полупрозрачный
+                
+                // Устанавливаем режим прозрачности
+                newMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                newMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                
+                // Сохраняем материал как ассет
+                string materialPath = "Assets/Materials/AR/ARPlaneMaterial.mat";
+                string materialDir = Path.GetDirectoryName(materialPath);
+                if (!Directory.Exists(materialDir))
+                {
+                    Directory.CreateDirectory(materialDir);
+                }
+                
+                AssetDatabase.CreateAsset(newMaterial, materialPath);
+                AssetDatabase.SaveAssets();
+                
+                // Назначаем новый материал для префаба AR плоскости
+                meshRenderer.sharedMaterial = newMaterial;
+                
+                // Сохраняем префаб
+                EditorUtility.SetDirty(planeManager.planePrefab);
+                PrefabUtility.SavePrefabAsset(planeManager.planePrefab);
+                
+                Debug.Log("Создан новый оптимизированный материал для AR плоскостей");
+            }
+        }
+        
+        // Обновляем материалы существующих плоскостей в сцене
+        ARPlane[] existingPlanes = FindObjectsOfType<ARPlane>();
+        foreach (ARPlane plane in existingPlanes)
+        {
+            MeshRenderer planeRenderer = plane.GetComponent<MeshRenderer>();
+            if (planeRenderer != null)
+            {
+                // Отключаем тени для улучшения производительности
+                planeRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                planeRenderer.receiveShadows = false;
+                
+                // Настраиваем материал, если отличается от материала префаба
+                if (planeRenderer.sharedMaterial != meshRenderer.sharedMaterial)
+                {
+                    planeRenderer.sharedMaterial = meshRenderer.sharedMaterial;
+                }
+            }
+        }
+        
+        Debug.Log("Обновление материалов AR плоскостей завершено");
     }
 }

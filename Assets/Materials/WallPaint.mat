@@ -12,11 +12,9 @@ Material:
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords:
-  - DEBUG_OVERLAY
-  - USE_MASK
+  - USE_AR_WORLD_SPACE
   m_InvalidKeywords:
   - USE_AR_LIGHTING
-  - USE_AR_WORLD_SPACE
   - USE_SEGMENTATION_MASK
   - USE_YIQ
   m_LightmapFlags: 4
@@ -43,10 +41,12 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _BlendFactor: 0.5
+    - _BlendFactor: 0.25
     - _DebugGrid: 10
-    - _DebugOverlay: 1
-    - _UseMask: 1
+    - _DebugOverlay: 0
+    - _PlaneID: 0
+    - _UseARSpace: 1
+    - _UseMask: 0
     m_Colors:
-    - _PaintColor: {r: 1, g: 1, b: 1, a: 1}
+    - _PaintColor: {r: 0.21960783, g: 0.21960783, b: 0.21960783, a: 0.41960785}
   m_BuildTextureStacks: []

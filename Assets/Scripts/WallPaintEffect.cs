@@ -29,7 +29,7 @@ public class WallPaintEffect : MonoBehaviour
     // Добавляем поле для отслеживания последней использованной маски
     private RenderTexture lastUsedMask;
     private int framesSinceLastSegmentationUpdate = 0;
-    [SerializeField] private bool debugMode = false;
+    [SerializeField] public bool debugMode = false; // Изменено на public для доступа из других классов
 
     // Добавляем поле для ARLightEstimation
     private ARLightEstimation lightEstimation;
@@ -56,13 +56,46 @@ public class WallPaintEffect : MonoBehaviour
         planeManager = FindObjectOfType<ARPlaneManager>();
         if (planeManager != null && attachToARPlanes)
         {
+            // ВАЖНАЯ ДИАГНОСТИКА
+            var debugPrefab = planeManager.planePrefab;
+            Debug.LogError($"ПРЕФАБ ПЛОСКОСТИ: {(debugPrefab != null ? debugPrefab.name : "NULL")}");
+            
+            // Переподписка на события для гарантии вызова наших обработчиков последними
+            planeManager.planesChanged -= OnPlanesChanged;
+            
             // Подписываемся на события создания/обновления плоскостей
             planeManager.planesChanged += OnPlanesChanged;
             Debug.Log("[WallPaintEffect LOG] Подписка на события ARPlaneManager.planesChanged выполнена");
+            
+            // ДИАГНОСТИКА: Проверяем настройки ARPlaneManager
+            Debug.LogError($"AR PLANE MANAGER: detectionMode={planeManager.requestedDetectionMode}, " +
+                          $"установкаМатериалов={planeManager.planePrefab != null}, " + 
+                          $"визуализация={showARPlaneDebugVisuals}");
         }
         else if (attachToARPlanes)
         {
             Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager не найден, невозможно подписаться на события planesChanged");
+        }
+        
+        // КРИТИЧНО: Проверяем все существующие плоскости и добавляем якоря
+        ARPlane[] existingPlanes = FindObjectsOfType<ARPlane>();
+        Debug.LogError($"НАЙДЕНО ПЛОСКОСТЕЙ: {existingPlanes.Length}");
+        foreach (ARPlane plane in existingPlanes)
+        {
+            if (plane.gameObject.GetComponent<ARAnchor>() == null)
+            {
+                Debug.LogError($"КРИТИЧНО: Плоскость {plane.trackableId} не имеет ARAnchor компонента! Добавляем.");
+                plane.gameObject.AddComponent<ARAnchor>();
+            }
+            
+            // Диагностика свойств плоскости
+            Debug.LogError($"ДИАГНОСТИКА ПЛОСКОСТИ: ID={plane.trackableId}, " +
+                          $"Position={plane.transform.position}, " +
+                          $"Rotation={plane.transform.rotation.eulerAngles}, " +
+                          $"Center={plane.center}, " +
+                          $"Size={plane.size}, " +
+                          $"Normal={plane.normal}, " +
+                          $"Classification={plane.classification}");
         }
 
         // Добавляем задержку для инициализации на iOS, чтобы убедиться, что AR сессия запустилась
@@ -118,54 +151,176 @@ public class WallPaintEffect : MonoBehaviour
     // Метод для применения материала к отдельной плоскости
     private void ApplyMaterialToPlane(ARPlane plane)
     {
-        // Проверяем, является ли плоскость стеной (вертикальной плоскостью)
-        if (plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical)
+        // Проверяем, инициализирован ли компонент и имеет ли плоскость рендерер
+        if (!isInitialized || plane == null)
         {
-            MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
-            if (renderer != null)
+            return;
+        }
+
+        // ДИАГНОСТИКА: Выводим детальную информацию о плоскости
+        Debug.LogError($"ПРИМЕНЕНИЕ МАТЕРИАЛА К ПЛОСКОСТИ: ID={plane.trackableId}, " +
+                      $"Position={plane.transform.position}, " +
+                      $"LocalToWorld={plane.transform.localToWorldMatrix}");
+
+        // Проверяем наличие рендерера
+        MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
+        if (renderer == null)
+        {
+            Debug.LogWarning($"[WallPaintEffect LOG] У плоскости {plane.trackableId} отсутствует MeshRenderer");
+            return;
+        }
+
+        // ВАЖНО: Создаем экземпляр материала от шейдера, а не копируем существующий материал
+        // Это гарантирует использование правильного шейдера
+        Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+        Material planeMaterial;
+        
+        if (wallPaintShader != null)
+        {
+            Debug.LogError($"СОЗДАНИЕ МАТЕРИАЛА: найден шейдер Custom/WallPaint");
+            planeMaterial = new Material(wallPaintShader);
+        }
+        else if (wallPaintMaterial != null)
+        {
+            Debug.LogError($"ШЕЙДЕР НЕ НАЙДЕН: используем существующий материал {wallPaintMaterial.name} с шейдером {wallPaintMaterial.shader.name}");
+            planeMaterial = new Material(wallPaintMaterial);
+        }
+        else
+        {
+            Debug.LogError("КРИТИЧЕСКАЯ ОШИБКА: Не найден шейдер и нет материала. Создаем материал по умолчанию.");
+            planeMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            planeMaterial.color = new Color(1, 0, 0, 0.5f); // Полупрозрачный красный для отладки
+            renderer.material = planeMaterial;
+            return;
+        }
+        
+        // Проверяем шейдер в материале
+        if (planeMaterial.shader.name != "Custom/WallPaint")
+        {
+            Debug.LogError($"НЕВЕРНЫЙ ШЕЙДЕР: {planeMaterial.shader.name}. Пытаемся исправить.");
+            Shader correctShader = Shader.Find("Custom/WallPaint");
+            if (correctShader != null)
             {
-                // Создаем экземпляр материала для каждой плоскости, чтобы избежать взаимного влияния
-                Material planeMaterial = new Material(wallPaintMaterial);
-                renderer.material = planeMaterial;
-
-                // Включаем ключевые слова для привязки к AR-пространству
-                planeMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
-
-                // Если включен режим отладки, делаем линии границы плоскости более заметными
-                if (showARPlaneDebugVisuals)
-                {
-                    LineRenderer lineRenderer = plane.GetComponent<LineRenderer>();
-                    if (lineRenderer != null)
-                    {
-                        lineRenderer.startWidth = 0.05f;
-                        lineRenderer.endWidth = 0.05f;
-                        lineRenderer.startColor = Color.yellow;
-                        lineRenderer.endColor = Color.yellow;
-                    }
-
-                    // Делаем материал плоскости более заметным
-                    planeMaterial.SetFloat("_BlendFactor", 0.8f);
-                    planeMaterial.SetColor("_PaintColor", new Color(1f, 0.5f, 0f, 0.8f)); // Оранжевый цвет для отладки
-
-                    // Включаем режим отладки
-                    planeMaterial.EnableKeyword("DEBUG_OVERLAY");
-                }
-
-                // Если есть ARLightEstimation, добавляем материал для обновления освещения
-                if (lightEstimation != null)
-                {
-                    lightEstimation.AddMaterial(planeMaterial);
-                }
-
-                // Добавляем плоскость в список обработанных, если её там еще нет
-                if (!processedPlanes.Contains(plane))
-                {
-                    processedPlanes.Add(plane);
-                }
-
-                Debug.Log($"[WallPaintEffect LOG] Применен материал к вертикальной AR плоскости: {plane.name}");
+                planeMaterial.shader = correctShader;
             }
         }
+        
+        // Настраиваем материал для привязки к мировому пространству AR
+        planeMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+        
+        // ВАЖНО: Явно передаем матрицу трансформации плоскости для привязки к миру, а не к камере
+        planeMaterial.SetMatrix("_PlaneToWorldMatrix", plane.transform.localToWorldMatrix);
+        
+        // Сохраняем исходную матрицу для отладки
+        Matrix4x4 originalMatrix = plane.transform.localToWorldMatrix;
+        
+        // КРИТИЧНО: Устанавливаем ID плоскости для шейдера для разделения плоскостей
+        if (planeMaterial.HasProperty("_PlaneID"))
+        {
+            // Используем hash от trackableId как уникальный идентификатор для шейдера
+            planeMaterial.SetFloat("_PlaneID", (float)(plane.trackableId.GetHashCode() % 1000) / 1000.0f);
+        }
+        
+        // Передаем нормаль плоскости для корректной ориентации текстур и эффектов
+        planeMaterial.SetVector("_PlaneNormal", plane.normal);
+        
+        // Задаем центр плоскости как опорную точку
+        planeMaterial.SetVector("_PlaneCenter", plane.center);
+        
+        // Добавляем информацию о размере плоскости для масштабирования текстур
+        planeMaterial.SetVector("_PlaneSize", new Vector4(plane.size.x, plane.size.y, 0, 0));
+        
+        // КЛЮЧЕВОЙ МОМЕНТ: Передаем матрицы камеры для правильных преобразований
+        if (mainCamera != null)
+        {
+            planeMaterial.SetMatrix("_WorldToCameraMatrix", mainCamera.worldToCameraMatrix);
+            planeMaterial.SetMatrix("_CameraToWorldMatrix", mainCamera.cameraToWorldMatrix);
+            
+            // Также установим Unity стандартные матрицы для совместимости
+            planeMaterial.SetMatrix("unity_MatrixV", mainCamera.worldToCameraMatrix);
+            planeMaterial.SetMatrix("unity_MatrixInvV", mainCamera.cameraToWorldMatrix);
+            
+            Debug.LogError($"МАТРИЦЫ УСТАНОВЛЕНЫ: WorldToCamera = {mainCamera.worldToCameraMatrix}");
+        }
+        
+        // Устанавливаем параметры отображения
+        planeMaterial.SetColor("_PaintColor", paintColor);
+        planeMaterial.SetFloat("_BlendFactor", blendFactor);
+        
+        // Если используем маску сегментации
+        if (useMask && wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
+        {
+            planeMaterial.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
+            planeMaterial.EnableKeyword("USE_SEGMENTATION_MASK");
+        }
+        
+        // Проверяем поддержку отладочного режима
+        if (debugMode && planeMaterial.HasProperty("_DebugOverlay"))
+        {
+            planeMaterial.EnableKeyword("DEBUG_OVERLAY");
+            planeMaterial.SetFloat("_DebugGrid", 10f); // Размер сетки для отладки
+        }
+        
+        // ВАЖНО: Создаем тестовый материал для проверки привязки
+        if (debugMode)
+        {
+            // Применяем тестовый материал к одной из вершин плоскости
+            GameObject debugMarker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            debugMarker.transform.position = plane.center;
+            debugMarker.transform.localScale = Vector3.one * 0.03f;
+            debugMarker.name = $"DebugMarker_{plane.trackableId}";
+            
+            // Добавляем якорь к маркеру
+            if (debugMarker.GetComponent<ARAnchor>() == null)
+            {
+                debugMarker.AddComponent<ARAnchor>();
+            }
+            
+            // Добавляем его как дочерний объект плоскости
+            debugMarker.transform.parent = plane.transform;
+            
+            Material markerMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            markerMaterial.color = Color.red;
+            debugMarker.GetComponent<Renderer>().material = markerMaterial;
+            
+            Debug.LogError($"СОЗДАН МАРКЕР ОТЛАДКИ для плоскости {plane.trackableId}");
+        }
+        
+        // Применяем материал к рендереру
+        renderer.material = planeMaterial;
+        
+        // СРАВНЕНИЕ: Проверяем, изменилась ли матрица после установки материала
+        if (plane.transform.localToWorldMatrix != originalMatrix)
+        {
+            Debug.LogError($"ВНИМАНИЕ! Матрица изменилась после применения материала: " +
+                         $"Исходная={originalMatrix}, " +
+                         $"Новая={plane.transform.localToWorldMatrix}");
+        }
+        
+        // Отключаем тени для производительности
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        
+        // Обеспечиваем, что плоскость имеет ARAnchor для стабильности в AR пространстве
+        if (plane.gameObject.GetComponent<ARAnchor>() == null)
+        {
+            plane.gameObject.AddComponent<ARAnchor>();
+            Debug.Log($"[WallPaintEffect LOG] Добавлен ARAnchor к плоскости {plane.trackableId} для стабилизации");
+        }
+        
+        // Добавляем плоскость в список обработанных
+        if (!processedPlanes.Contains(plane))
+        {
+            processedPlanes.Add(plane);
+        }
+        
+        // Регистрируем материал для обновления освещения, если активно
+        if (lightEstimation != null)
+        {
+            lightEstimation.AddMaterial(planeMaterial);
+        }
+        
+        Debug.Log($"[WallPaintEffect LOG] Плоскость {plane.trackableId} успешно настроена на привязку к AR миру");
     }
 
     // Ответ на сообщение от ARSessionManager
@@ -464,6 +619,26 @@ public class WallPaintEffect : MonoBehaviour
     {
         if (!isInitialized) return;
 
+        // Обновляем матрицы камеры в каждом кадре для правильной привязки к мировым координатам
+        if (mainCamera != null && wallPaintMaterial != null)
+        {
+            // Обновляем матрицы преобразования для материала
+            wallPaintMaterial.SetMatrix("_WorldToCameraMatrix", mainCamera.worldToCameraMatrix);
+            wallPaintMaterial.SetMatrix("_CameraToWorldMatrix", mainCamera.cameraToWorldMatrix);
+            
+            // Добавляем Unity стандартные матрицы для совместимости
+            wallPaintMaterial.SetMatrix("unity_MatrixV", mainCamera.worldToCameraMatrix);
+            wallPaintMaterial.SetMatrix("unity_MatrixInvV", mainCamera.cameraToWorldMatrix);
+            
+            // Каждые 60 кадров выводим информацию о позиции камеры для диагностики привязки
+            if (Time.frameCount % 60 == 0 && debugMode)
+            {
+                Debug.LogError($"ДИАГНОСТИКА КАМЕРЫ: Position={mainCamera.transform.position}, " +
+                              $"Rotation={mainCamera.transform.rotation.eulerAngles}, " +
+                              $"WorldToCamera={mainCamera.worldToCameraMatrix}");
+            }
+        }
+
         // Добавляем периодическую проверку состояния сегментации
         if (Time.frameCount % 60 == 0) // Каждые ~60 кадров
         {
@@ -541,6 +716,89 @@ public class WallPaintEffect : MonoBehaviour
         if (lightEstimation == null && isInitialized && mainCamera != null)
         {
             TrySetupLightEstimation();
+        }
+        
+        // КРИТИЧЕСКИ ВАЖНО: Обновление для всех материалов плоскостей в каждом кадре
+        foreach (var plane in processedPlanes)
+        {
+            if (plane != null)
+            {
+                // Проверяем, что плоскость все еще жива
+                if (!plane.gameObject.activeInHierarchy) continue;
+                
+                MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
+                if (renderer != null && renderer.material != null)
+                {
+                    Material material = renderer.material;
+                    
+                    // КЛЮЧЕВОЙ МОМЕНТ: Обеспечиваем привязку к AR-пространству через правильные матрицы
+                    if (mainCamera != null)
+                    {
+                        // Важно постоянно обновлять матрицу трансформации, так как плоскость может двигаться
+                        if (material.HasProperty("_PlaneToWorldMatrix"))
+                        {
+                            material.SetMatrix("_PlaneToWorldMatrix", plane.transform.localToWorldMatrix);
+                        }
+                        
+                        // Обновляем матрицы камеры
+                        if (material.HasProperty("_WorldToCameraMatrix") && material.HasProperty("_CameraToWorldMatrix"))
+                        {
+                            material.SetMatrix("_WorldToCameraMatrix", mainCamera.worldToCameraMatrix);
+                            material.SetMatrix("_CameraToWorldMatrix", mainCamera.cameraToWorldMatrix);
+                            
+                            // Unity стандартные матрицы для совместимости
+                            material.SetMatrix("unity_MatrixV", mainCamera.worldToCameraMatrix);
+                            material.SetMatrix("unity_MatrixInvV", mainCamera.cameraToWorldMatrix);
+                        }
+                        
+                        // Включаем ключевое слово для работы в мировом пространстве
+                        if (!material.IsKeywordEnabled("USE_AR_WORLD_SPACE"))
+                        {
+                            material.EnableKeyword("USE_AR_WORLD_SPACE");
+                        }
+                    }
+                }
+                
+                // Проверяем, что у плоскости есть ARAnchor
+                if (plane.gameObject.GetComponent<ARAnchor>() == null)
+                {
+                    plane.gameObject.AddComponent<ARAnchor>();
+                    Debug.LogError($"ВНИМАНИЕ: У плоскости {plane.trackableId} исчез ARAnchor! Добавлен заново.");
+                }
+            }
+        }
+        
+        // Дополнительная диагностика для отладки привязки плоскостей
+        if (Time.frameCount % 120 == 0 && debugMode)
+        {
+            LogARPlanesStatus();
+        }
+    }
+
+    // Новый метод для отладки состояния всех AR плоскостей
+    private void LogARPlanesStatus()
+    {
+        ARPlane[] allPlanes = FindObjectsOfType<ARPlane>();
+        Debug.LogError($"СТАТУС AR ПЛОСКОСТЕЙ: Всего={allPlanes.Length}, Обработанных={processedPlanes.Count}");
+        
+        foreach (ARPlane plane in allPlanes)
+        {
+            if (plane != null)
+            {
+                bool hasAnchor = plane.gameObject.GetComponent<ARAnchor>() != null;
+                MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
+                string materialInfo = "Материал отсутствует";
+                
+                if (renderer != null && renderer.material != null)
+                {
+                    Material mat = renderer.material;
+                    bool usesARSpace = mat.IsKeywordEnabled("USE_AR_WORLD_SPACE");
+                    materialInfo = $"Шейдер={mat.shader.name}, UseARSpace={usesARSpace}";
+                }
+                
+                Debug.LogError($"ПЛОСКОСТЬ {plane.trackableId}: Position={plane.transform.position}, " +
+                             $"HasAnchor={hasAnchor}, Center={plane.center}, {materialInfo}");
+            }
         }
     }
 
@@ -657,6 +915,35 @@ public class WallPaintEffect : MonoBehaviour
 
         // Включаем поддержку привязки к AR-пространству
         wallPaintMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+        
+        // КРИТИЧНАЯ НАСТРОЙКА: Передаем матрицу камеры и мира для работы в AR пространстве
+        if (mainCamera != null)
+        {
+            // Матрица преобразования из мирового пространства в пространство камеры
+            var worldToCamera = mainCamera.worldToCameraMatrix;
+            wallPaintMaterial.SetMatrix("_WorldToCameraMatrix", worldToCamera);
+            
+            // Матрица преобразования из пространства камеры в мировое пространство (обратная первой)
+            var cameraToWorld = mainCamera.cameraToWorldMatrix;
+            wallPaintMaterial.SetMatrix("_CameraToWorldMatrix", cameraToWorld);
+            
+            Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: Установлены матрицы камеры для корректной работы в AR пространстве");
+        }
+        else
+        {
+            Debug.LogWarning("[WallPaintEffect LOG] UpdatePaintParameters: mainCamera = null, не удалось установить матрицы преобразования");
+        }
+        
+        // Отладочные параметры
+        if (debugMode && wallPaintMaterial.HasProperty("_DebugOverlay"))
+        {
+            wallPaintMaterial.EnableKeyword("DEBUG_OVERLAY");
+            Debug.Log("[WallPaintEffect LOG] UpdatePaintParameters: Включен отладочный режим визуализации");
+        }
+        else if (wallPaintMaterial.HasProperty("_DebugOverlay"))
+        {
+            wallPaintMaterial.DisableKeyword("DEBUG_OVERLAY");
+        }
 
         // Применяем материал к AR плоскостям, если они есть
         ApplyMaterialToARPlanes();
@@ -673,56 +960,68 @@ public class WallPaintEffect : MonoBehaviour
         }
     }
 
-    // Новый метод для применения материала к AR плоскостям
+    // Метод для применения материалов ко всем AR плоскостям
     private void ApplyMaterialToARPlanes()
     {
-        // Если функция прикрепления к плоскостям отключена, выходим
-        if (!attachToARPlanes) return;
-
-        // Получаем ARPlaneManager, если он еще не сохранен
-        if (planeManager == null)
+        if (!attachToARPlanes || planeManager == null)
         {
-            planeManager = FindObjectOfType<ARPlaneManager>();
-            if (planeManager == null)
-            {
-                Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager не найден в сцене.");
-                return;
-            }
-            else if (!planeManager.enabled)
-            {
-                Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager найден, но не активен.");
-                return;
-            }
-
-            // Подписываемся на события плоскостей, если еще не подписаны
-            planeManager.planesChanged += OnPlanesChanged;
-        }
-
-        // Проверяем, есть ли материал для AR плоскостей
-        if (planeManager.planePrefab == null)
-        {
-            Debug.LogWarning("[WallPaintEffect LOG] ARPlaneManager не имеет назначенного префаба.");
             return;
         }
-
-        // Настраиваем материал для привязки к AR-пространству
-        wallPaintMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
-
-        // Применяем материал ко всем существующим вертикальным плоскостям
+        
+        Debug.Log("[WallPaintEffect LOG] Применяем материалы ко всем AR плоскостям");
+        
+        // Получаем все активные AR плоскости
         ARPlane[] planes = FindObjectsOfType<ARPlane>();
-        if (planes.Length == 0)
-        {
-            Debug.Log("[WallPaintEffect LOG] AR плоскости не найдены в сцене.");
-            return;
-        }
-
-        // Очищаем список обработанных плоскостей и заполняем его заново
-        processedPlanes.Clear();
-
+        
         foreach (ARPlane plane in planes)
         {
-            ApplyMaterialToPlane(plane);
+            // Проверяем, является ли плоскость вертикальной (стеной)
+            bool isVertical = IsVerticalPlane(plane);
+            
+            // Если это вертикальная плоскость (стена), применяем материал
+            if (isVertical)
+            {
+                ApplyMaterialToPlane(plane);
+            }
+            else if (debugMode)
+            {
+                // В режиме отладки можем показывать и горизонтальные плоскости с другим цветом
+                Debug.Log($"[WallPaintEffect LOG] Пропущена не-вертикальная плоскость {plane.trackableId}");
+            }
+            
+            // Применяем настройки видимости в зависимости от showARPlaneDebugVisuals
+            ARPlaneMeshVisualizer visualizer = plane.GetComponent<ARPlaneMeshVisualizer>();
+            if (visualizer != null)
+            {
+                // Визуализация сетки плоскости включается только в режиме отладки
+                visualizer.enabled = showARPlaneDebugVisuals || debugMode;
+                
+                // Также можно управлять LineRenderer, если он есть
+                LineRenderer lineRenderer = plane.GetComponent<LineRenderer>();
+                if (lineRenderer != null)
+                {
+                    lineRenderer.enabled = showARPlaneDebugVisuals || debugMode;
+                }
+            }
         }
+    }
+    
+    // Метод для определения вертикальной плоскости (стены)
+    private bool IsVerticalPlane(ARPlane plane)
+    {
+        if (plane == null) return false;
+        
+        // Проверяем на основе метаданных AR Foundation
+        if (plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical)
+            return true;
+        
+        // Дополнительная проверка по нормали с более строгим ограничением (ближе к вертикали)
+        Vector3 planeNormal = plane.normal;
+        float dotUp = Vector3.Dot(planeNormal, Vector3.up);
+        
+        // Если угол между нормалью и вектором вверх близок к 90 градусам, это вертикальная плоскость
+        // Значение 0.25 соответствует примерно 15 градусам отклонения от вертикали
+        return Mathf.Abs(dotUp) < 0.25f;
     }
 
     // Обновляем метод EnsureTexturesInitialized для более надежного обновления маски
@@ -1304,11 +1603,35 @@ public class WallPaintEffect : MonoBehaviour
         MeshRenderer meshRenderer = plane.GetComponent<MeshRenderer>();
         if (meshRenderer != null)
         {
-            // Если у плоскости есть материал, обновляем его
+            // Создаем новый материал для этой плоскости
             Material planeMaterial = new Material(wallPaintMaterial);
+            
+            // Настраиваем материал для работы в мировом пространстве AR
+            planeMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+            
+            // Важно! Передаем трансформацию плоскости в пространство шейдера
+            planeMaterial.SetMatrix("_PlaneToWorldMatrix", plane.transform.localToWorldMatrix);
+            
+            // Устанавливаем нормаль плоскости для корректной ориентации краски
+            planeMaterial.SetVector("_PlaneNormal", plane.normal);
+            
+            // Задаем центр плоскости как опорную точку для покраски
+            planeMaterial.SetVector("_PlaneCenter", plane.center);
+            
+            // Устанавливаем параметры цвета
+            planeMaterial.SetColor("_PaintColor", color);
+            planeMaterial.SetFloat("_BlendFactor", blendFactor);
+            
+            // Применяем материал к рендереру плоскости
             meshRenderer.material = planeMaterial;
             
             Debug.Log($"[WallPaintEffect LOG] Применен материал покраски к плоскости {plane.trackableId}");
+            
+            // Если есть ARLightEstimation, добавляем материал для обновления освещения
+            if (lightEstimation != null)
+            {
+                lightEstimation.AddMaterial(planeMaterial);
+            }
         }
         else
         {

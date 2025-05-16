@@ -12,16 +12,12 @@ MonoBehaviour:
   m_Script: {fileID: 0}
   m_Name: _ARSceneConfig
   m_EditorClassIdentifier: Assembly-CSharp-Editor::_ARSceneConfig
-  arSessionPrefab: {fileID: 2141897261413862413, guid: 00fe8ffcf4f5c4f4085986777c65fb7f,
-    type: 3}
-  xrOriginPrefab: {fileID: 8615858895843980298, guid: 83754a0b0e2f1844ab622d8c9b21d14b,
-    type: 3}
-  arPlanePrefab: {fileID: 7343140448444131710, guid: 79b954db4415ba74aa113ccbe6ff21ac,
-    type: 3}
-  uiPrefab: {fileID: 3932747992230222002, guid: abed281d544571547b481e06195deefe,
-    type: 3}
+  arSessionPrefab: {fileID: 0}
+  xrOriginPrefab: {fileID: 0}
+  arPlanePrefab: {fileID: 0}
+  uiPrefab: {fileID: 0}
   wallSegmentationModel: {fileID: 0}
-  wallPaintMaterial: {fileID: 2100000, guid: 943407cff66a9a64ca8c837f71bbd10b, type: 2}
+  wallPaintMaterial: {fileID: 0}
   segmentationMaskResolution: {x: 256, y: 256}
   defaultPaintColor: {r: 1, g: 0, b: 0, a: 1}
   defaultBlendFactor: 0.7

@@ -355,6 +355,30 @@ public class ARSetupValidator : MonoBehaviour
 
             // Для WallSegmentation и WallPaintEffect автоматическое создание сложнее,
             // так как требуется настройка многих зависимостей
+
+            // Поиск и исправление ссылок в WallSegmentation
+            if (wallSegmentation != null)
+            {
+                  // Используем свойства-геттеры вместо прямого доступа к приватным полям
+                  if (wallSegmentation.ARSessionManager == null)
+                  {
+                        var sessionManager = FindObjectOfType<ARSessionManager>();
+                        if (sessionManager != null)
+                        {
+                              wallSegmentation.ARSessionManager = sessionManager;
+                              issues.Add("Ссылка на ARSessionManager в WallSegmentation автоматически установлена");
+                        }
+                  }
+                  
+                  if (wallSegmentation.XROrigin == null)
+                  {
+                        if (xrOrigin != null)
+                        {
+                              wallSegmentation.XROrigin = xrOrigin;
+                              issues.Add("Ссылка на XROrigin в WallSegmentation автоматически установлена");
+                        }
+                  }
+            }
       }
 
       /// <summary>
@@ -514,9 +538,21 @@ public class ARSetupValidator : MonoBehaviour
                   }
 
                   // Устанавливаем ссылки на компоненты
-                  wallSegmentation.arCameraManager = arCameraManager;
-                  wallSegmentation.arSessionManager = FindObjectOfType<ARSessionManager>();
-                  wallSegmentation.xrOrigin = xrOrigin;
+                  if (arCameraManager != null)
+                  {
+                        wallSegmentation.ARCameraManager = arCameraManager;
+                  }
+                  
+                  var sessionManager = FindObjectOfType<ARSessionManager>();
+                  if (sessionManager != null)
+                  {
+                        wallSegmentation.ARSessionManager = sessionManager;
+                  }
+                  
+                  if (xrOrigin != null)
+                  {
+                        wallSegmentation.XROrigin = xrOrigin;
+                  }
             }
 
             // 8. Проверка WallPaintEffect

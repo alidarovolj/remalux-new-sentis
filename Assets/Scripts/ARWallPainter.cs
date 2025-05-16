@@ -68,20 +68,40 @@ public class ARWallPainter : MonoBehaviour
                   Debug.LogWarning("ARWallPainter: ARAnchorManager не найден, якоря не будут использоваться!");
             }
 
+            // ВАЖНО: Проверяем конфигурацию AR-плоскостей
+            ARPlaneManager planeManagerConfig = FindObjectOfType<ARPlaneManager>();
+            if (planeManagerConfig != null)
+            {
+                  Debug.LogError($"КОНФИГУРАЦИЯ AR PLANE MANAGER: detectionMode={planeManagerConfig.requestedDetectionMode}, " + 
+                               $"prefab={planeManagerConfig.planePrefab != null}, " + 
+                               $"trackables={planeManagerConfig.trackables.count}");
+                               
+                  // Дополнительная настройка для более стабильных вертикальных плоскостей
+                  planeManagerConfig.requestedDetectionMode = UnityEngine.XR.ARSubsystems.PlaneDetectionMode.Vertical;
+            }
+
             // Включаем режим привязки краски к AR-плоскостям
             wallPaintEffect.SetAttachToARPlanes(true);
+            
+            // КРИТИЧНО: Включаем режим отладки в WallPaintEffect для диагностики
+            wallPaintEffect.debugMode = true;
 
             // Настраиваем начальные значения
             if (wallPaintEffect != null)
             {
                   wallPaintEffect.SetPaintColor(defaultWallColor);
                   wallPaintEffect.SetBlendFactor(defaultBlendFactor);
+                  
+                  // Принудительное обновление всех материалов
+                  wallPaintEffect.ForceUpdateMaterial();
             }
 
             // Подписываемся на события изменения AR плоскостей, чтобы обновлять кэш
             ARPlaneManager planeManager = FindObjectOfType<ARPlaneManager>();
             if (planeManager != null)
             {
+                  // ВАЖНО: Отписываемся перед подпиской, чтобы избежать двойных вызовов
+                  planeManager.planesChanged -= OnPlanesChanged;
                   planeManager.planesChanged += OnPlanesChanged;
                   Debug.Log("ARWallPainter: Подписка на события ARPlaneManager.planesChanged выполнена");
             }
@@ -103,8 +123,54 @@ public class ARWallPainter : MonoBehaviour
             
             // Инициализация якорей для существующих плоскостей
             InitializeExistingPlanes();
+            
+            // ВАЖНО: Запускаем таймер для диагностики привязки плоскостей
+            InvokeRepeating("DiagnoseARPlanes", 1.0f, 5.0f);
       }
       
+      // Новый метод для диагностики плоскостей и якорей
+      private void DiagnoseARPlanes()
+      {
+            ARPlane[] existingPlanes = FindObjectsOfType<ARPlane>();
+            Debug.LogError($"ДИАГНОСТИКА AR-ПЛОСКОСТЕЙ: Найдено {existingPlanes.Length} плоскостей");
+            
+            foreach (ARPlane plane in existingPlanes)
+            {
+                  if (plane != null)
+                  {
+                        // Проверяем наличие якоря
+                        ARAnchor attachedAnchor = plane.gameObject.GetComponent<ARAnchor>();
+                        string anchorInfo = attachedAnchor != null ? 
+                                          $"ARAnchor: {attachedAnchor.trackableId}, Pos: {attachedAnchor.transform.position}" : 
+                                          "Якорь отсутствует!";
+                        
+                        // Проверяем материал
+                        MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
+                        string materialInfo = "Нет рендерера";
+                        if (renderer != null && renderer.material != null)
+                        {
+                              Material mat = renderer.material;
+                              materialInfo = $"Шейдер: {mat.shader.name}, UseARSpace: {mat.IsKeywordEnabled("USE_AR_WORLD_SPACE")}";
+                        }
+                        
+                        Debug.LogError($"ПЛОСКОСТЬ: {plane.trackableId}\n" +
+                                     $"Позиция: {plane.transform.position}, Нормаль: {plane.normal}\n" +
+                                     $"{anchorInfo}\n" +
+                                     $"Материал: {materialInfo}");
+                                     
+                        // Если нет якоря, добавляем его
+                        if (attachedAnchor == null)
+                        {
+                              attachedAnchor = plane.gameObject.AddComponent<ARAnchor>();
+                              Debug.LogError($"ДОБАВЛЕН ЯКОРЬ к плоскости {plane.trackableId}");
+                        }
+                  }
+            }
+            
+            // Проверяем согласованность нашего кэша
+            Debug.LogError($"КЭШИ: planeCache: {planeCache.Count}, anchorCache: {anchorCache.Count}, paintedWalls: {paintedWalls.Count}");
+      }
+
       // Метод для инициализации якорей для уже существующих плоскостей
       private void InitializeExistingPlanes()
       {
@@ -214,8 +280,11 @@ public class ARWallPainter : MonoBehaviour
 
                   if (plane != null)
                   {
+                        bool isVertical = IsVerticalPlane(plane);
+                        
                         // Проверяем, является ли плоскость вертикальной (стеной)
-                        if (IsVerticalPlane(plane))
+                        // и применяем фильтр preferVerticalPlanesOnly, если он включен
+                        if (!preferVerticalPlanesOnly || isVertical)
                         {
                               // Если это первое касание или новая плоскость
                               if (lastSelectedPlane != plane)
@@ -238,7 +307,11 @@ public class ARWallPainter : MonoBehaviour
                                     // Здесь может быть дополнительная логика для непрерывной покраски
                               }
                         }
+                        else
+                        {
+                              Debug.Log("Плоскость проигнорирована, так как она не вертикальная, а preferVerticalPlanesOnly = true");
                   }
+            }
             }
       }
       
@@ -275,7 +348,7 @@ public class ARWallPainter : MonoBehaviour
             // Пытаемся получить плоскость непосредственно из хита
             ARPlane plane = null;
             TrackableId trackableId = hit.trackableId;
-            
+
             // Сначала проверяем кэш плоскостей
             if (planeCache.TryGetValue(trackableId, out plane))
             {
@@ -306,12 +379,12 @@ public class ARWallPainter : MonoBehaviour
                   Debug.LogWarning("ARWallPainter: Попытка применить цвет к null плоскости");
                   return;
             }
-            
+
             // Создаем якорь для плоскости, чтобы закрепить эффект в AR пространстве
             ARAnchor anchor = CreateOrGetAnchorForPlane(plane);
             
             // Если якорь создан успешно
-            if (anchor != null)
+                  if (anchor != null)
             {
                   // Используем усовершенствованный метод WallPaintEffect для окрашивания плоскости
                   if (wallPaintEffect != null)
@@ -327,9 +400,9 @@ public class ARWallPainter : MonoBehaviour
                         if (renderer != null)
                         {
                               // Получаем или создаем материал для этой плоскости
-                              Material planeMaterial;
-                              if (!paintedWalls.TryGetValue(plane.trackableId, out planeMaterial))
-                              {
+            Material planeMaterial;
+            if (!paintedWalls.TryGetValue(plane.trackableId, out planeMaterial))
+            {
                                     // Создаем новый материал с привязкой к мировым координатам
                                     Material baseMaterial = new Material(Shader.Find("Custom/WallPaint"));
                                     planeMaterial = new Material(baseMaterial);
@@ -351,7 +424,7 @@ public class ARWallPainter : MonoBehaviour
                   }
             }
             else
-            {
+                  {
                   Debug.LogWarning($"ARWallPainter: Не удалось создать якорь для плоскости {plane.trackableId}");
             }
       }
@@ -361,6 +434,23 @@ public class ARWallPainter : MonoBehaviour
       {
             if (plane == null) return null;
             
+            // ВАЖНОЕ ИЗМЕНЕНИЕ: Всегда проверяем, есть ли уже прикрепленный якорь
+            ARAnchor attachedAnchor = plane.gameObject.GetComponent<ARAnchor>();
+            if (attachedAnchor != null && attachedAnchor.gameObject.activeInHierarchy)
+            {
+                  Debug.Log($"ARWallPainter: Используем существующий якорь, прикрепленный к плоскости {plane.trackableId}");
+                  // Обновляем кэш
+                  anchorCache[plane.trackableId] = attachedAnchor;
+                  
+                  // Сохраняем данные, если нужно, даже для существующих якорей
+                  if (persistPaintBetweenSessions)
+                  {
+                        SaveAnchorData(attachedAnchor, plane.trackableId);
+                  }
+                  
+                  return attachedAnchor;
+            }
+            
             // Проверяем, есть ли уже якорь для этой плоскости в кэше
             ARAnchor anchor;
             if (anchorCache.TryGetValue(plane.trackableId, out anchor))
@@ -368,49 +458,85 @@ public class ARWallPainter : MonoBehaviour
                   // Проверяем, что якорь все еще активен
                   if (anchor != null && anchor.gameObject.activeInHierarchy)
                   {
-                        return anchor;
-                  }
-            }
-            
-            // Якоря нет или он неактивен - создаем новый
-            if (anchorManager != null)
-            {
-                  // Позиция для якоря - центр плоскости в мировых координатах
-                  Vector3 planeCenter = plane.center;
-                  Pose anchorPose = new Pose(planeCenter, Quaternion.LookRotation(plane.normal));
-                  
-                  // Создаем якорь, привязанный к плоскости
-                  anchor = anchorManager.AttachAnchor(plane, anchorPose);
-                  
-                  if (anchor != null)
-                  {
-                        // Добавляем якорь в кэш
-                        anchorCache[plane.trackableId] = anchor;
-                        Debug.Log($"ARWallPainter: Создан новый якорь для плоскости {plane.trackableId}");
-                        
-                        // Если нужно сохранять эффекты между сессиями, сохраняем данные о якоре
+                        // Сохраняем данные, если нужно
                         if (persistPaintBetweenSessions)
                         {
                               SaveAnchorData(anchor, plane.trackableId);
                         }
-                        
                         return anchor;
                   }
-                  else
+            }
+
+            // ПРИНЦИПИАЛЬНОЕ ИЗМЕНЕНИЕ:
+            // Вместо создания отдельного якоря, привязанного к плоскости,
+            // напрямую добавляем компонент ARAnchor к самой плоскости.
+            // Это обеспечит, что плоскость сама становится якорем и будет
+            // стабильно привязана к реальному миру
+            
+            if (attachedAnchor == null)
+            {
+                  try
                   {
-                        Debug.LogWarning($"ARWallPainter: Не удалось создать якорь для плоскости {plane.trackableId}");
+                        attachedAnchor = plane.gameObject.AddComponent<ARAnchor>();
+                        Debug.LogError($"ЯКОРЬ: Создан прямой якорь для плоскости {plane.trackableId}");
+                        
+                        // Сохраняем в кэш для будущего использования
+                        anchorCache[plane.trackableId] = attachedAnchor;
+                        
+                        // Сохраняем данные якоря, если включена соответствующая опция
+                        if (persistPaintBetweenSessions)
+                        {
+                              SaveAnchorData(attachedAnchor, plane.trackableId);
+                        }
+                        
+                        // Отладочная информация
+                        Debug.LogError($"ЯКОРЬ INFO: position={attachedAnchor.transform.position}, rotation={attachedAnchor.transform.rotation.eulerAngles}");
+                        
+                        return attachedAnchor;
+                  }
+                  catch (System.Exception ex)
+                  {
+                        Debug.LogError($"ОШИБКА создания якоря: {ex.Message}");
+                        return null;
                   }
             }
             
+            // Проблема - код не должен дойти до этой точки
+            Debug.LogError($"НЕОЖИДАННАЯ СИТУАЦИЯ: не смогли создать или найти якорь для {plane.trackableId}");
             return null;
       }
       
       // Метод для сохранения данных о якоре для будущего использования
       private void SaveAnchorData(ARAnchor anchor, TrackableId planeId)
       {
+            // Сохраняем данные только если включена опция persistPaintBetweenSessions
+            if (!persistPaintBetweenSessions) return;
+            
             // В реальном приложении здесь можно сохранить данные в PlayerPrefs или файл
-            // Для примера просто логируем
-            Debug.Log($"ARWallPainter: Сохранены данные якоря {anchor.trackableId} для плоскости {planeId}");
+            string anchorKey = $"anchor_{planeId}";
+            string colorKey = $"color_{planeId}";
+            string blendKey = $"blend_{planeId}";
+            
+            try
+            {
+                  // Сохраняем позицию и поворот якоря
+                  string positionData = JsonUtility.ToJson(anchor.transform.position);
+                  string rotationData = JsonUtility.ToJson(anchor.transform.rotation);
+                  PlayerPrefs.SetString(anchorKey + "_position", positionData);
+                  PlayerPrefs.SetString(anchorKey + "_rotation", rotationData);
+                  
+                  // Сохраняем текущий цвет и прозрачность
+                  string colorData = JsonUtility.ToJson(selectedColor);
+                  PlayerPrefs.SetString(colorKey, colorData);
+                  PlayerPrefs.SetFloat(blendKey, blendFactor);
+                  
+                  PlayerPrefs.Save();
+                  Debug.Log($"ARWallPainter: Сохранены данные якоря {anchor.trackableId} для плоскости {planeId}");
+            }
+            catch (System.Exception ex)
+            {
+                  Debug.LogError($"Ошибка при сохранении данных якоря: {ex.Message}");
+            }
       }
 
       // Обработчик изменений AR плоскостей
@@ -527,9 +653,9 @@ public class ARWallPainter : MonoBehaviour
             
             // Если есть WallPaintEffect, запрашиваем принудительное обновление
             if (wallPaintEffect != null)
-            {
+                  {
                   wallPaintEffect.ForceRefreshARPlanes();
-            }
+                  }
             
             Debug.Log("ARWallPainter: Все стены сброшены");
       }
@@ -538,8 +664,8 @@ public class ARWallPainter : MonoBehaviour
       public void PerformRaycast(Vector2 screenPosition)
       {
             HandleTouchInteraction(screenPosition);
-      }
-
+                  }
+                  
       // Получение плоскости из кэша по ID
       private ARPlane GetPlaneFromCache(TrackableId trackableId)
       {

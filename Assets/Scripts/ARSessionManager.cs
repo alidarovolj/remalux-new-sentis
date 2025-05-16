@@ -20,6 +20,12 @@ public class ARSessionManager : MonoBehaviour
       [SerializeField] private bool autoStartSession = true;
       [SerializeField] private float initializationDelay = 0.5f; // Задержка для iOS
 
+      [Tooltip("Автоматически исправлять настройки cullingMask всех камер")]
+      public bool fixCameraCullingMask = true;
+      
+      [Tooltip("Использовать специальный фиксер для SimulationCamera")]
+      public bool useSimulationCameraFixer = true;
+
       private bool isSessionInitialized = false;
       private bool _dummy; // Поле для подавления предупреждений компилятора
 
@@ -49,6 +55,21 @@ public class ARSessionManager : MonoBehaviour
                         arCameraBackground = arCamera.GetComponent<ARCameraBackground>();
                   }
             }
+
+            // Добавляем фиксер cullingMask для камер, если нужно
+            if (fixCameraCullingMask && !GetComponent<CameraCullingMaskFixer>())
+            {
+                  // Добавляем компонент CameraCullingMaskFixer к этому объекту
+                  gameObject.AddComponent<CameraCullingMaskFixer>();
+                  Debug.Log("[ARSessionManager] Добавлен CameraCullingMaskFixer для исправления настроек камер");
+            }
+            
+            // Добавляем специальный фиксер для SimulationCamera
+            if (useSimulationCameraFixer && !GetComponent<SimulationCameraFixer>())
+            {
+                  gameObject.AddComponent<SimulationCameraFixer>();
+                  Debug.Log("[ARSessionManager] Добавлен SimulationCameraFixer для исправления SimulationCamera");
+            }
       }
 
       private void Start()
@@ -56,6 +77,20 @@ public class ARSessionManager : MonoBehaviour
             if (autoStartSession)
             {
                   StartCoroutine(InitializeARSession());
+            }
+
+            Debug.Log("[ARSessionManager] Инициализация AR сессии");
+            
+            // Дополнительная проверка наличия фиксера
+            if (fixCameraCullingMask && !GetComponent<CameraCullingMaskFixer>())
+            {
+                  gameObject.AddComponent<CameraCullingMaskFixer>();
+            }
+            
+            // Дополнительная проверка наличия специального фиксера для SimulationCamera
+            if (useSimulationCameraFixer && !GetComponent<SimulationCameraFixer>())
+            {
+                  gameObject.AddComponent<SimulationCameraFixer>();
             }
       }
 

@@ -43,6 +43,12 @@ public class ARManagerInitializer : MonoBehaviour
             StartCoroutine(SetupARComponents());
       }
 
+      private void Start()
+      {
+            // Подписываемся на события обновления маски сегментации
+            SubscribeToWallSegmentation();
+      }
+
       private IEnumerator SetupARComponents()
       {
             // Ждем один кадр
@@ -577,19 +583,63 @@ public class ARManagerInitializer : MonoBehaviour
                   return;
             }
 
+            // Логируем настройки ARPlaneManager
+            Debug.Log($"[ARManagerInitializer] 🔍 Конфигурация ARPlaneManager:" +
+                      $"\n - requestedDetectionMode: {planeManager.requestedDetectionMode}" +
+                      $"\n - planeFinding: {(planeManager.enabled ? "включено" : "выключено")}" +
+                      $"\n - planePrefab: {(planeManager.planePrefab != null ? planeManager.planePrefab.name : "не установлен")}" +
+                      $"\n - trackables: {planeManager.trackables.count} активных плоскостей");
+
+            // Проверяем, установлен ли префаб для ARPlane
+            if (planeManager.planePrefab == null)
+            {
+                  Debug.LogWarning("[ARManagerInitializer] ⚠️ planePrefab не установлен в ARPlaneManager. Плоскости не будут визуализироваться!");
+            }
+
             // Подписываемся на событие создания плоскостей
+            planeManager.planesChanged -= OnPlanesChanged; // Сначала отписываемся, чтобы избежать двойной подписки
             planeManager.planesChanged += OnPlanesChanged;
 
-            Debug.Log("ARPlaneManager настроен, подписка на события создания плоскостей активирована");
+            Debug.Log("[ARManagerInitializer] ✅ ARPlaneManager настроен, подписка на события создания плоскостей активирована");
       }
 
       // Обработчик события изменения плоскостей
       private void OnPlanesChanged(ARPlanesChangedEventArgs args)
       {
+            Debug.Log($"[ARManagerInitializer] 🔄 Изменение плоскостей: добавлено {args.added.Count}, обновлено {args.updated.Count}, удалено {args.removed.Count}");
+            
             // Обработка только добавленных плоскостей
             foreach (ARPlane plane in args.added)
             {
+                  Debug.Log($"[ARManagerInitializer] ➕ Добавлена новая плоскость:" +
+                           $"\n - ID: {plane.trackableId}" +
+                           $"\n - Тип: {plane.classification}" +
+                           $"\n - Ориентация: {plane.alignment}" +
+                           $"\n - Размер: {plane.size.x:F2}x{plane.size.y:F2}м" +
+                           $"\n - Центр: {plane.center}");
+                  
                   SetupPlaneVisualization(plane.gameObject);
+            }
+            
+            // Также логируем информацию об обновленных плоскостях
+            foreach (ARPlane plane in args.updated)
+            {
+                  Debug.Log($"[ARManagerInitializer] 🔄 Обновлена плоскость ID: {plane.trackableId}, размер: {plane.size.x:F2}x{plane.size.y:F2}м");
+                  
+                  // Обновляем маску сегментации для вертикальных плоскостей при их обновлении
+                  if (plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical)
+                  {
+                        WallSegmentation wallSegmentation = FindObjectOfType<WallSegmentation>();
+                        if (wallSegmentation != null && wallSegmentation.segmentationMaskTexture != null)
+                        {
+                              MeshRenderer meshRenderer = plane.GetComponent<MeshRenderer>();
+                              if (meshRenderer != null && meshRenderer.material != null)
+                              {
+                                    meshRenderer.material.SetTexture("_SegmentationMask", wallSegmentation.segmentationMaskTexture);
+                                    meshRenderer.material.EnableKeyword("USE_MASK");
+                              }
+                        }
+                  }
             }
       }
 
@@ -598,32 +648,179 @@ public class ARManagerInitializer : MonoBehaviour
       {
             if (planeObject == null) return;
 
+            Debug.Log($"[ARManagerInitializer] 🎨 Настройка визуализации для плоскости {planeObject.name}");
+
+            // Проверяем является ли плоскость вертикальной
+            ARPlane planeComponent = planeObject.GetComponent<ARPlane>();
+            bool isVerticalPlane = false;
+
+            if (planeComponent != null)
+            {
+                  isVerticalPlane = planeComponent.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical;
+            }
+
+            // Находим WallSegmentation для получения маски сегментации
+            WallSegmentation wallSegmentation = FindObjectOfType<WallSegmentation>();
+            RenderTexture segmentationMask = wallSegmentation?.segmentationMaskTexture;
+
             // Настройка MeshRenderer
             MeshRenderer meshRenderer = planeObject.GetComponent<MeshRenderer>();
-            if (meshRenderer != null && meshRenderer.sharedMaterial == null)
+            if (meshRenderer != null)
             {
-                  // Создаем дефолтный материал с прозрачностью
-                  Material defaultMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-                  if (defaultMaterial != null)
+                  if (meshRenderer.sharedMaterial == null)
                   {
-                        defaultMaterial.color = new Color(1f, 1f, 1f, 0.5f);
-                        meshRenderer.sharedMaterial = defaultMaterial;
-                        Debug.Log($"Материал для MeshRenderer назначен для {planeObject.name}");
+                        // Создаем дефолтный материал с прозрачностью
+                        Material defaultMaterial = new Material(Shader.Find("Custom/WallPaint"));
+                        if (defaultMaterial != null)
+                        {
+                              // Для вертикальных плоскостей используем WallMaterial
+                              if (isVerticalPlane)
+                              {
+                                    defaultMaterial.name = "WallMaterial";
+                                    defaultMaterial.color = new Color(0.4f, 0.6f, 1.0f, 0.5f); // Голубой цвет с прозрачностью
+                                    
+                                    // Применяем маску сегментации к материалу, если она доступна
+                                    if (segmentationMask != null)
+                                    {
+                                          defaultMaterial.SetTexture("_SegmentationMask", segmentationMask);
+                                          defaultMaterial.EnableKeyword("USE_MASK");
+                                          Debug.Log($"[ARManagerInitializer] ✅ Маска сегментации стен применена к материалу плоскости {planeObject.name}");
+                                    }
+                              }
+                              else
+                              {
+                                    // Для горизонтальных плоскостей используем стандартный материал
+                                    defaultMaterial.color = new Color(0.0f, 0.8f, 0.2f, 0.5f); // Зеленый цвет с прозрачностью
+                              }
+                              
+                              meshRenderer.sharedMaterial = defaultMaterial;
+                              Debug.Log($"[ARManagerInitializer] ✅ Материал для MeshRenderer назначен для {planeObject.name}");
+                        }
                   }
+                  else
+                  {
+                        Debug.Log($"[ARManagerInitializer] ℹ️ Плоскость {planeObject.name} уже имеет материал: {meshRenderer.sharedMaterial.name}");
+                        
+                        // Если плоскость вертикальная и уже имеет материал, применяем маску сегментации
+                        if (isVerticalPlane && segmentationMask != null && meshRenderer.sharedMaterial.name.Contains("Wall"))
+                        {
+                              meshRenderer.sharedMaterial.SetTexture("_SegmentationMask", segmentationMask);
+                              meshRenderer.sharedMaterial.EnableKeyword("USE_MASK");
+                              Debug.Log($"[ARManagerInitializer] ✅ Маска сегментации стен применена к существующему материалу плоскости {planeObject.name}");
+                        }
+                  }
+            }
+            else
+            {
+                  Debug.LogWarning($"[ARManagerInitializer] ⚠️ Плоскость {planeObject.name} не содержит MeshRenderer!");
             }
 
             // Настройка LineRenderer
             LineRenderer lineRenderer = planeObject.GetComponent<LineRenderer>();
-            if (lineRenderer != null && lineRenderer.sharedMaterial == null)
+            if (lineRenderer != null)
             {
-                  // Создаем дефолтный материал для линий
-                  Material lineMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
-                  if (lineMaterial != null)
+                  if (lineRenderer.sharedMaterial == null)
                   {
-                        lineMaterial.color = Color.white;
-                        lineRenderer.sharedMaterial = lineMaterial;
-                        Debug.Log($"Материал для LineRenderer назначен для {planeObject.name}");
+                        // Создаем дефолтный материал для линий
+                        Material lineMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+                        if (lineMaterial != null)
+                        {
+                              lineMaterial.color = Color.white;
+                              lineRenderer.sharedMaterial = lineMaterial;
+                              Debug.Log($"[ARManagerInitializer] ✅ Материал для LineRenderer назначен для {planeObject.name}");
+                        }
                   }
+            }
+            
+            // Проверяем ARPlane компонент
+            if (planeComponent != null)
+            {
+                  Debug.Log($"[ARManagerInitializer] ℹ️ Конфигурация ARPlane:" +
+                           $"\n - GameObject: {planeComponent.gameObject.name}" +
+                           $"\n - Classification: {planeComponent.classification}" + 
+                           $"\n - Normal: {planeComponent.normal}" +
+                           $"\n - Vertices: {planeComponent.boundary.Length} вершин");
+            }
+      }
+
+      // Подписка на событие обновления маски сегментации
+      private void SubscribeToWallSegmentation()
+      {
+            // Находим WallSegmentation в сцене
+            WallSegmentation wallSegmentation = FindObjectOfType<WallSegmentation>();
+            if (wallSegmentation != null)
+            {
+                  // Отписываемся от предыдущего события, если оно было
+                  wallSegmentation.OnSegmentationMaskUpdated -= OnSegmentationMaskUpdated;
+                  
+                  // Подписываемся на событие обновления маски
+                  wallSegmentation.OnSegmentationMaskUpdated += OnSegmentationMaskUpdated;
+                  
+                  Debug.Log("[ARManagerInitializer] ✅ Подписка на события обновления маски сегментации настроена");
+            }
+            else
+            {
+                  Debug.LogWarning("[ARManagerInitializer] ⚠️ WallSegmentation не найден в сцене. Подписка на события невозможна.");
+                  
+                  // Если WallSegmentation не найден, запустим поиск повторно через некоторое время
+                  StartCoroutine(RetrySubscription());
+            }
+      }
+      
+      // Корутина для повторной попытки подписки
+      private IEnumerator RetrySubscription()
+      {
+            yield return new WaitForSeconds(2f);
+            Debug.Log("[ARManagerInitializer] 🔄 Повторная попытка подписки на WallSegmentation");
+            SubscribeToWallSegmentation();
+      }
+      
+      // Обработчик события обновления маски сегментации
+      private void OnSegmentationMaskUpdated(RenderTexture mask)
+      {
+            if (mask == null)
+            {
+                  Debug.LogWarning("[ARManagerInitializer-OnSegmentationMaskUpdated] ⚠️ Получена null маска сегментации");
+                  return;
+            }
+
+            Debug.Log($"[ARManagerInitializer-OnSegmentationMaskUpdated] ✅ Получена маска сегментации {mask.width}x{mask.height}");
+            
+            // Получаем все активные плоскости и обновляем материалы
+            ARPlaneManager planeManager = FindObjectOfType<ARPlaneManager>();
+            if (planeManager != null)
+            {
+                  int planeCount = 0;
+                  int updatedPlaneCount = 0;
+                  
+                  // Обновляем материалы только для вертикальных плоскостей
+                  foreach (ARPlane plane in planeManager.trackables)
+                  {
+                        planeCount++;
+                        if (plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.Vertical)
+                        {
+                              MeshRenderer meshRenderer = plane.GetComponent<MeshRenderer>();
+                              if (meshRenderer != null && meshRenderer.material != null)
+                              {
+                                    meshRenderer.material.SetTexture("_SegmentationMask", mask);
+                                    meshRenderer.material.EnableKeyword("USE_MASK");
+                                    updatedPlaneCount++;
+                                    
+                                    // Выводим детальную информацию об обновлении
+                                    Debug.Log($"[ARManagerInitializer-OnSegmentationMaskUpdated] ✓ Обновлена плоскость {plane.trackableId} с размером {plane.size.x:F2}x{plane.size.y:F2}м");
+                              }
+                              else
+                              {
+                                    Debug.LogWarning($"[ARManagerInitializer-OnSegmentationMaskUpdated] ⚠️ Не удалось обновить материал для плоскости {plane.trackableId} - MeshRenderer или Material отсутствуют");
+                              }
+                        }
+                  }
+                  
+                  Debug.Log($"[ARManagerInitializer-OnSegmentationMaskUpdated] 📊 Статистика обновления: обновлено {updatedPlaneCount} из {planeCount} плоскостей");
+            }
+            else
+            {
+                  Debug.LogWarning("[ARManagerInitializer-OnSegmentationMaskUpdated] ⚠️ ARPlaneManager не найден, невозможно обновить материалы плоскостей");
             }
       }
 }
