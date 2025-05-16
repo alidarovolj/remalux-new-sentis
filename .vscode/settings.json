@@ -56,5 +56,6 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "remalux-new-sentis.sln"
+    "dotnet.defaultSolution": "remalux-new-sentis.sln",
+    "dotnet.preferCSharpExtension": true
 }
