@@ -167,6 +167,14 @@ public class WallSegmentation : MonoBehaviour
     // Добавляем приватное поле для ARCameraManager
     private ARCameraManager arCameraManager;
     
+    // Поля для стабилизации маски сегментации
+    private RenderTexture lastSuccessfulMask;
+    private bool hasValidMask = false;
+    private float lastValidMaskTime = 0f;
+    private int stableFrameCount = 0;
+    private const int REQUIRED_STABLE_FRAMES = 3; // Количество стабильных кадров для принятия новой маски
+    
+    // Триггер события обновления маски
     // Триггер события обновления маски
     private void TriggerSegmentationMaskUpdatedEvent(RenderTexture mask)
     {
@@ -2152,12 +2160,25 @@ public class WallSegmentation : MonoBehaviour
             Debug.LogError($"[WallSegmentation-ProcessTensorManual] ❌ Ошибка при получении данных тензора: {ex.Message}\n{ex.StackTrace}");
             }
 
-        // Если не удалось получить данные, используем симуляцию
+        // Если не удалось получить данные, используем предыдущую маску или симуляцию
         if (!gotData || tensorData == null)
+        {
+            Debug.LogWarning("[WallSegmentation-ProcessTensorManual] ⚠️ Не удалось получить данные тензора. Используем симуляцию");
+            
+            // УЛУЧШЕНИЕ: Если у нас есть предыдущая валидная маска, используем её вместо симуляции
+            if (hasValidMask && lastSuccessfulMask != null && lastSuccessfulMask.IsCreated() && 
+                (Time.time - lastValidMaskTime) < 5.0f) // Используем предыдущую маску не старше 5 секунд
             {
-                Debug.LogWarning("[WallSegmentation-ProcessTensorManual] ⚠️ Не удалось получить данные тензора. Используем симуляцию");
-                tensorData = new float[batch * classes * height * width];
-                SimulateTensorData(ref tensorData, classes, height, width);
+                Debug.Log("[WallSegmentation-ProcessTensorManual] ℹ️ Используем сохраненную валидную маску вместо симуляции");
+                
+                // Вызываем событие с существующей маской
+                TriggerSegmentationMaskUpdatedEvent(lastSuccessfulMask);
+                return;
+            }
+            
+            // Создаем симулированные данные
+            tensorData = new float[batch * classes * height * width];
+            SimulateTensorData(ref tensorData, classes, height, width);
         }
 
         // Проверяем, что тензор имеет ожидаемое количество классов
@@ -2278,9 +2299,21 @@ public class WallSegmentation : MonoBehaviour
                 Debug.Log($"[WallSegmentation-ProcessTensorManual] 📊 Статистика: найдено {wallPixelsCount}/{width*height} пикселей стены. " +
                           $"Вероятности стены: min={wallProbMin:F3}, max={wallProbMax:F3}, avg={wallProbAvg:F3}");
             }
-        else if (usingSim)  // Используем переменную
+            else if (usingSim)  // Используем переменную
             {
                 Debug.Log("[WallSegmentation-ProcessTensorManual] 📊 Используются симулированные данные для маски");
+            }
+            
+            // УЛУЧШЕНИЕ: Проверяем стабильность результата
+            bool isStableFrame = wallPixelsCount > (width * height * 0.05f); // Минимум 5% пикселей должны быть стенами
+            
+            if (isStableFrame)
+            {
+                stableFrameCount++;
+            }
+            else
+            {
+                stableFrameCount = 0;
             }
             
             // Создаем текстуру для результата
@@ -2288,25 +2321,70 @@ public class WallSegmentation : MonoBehaviour
             resultTexture.SetPixels32(pixels);
             resultTexture.Apply();
             
-            // Копируем результат в RenderTexture для вывода
-            Graphics.Blit(resultTexture, segmentationMaskTexture);
+            // УЛУЧШЕНИЕ: Применяем маску только если это стабильный кадр или первая успешная маска
+            if (stableFrameCount >= REQUIRED_STABLE_FRAMES || (!hasValidMask && isStableFrame))
+            {
+                // Копируем результат в RenderTexture для вывода
+                Graphics.Blit(resultTexture, segmentationMaskTexture);
+                
+                // УЛУЧШЕНИЕ: Сохраняем успешную маску
+                if (lastSuccessfulMask == null || !lastSuccessfulMask.IsCreated())
+                {
+                    lastSuccessfulMask = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+                    lastSuccessfulMask.enableRandomWrite = true;
+                    lastSuccessfulMask.Create();
+                }
+                
+                // Копируем текущую маску как успешную
+                Graphics.Blit(segmentationMaskTexture, lastSuccessfulMask);
+                hasValidMask = true;
+                lastValidMaskTime = Time.time;
+                
+                // Вызываем событие обновления маски
+                if (OnSegmentationMaskUpdated != null)
+                {
+                    int subscribersCount = OnSegmentationMaskUpdated.GetInvocationList().Length;
+                    Debug.Log($"[WallSegmentation-ProcessTensorManual] 📣 Вызываем событие OnSegmentationMaskUpdated с новой стабильной маской {segmentationMaskTexture.width}x{segmentationMaskTexture.height}, подписчиков: {subscribersCount}");
+                    OnSegmentationMaskUpdated.Invoke(segmentationMaskTexture);
+                }
+                
+                Debug.Log($"[WallSegmentation-ProcessTensorManual] ✅ Стабильная маска сегментации обновлена (размер {width}x{height})");
+            }
+            else if (hasValidMask && lastSuccessfulMask != null)
+            {
+                // Используем предыдущую успешную маску
+                Debug.Log($"[WallSegmentation-ProcessTensorManual] ⚠️ Текущий кадр нестабилен ({stableFrameCount}/{REQUIRED_STABLE_FRAMES}), используем предыдущую маску");
+                
+                // Вызываем событие с предыдущей стабильной маской
+                if (OnSegmentationMaskUpdated != null)
+                {
+                    int subscribersCount = OnSegmentationMaskUpdated.GetInvocationList().Length;
+                    Debug.Log($"[WallSegmentation-ProcessTensorManual] 📣 Вызываем событие OnSegmentationMaskUpdated с сохраненной маской, подписчиков: {subscribersCount}");
+                    OnSegmentationMaskUpdated.Invoke(lastSuccessfulMask);
+                }
+            }
+            else
+            {
+                // Если нет предыдущей маски, применяем текущую несмотря на нестабильность
+                Graphics.Blit(resultTexture, segmentationMaskTexture);
+                
+                // Вызываем событие обновления маски
+                if (OnSegmentationMaskUpdated != null)
+                {
+                    int subscribersCount = OnSegmentationMaskUpdated.GetInvocationList().Length;
+                    Debug.Log($"[WallSegmentation-ProcessTensorManual] 📣 Вызываем событие OnSegmentationMaskUpdated с нестабильной маской {segmentationMaskTexture.width}x{segmentationMaskTexture.height}, подписчиков: {subscribersCount}");
+                    OnSegmentationMaskUpdated.Invoke(segmentationMaskTexture);
+                }
+                else
+                {
+                    Debug.LogWarning("[WallSegmentation-ProcessTensorManual] ⚠️ Нет подписчиков на событие OnSegmentationMaskUpdated!");
+                }
+                
+                Debug.Log($"[WallSegmentation-ProcessTensorManual] ⚠️ Используем нестабильную маску (размер {width}x{height})");
+            }
             
             // Уничтожаем временную текстуру
             Destroy(resultTexture);
-            
-            // Вызываем событие обновления маски
-        if (OnSegmentationMaskUpdated != null)
-        {
-            int subscribersCount = OnSegmentationMaskUpdated.GetInvocationList().Length;
-            Debug.Log($"[WallSegmentation-ProcessTensorManual] 📣 Вызываем событие OnSegmentationMaskUpdated с маской {segmentationMaskTexture.width}x{segmentationMaskTexture.height}, подписчиков: {subscribersCount}");
-            OnSegmentationMaskUpdated.Invoke(segmentationMaskTexture);
-        }
-        else
-        {
-            Debug.LogWarning("[WallSegmentation-ProcessTensorManual] ⚠️ Нет подписчиков на событие OnSegmentationMaskUpdated!");
-        }
-        
-        Debug.Log("[WallSegmentation-ProcessTensorManual] ✅ Маска сегментации обновлена (размер " + width + "x" + height + ")");
     }
 
     /// <summary>

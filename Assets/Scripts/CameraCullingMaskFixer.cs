@@ -179,8 +179,11 @@ public class CameraCullingMaskFixer : MonoBehaviour
                         {
                             Debug.Log($"[CameraCullingMaskFixer] ✓ Найдена камера '{cameraName}', cullingMask уже установлен в Everything");
                         }
+
                     }
+
                 }
+
             }
             
             if (!foundAny && shouldLog)
@@ -200,3 +203,5 @@ public class CameraCullingMaskFixer : MonoBehaviour
         SetAllCamerasToEverything();
     }
 } 
+
+
