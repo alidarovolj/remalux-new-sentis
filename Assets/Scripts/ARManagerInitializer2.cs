@@ -18,6 +18,9 @@ public class ARManagerInitializer2 : MonoBehaviour
     // Синглтон для глобального доступа
     public static ARManagerInitializer2 Instance { get; private set; }
 
+    // Статический счетчик для уникальных имен плоскостей
+    private static int planeInstanceCounter = 0;
+
     // Ссылки на AR компоненты
     [Header("AR компоненты")]
     public ARSessionManager sessionManager;
@@ -40,6 +43,10 @@ public class ARManagerInitializer2 : MonoBehaviour
     [Tooltip("Материал для горизонтальных плоскостей")]
     public Material horizontalPlaneMaterial;
 
+    [Header("Отладка Визуализации Маски")] // Новый заголовок для инспектора
+    [Tooltip("RawImage для отображения маски сегментации в UI.")]
+    public UnityEngine.UI.RawImage debugMaskDisplay; // <--- ДОБАВЛЕНО ПОЛЕ
+
     // Текущая маска сегментации
     private RenderTexture currentSegmentationMask;
     private bool maskUpdated = false;
@@ -55,6 +62,9 @@ public class ARManagerInitializer2 : MonoBehaviour
     private bool hadValidSegmentationResult = false;
     private float lastSuccessfulSegmentationTime = 0f;
     private float segmentationTimeoutSeconds = 10f; // Тайм-аут для определения "потери" сегментации
+
+    // Переменная для хранения InstanceID TrackablesParent из Start()
+    private int trackablesParentInstanceID_FromStart = 0;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void Initialize()
@@ -86,65 +96,143 @@ public class ARManagerInitializer2 : MonoBehaviour
 
     private void Start()
     {
+        Debug.Log("[ARManagerInitializer2] Start() called.");
         // Находим необходимые компоненты
         FindARComponents();
         
         // Подписываемся на событие обновления маски сегментации
         SubscribeToWallSegmentation();
         
+        // ПОПЫТКА ОТКЛЮЧИТЬ ARPlaneManager
+        if (this.planeManager != null)
+        {
+            Debug.LogWarning("[ARManagerInitializer2] Попытка отключить ARPlaneManager.");
+            this.planeManager.enabled = false;
+            if (!this.planeManager.enabled)
+            {
+                Debug.Log("[ARManagerInitializer2] ARPlaneManager успешно отключен.");
+            }
+            else
+            {
+                Debug.LogError("[ARManagerInitializer2] НЕ УДАЛОСЬ отключить ARPlaneManager!");
+            }
+        }
+        
         // НОВОЕ: Отключаем стандартные визуализаторы плоскостей AR Foundation
-        DisableARFoundationVisualizers();
+        // DisableARFoundationVisualizers(); // ВРЕМЕННО ОТКЛЮЧАЕМ
         
         // Выводим текущие настройки
         Debug.Log($"[ARManagerInitializer2] Настройки инициализированы: useDetectedPlanes={useDetectedPlanes}");
+        
+        // Логирование TrackablesParent при старте
+        if (this.xrOrigin != null && this.xrOrigin.TrackablesParent != null)
+        {
+            trackablesParentInstanceID_FromStart = this.xrOrigin.TrackablesParent.GetInstanceID(); // Сохраняем ID
+            Debug.Log($"[ARManagerInitializer2-Start] TrackablesParent is: {this.xrOrigin.TrackablesParent.name}, ID: {trackablesParentInstanceID_FromStart}, Path: {GetGameObjectPath(this.xrOrigin.TrackablesParent)}");
+        }
+        else
+        {
+            Debug.LogWarning("[ARManagerInitializer2-Start] xrOrigin or xrOrigin.TrackablesParent is NULL.");
+        }
     }
 
     private void Update()
     {
-        // Увеличиваем счетчик кадров
         frameCounter++;
 
+        // Проверка, не изменился ли TrackablesParent
+        if (this.xrOrigin != null && this.xrOrigin.TrackablesParent != null)
+        {
+            if (this.xrOrigin.TrackablesParent.GetInstanceID() != trackablesParentInstanceID_FromStart)
+            {
+                Debug.LogWarning($"[ARManagerInitializer2-Update] TrackablesParent ИЗМЕНИЛСЯ! Был ID: {trackablesParentInstanceID_FromStart}, стал ID: {this.xrOrigin.TrackablesParent.GetInstanceID()}, Path: {GetGameObjectPath(this.xrOrigin.TrackablesParent)}");
+                trackablesParentInstanceID_FromStart = this.xrOrigin.TrackablesParent.GetInstanceID(); // Обновляем, чтобы не спамить
+            }
+        }
+
         // Обработка маски сегментации
-        if (maskUpdated)
+        if (this.maskUpdated)
         {
             ProcessSegmentationMask();
         }
 
         // Проверка на тайм-аут сегментации
-        if (hadValidSegmentationResult && Time.time - lastSuccessfulSegmentationTime > segmentationTimeoutSeconds)
+        if (this.hadValidSegmentationResult && Time.time - this.lastSuccessfulSegmentationTime > this.segmentationTimeoutSeconds)
         {
-            Debug.LogWarning($"[ARManagerInitializer2] ⚠️ Тайм-аут сегментации ({segmentationTimeoutSeconds}с). Создание основной плоскости.");
+            Debug.LogWarning($"[ARManagerInitializer2] ⚠️ Тайм-аут сегментации ({this.segmentationTimeoutSeconds}с). Создание основной плоскости.");
             CreateBasicPlaneInFrontOfUser();
-            hadValidSegmentationResult = false;
+            this.hadValidSegmentationResult = false;
         }
 
         // Периодически очищаем устаревшие плоскости (каждые 60 кадров)
-        if (frameCounter % 60 == 0)
+        if (this.frameCounter % 60 == 0)
         {
             CleanupOldPlanes();
         }
 
         // Обновление позиций плоскостей каждые 10 кадров
         // Это помогает стабилизировать плоскости
-        if (frameCounter % 10 == 0)
+        if (this.frameCounter % 10 == 0)
         {
             UpdatePlanePositions();
         }
 
-        // Каждые 200 кадров проводим проверку плоскостей на перекрытие
-        if (frameCounter % 200 == 0)
+        // Каждые 60 кадров проводим проверку плоскостей на перекрытие
+        // ИЗМЕНЕНО: Уменьшаем интервал для более частого удаления накладывающихся плоскостей
+        if (this.frameCounter % 60 == 0) // Было 200
         {
             RemoveOverlayingPlanes();
         }
 
-        // Вывод отладочной информации каждые 300 кадров
-        if (frameCounter % 300 == 0)
+        // Периодически отключаем другие AR визуализаторы (каждые 60 кадров)
+        if (this.frameCounter % 60 == 0)
         {
-            int planeCount = generatedPlanes.Count;
-            if (planeCount != lastPlaneCount)
+            // DisableOtherARVisualizers(); // ВРЕМЕННО ОТКЛЮЧАЕМ
+        }
+
+        // Вывод отладочной информации каждые 300 кадров
+        if (this.frameCounter % 300 == 0)
+        {
+            int planeCount = this.generatedPlanes.Count;
+            if (planeCount != this.lastPlaneCount)
             {
                 Debug.Log($"[ARManagerInitializer2] 📊 Текущее количество плоскостей: {planeCount}");
-                lastPlaneCount = planeCount;
+                this.lastPlaneCount = planeCount;
+            }
+        }
+
+        // ОТЛАДКА: Логирование позиции первой плоскости
+        if (this.frameCounter % 30 == 0 && this.generatedPlanes.Count > 0 && this.generatedPlanes[0] != null)
+        {
+            Debug.Log($"[ARManagerInitializer2-DebugPlanePos] Plane 0 (ID: {this.generatedPlanes[0].GetInstanceID()}) world position: {this.generatedPlanes[0].transform.position}, rotation: {this.generatedPlanes[0].transform.rotation.eulerAngles}, parent: {this.generatedPlanes[0].transform.parent?.name ?? "null (Root)"}");
+        }
+        
+        // Учащенная проверка Trackables (каждые 30 кадров)
+        if (this.frameCounter % 30 == 0) 
+        {
+            if (this.xrOrigin != null && this.xrOrigin.TrackablesParent != null)
+            {
+                Debug.Log($"[ARManagerInitializer2-TrackableCheck-Update] Проверка TrackablesParent: {GetGameObjectPath(this.xrOrigin.TrackablesParent)} (ID: {this.xrOrigin.TrackablesParent.GetInstanceID()}). Количество дочерних объектов: {this.xrOrigin.TrackablesParent.childCount}");
+                if (this.xrOrigin.TrackablesParent.childCount > 0)
+                {
+                    for (int i = 0; i < this.xrOrigin.TrackablesParent.childCount; i++)
+                    {
+                        Transform child = this.xrOrigin.TrackablesParent.GetChild(i);
+                        Debug.Log($"[ARManagerInitializer2-TrackableCheck-Update] Child of Trackables: {child.name}, ID: {child.gameObject.GetInstanceID()}, Path: {GetGameObjectPath(child)}");
+                        if (child.name.StartsWith("MyARPlane_Debug"))
+                        {
+                            Debug.LogWarning($"[ARManagerInitializer2-TrackableCheck-Update] ВНИМАНИЕ! Найдена плоскость '{child.name}' (ID: {child.gameObject.GetInstanceID()}) под TrackablesParent ({GetGameObjectPath(this.xrOrigin.TrackablesParent)})!");
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.Log($"[ARManagerInitializer2-TrackableCheck-Update] TrackablesParent ({GetGameObjectPath(this.xrOrigin.TrackablesParent)}) has no children.");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[ARManagerInitializer2-TrackableCheck-Update] xrOrigin or xrOrigin.TrackablesParent is NULL for periodic check.");
             }
         }
     }
@@ -306,42 +394,33 @@ public class ARManagerInitializer2 : MonoBehaviour
     private void OnSegmentationMaskUpdated(RenderTexture mask)
     {
         if (mask == null)
+        {
+            Debug.LogWarning("[ARManagerInitializer2-OnSegmentationMaskUpdated] Получена NULL маска.");
+            if (debugMaskDisplay != null) // Если маска null, скрываем отображение
+            {
+                debugMaskDisplay.texture = null;
+                debugMaskDisplay.gameObject.SetActive(false);
+            }
             return;
+        }
 
-        // Сохраняем ссылку на маску и устанавливаем флаг обновления
         currentSegmentationMask = mask;
         maskUpdated = true;
-        
-        // Устанавливаем флаг успешного получения маски
-        hadValidSegmentationResult = true;
-        lastSuccessfulSegmentationTime = Time.time;
-        
-        // Обновляем материалы существующих плоскостей, если они есть
-        if (generatedPlanes.Count > 0) 
+        hadValidSegmentationResult = true; // Фиксируем, что получили результат
+        lastSuccessfulSegmentationTime = Time.time; // Обновляем время последнего успеха
+
+        if (debugMaskDisplay != null) // <--- ДОБАВЛЕН БЛОК ОБНОВЛЕНИЯ RAWIMAGE
         {
-            int updatedCount = 0;
-            
-            // В будущем здесь можно обновлять материалы на основе новых данных сегментации
-            foreach (GameObject plane in generatedPlanes)
+            debugMaskDisplay.texture = currentSegmentationMask;
+            if (!debugMaskDisplay.gameObject.activeSelf)
             {
-                if (plane != null)
-                {
-                    MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
-                    if (renderer != null && renderer.material != null)
-                    {
-                        // Тут можно обновить материал если нужно
-                        updatedCount++;
-                    }
-                }
+                debugMaskDisplay.gameObject.SetActive(true);
             }
-            
-            // Логируем только когда число плоскостей изменилось
-            if (lastPlaneCount != generatedPlanes.Count)
-            {
-                Debug.Log($"[ARManagerInitializer2] Обновлены материалы для {generatedPlanes.Count} плоскостей");
-                lastPlaneCount = generatedPlanes.Count;
-            }
+            // Опционально: можно настроить размер RawImage под размер маски, если нужно
+            // debugMaskDisplay.rectTransform.sizeDelta = new Vector2(currentSegmentationMask.width, currentSegmentationMask.height);
         }
+
+        Debug.Log($"[ARManagerInitializer2] Маска сегментации обновлена: {mask.width}x{mask.height}");
     }
     
     // Обработка маски сегментации для генерации плоскостей
@@ -427,12 +506,50 @@ public class ARManagerInitializer2 : MonoBehaviour
         Color32[] pixels = maskTexture.GetPixels32();
         int width = maskTexture.width;
         int height = maskTexture.height;
+
+        Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] maskTexture получена: Width={width}, Height={height}. Формат={maskTexture.format}");
+        // ОТЛАДКА: Вывод нескольких пикселей из центра маски
+        if (width > 20 && height > 20) // Убедимся, что текстура достаточно большая
+        {
+            System.Text.StringBuilder pixelDebug = new System.Text.StringBuilder();
+            pixelDebug.Append("[ARManagerInitializer2-CreatePlanesFromMask] Центральные пиксели (R канал): ");
+            for (int y = height / 2 - 2; y < height / 2 + 3; y++)
+            {
+                for (int x = width / 2 - 2; x < width / 2 + 3; x++)
+                {
+                    if (x >= 0 && x < width && y >= 0 && y < height)
+                    {
+                        pixelDebug.Append($"{pixels[y * width + x].r}, ");
+                    }
+                }
+            }
+            Debug.Log(pixelDebug.ToString());
+            
+            // Дополнительная проверка на наличие ненулевых пикселей
+            int nonZeroRedPixels = 0;
+            for(int i = 0; i < pixels.Length; i++)
+            {
+                if(pixels[i].r > 10) // Используем низкий порог для обнаружения хоть какого-то сигнала
+                {
+                    nonZeroRedPixels++;
+                }
+            }
+            Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Найдено {nonZeroRedPixels} пикселей с R > 10 в полученной maskTexture (всего {pixels.Length}).");
+        }
         
         // Находим области стен на маске
         List<Rect> wallAreas = FindWallAreas(pixels, width, height);
+        Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Получено {wallAreas.Count} областей из FindWallAreas.");
         
         // Ограничиваем максимальное количество плоскостей
-        int maxWallPlanes = 8; // Уменьшаем количество для предотвращения перегрузки
+        int maxWallPlanes = 1; // Жестко ограничиваем одной плоскостью для теста
+        
+        // Если уже есть сгенерированные плоскости, ничего не делаем
+        if (generatedPlanes.Count >= maxWallPlanes)
+        {
+            Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Уже существует {generatedPlanes.Count} плоскостей (лимит {maxWallPlanes}). Новые плоскости не создаются.");
+            return;
+        }
         
         // Сначала очищаем все существующие плоскости, если их стало слишком много
         if (generatedPlanes.Count > 10)
@@ -466,6 +583,17 @@ public class ARManagerInitializer2 : MonoBehaviour
             .Take(maxWallPlanes)
             .ToList();
         
+        Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] После сортировки и Take({maxWallPlanes}) осталось {significantAreas.Count} областей.");
+        if (significantAreas.Count > 0)
+        {
+            for(int i = 0; i < significantAreas.Count; i++)
+            {
+                Rect area = significantAreas[i];
+                float normalizedAreaSize = (area.width * area.height) / (width * height);
+                Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Кандидат на область {i}: x={area.x}, y={area.y}, w={area.width}, h={area.height}, normSize={normalizedAreaSize:F4}");
+            }
+        }
+        
         // Ограничиваем максимальное количество создаваемых плоскостей
         // Создаем только ОДНУ плоскость за вызов для предотвращения накопления
         int maxPlanesToCreate = 1;
@@ -493,7 +621,11 @@ public class ARManagerInitializer2 : MonoBehaviour
                 CreatePlaneForWallArea(bestArea, width, height);
                 planesCreated++;
                 
-                Debug.Log($"[ARManagerInitializer2] ✅ Создана 1 новая плоскость из области размером {normalizedArea:F3}");
+                Debug.Log($"[ARManagerInitializer2] ✅ Создана 1 новая плоскость из области размером {normalizedArea:F3} (пиксели: {bestArea.width * bestArea.height})");
+            }
+            else
+            {
+                Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Лучшая область (normSize={normalizedArea:F4}, пиксели: {bestArea.width * bestArea.height}) слишком мала (требуется >= 0.02). Плоскость не создана.");
             }
         }
         
@@ -568,7 +700,9 @@ public class ARManagerInitializer2 : MonoBehaviour
         List<Rect> wallAreas = new List<Rect>();
         
         // Порог интенсивности для определения стены (маска содержит белые области как стены)
-        byte threshold = 150; // Снижаем порог обнаружения с 180 до 150 для определения большего количества стен
+        // ИЗМЕНЕНО: Порог должен быть очень низким, т.к. WallSegmentation уже применил свой порог.
+        // Здесь мы просто ищем связные области "активных" пикселей.
+        byte threshold = 10; 
         
         // Минимальный размер области в пикселях для учета - уменьшаем для обнаружения маленьких областей 
         int minAreaSize = 2; // Уменьшено для обнаружения даже очень маленьких областей 
@@ -576,10 +710,25 @@ public class ARManagerInitializer2 : MonoBehaviour
         // Создаем временную матрицу для отслеживания посещенных пикселей
         bool[,] visited = new bool[width, height];
         
+        int pixelsAboveThreshold = 0; // Отладочный счетчик
+        float sumRedChannel = 0;
+        byte maxRedChannel = 0;
+        int totalPixelsProcessed = 0;
+
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
+                byte rValue = pixels[y * width + x].r;
+                sumRedChannel += rValue;
+                if (rValue > maxRedChannel) maxRedChannel = rValue;
+                totalPixelsProcessed++;
+
+                if (rValue > threshold)
+                {
+                    pixelsAboveThreshold++;
+                }
+
                 // Если пиксель не посещен и интенсивность > порога (это часть стены)
                 if (!visited[x, y] && pixels[y * width + x].r > threshold)
                 {
@@ -595,125 +744,106 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
         }
         
+        Debug.Log($"[ARManagerInitializer2-FindWallAreas] Найдено пикселей выше порога ({threshold}): {pixelsAboveThreshold} из {width * height}. Найдено областей (до фильтрации по размеру >= {minAreaSize}): {wallAreas.Count}");
         return wallAreas;
     }
     
     // Создание плоскости для области стены
-    private void CreatePlaneForWallArea(Rect area, int textureWidth, int textureHeight)
+    private void CreatePlaneForWallArea(Rect area, int textureWidth, int textureHeight) // Убедимся, что этот метод вызывается
     {
-        // Получаем центр области в нормализованных координатах текстуры
-        float centerX = (area.x + area.width / 2) / textureWidth;
-        float centerY = (area.y + area.height / 2) / textureHeight;
-        
-        // Вычисляем направление от камеры до центра обнаруженной области
-        Vector2 normalizedCenter = new Vector2(centerX * 2 - 1, -(centerY * 2 - 1));
-        
-        // Получаем позицию и ориентацию камеры
-        Transform cameraTransform = xrOrigin.Camera.transform;
-        
-        // ИСПРАВЛЕНО: Фиксированный размер для всех плоскостей
-        // Размер плоскости теперь не зависит от размера области в маске
-        float planeWidth = 1.0f;   // Фиксированный размер по ширине
-        float planeHeight = 0.75f; // Фиксированный размер по высоте
-        
-        // Настройка расстояний для плоскостей
-        float minDistance = 1.8f;  // Увеличиваем минимальное расстояние до плоскости
-        float maxDistance = 2.5f;  // Уменьшаем максимальное расстояние до плоскости
-        
-        // Базовое направление от камеры
-        Vector3 baseDirection = cameraTransform.forward;
-        
-        // Вычисляем направление от камеры к точке на стене на основе нормализованных координат из текстуры
-        Vector3 targetDirection = cameraTransform.TransformDirection(
-            new Vector3(normalizedCenter.x, normalizedCenter.y, 1).normalized
-        );
-        
-        // Направление луча от камеры - интерполируем между базовым направлением и целевым
-        Vector3 rayDirection = Vector3.Slerp(baseDirection, targetDirection, 0.5f); // Уменьшаем вес целевого направления
-        
-        // Выполняем raycast для определения расстояния до реальных поверхностей
+        // Возвращаем оригинальную логику позиционирования и создания плоскости
+        if (this.xrOrigin == null || this.xrOrigin.Camera == null)
+        {
+            Debug.LogError("[ARManagerInitializer2-CreatePlaneForWallArea] ❌ XROrigin или его камера не найдены");
+            return;
+        }
+
+        Camera arCamera = this.xrOrigin.Camera;
+
+        // Нормализуем координаты центра области из текстуры (0..1)
+        float normCenterX = (area.x + area.width / 2.0f) / textureWidth;
+        float normCenterY = (area.y + area.height / 2.0f) / textureHeight;
+
+        // Преобразуем нормализованные экранные координаты в точку в мировом пространстве
+        // Используем Raycast для определения реального расстояния до стены
+        Ray screenRay = arCamera.ViewportPointToRay(new Vector3(normCenterX, normCenterY, 0));
         RaycastHit hit;
-        float distance = minDistance;
-        bool didHit = false;
-        
-        // Упрощаем рейкаст - используем только одно направление для стабильности
-        if (Physics.Raycast(cameraTransform.position, rayDirection, out hit, maxDistance))
+        float distanceFromCamera = 2.0f; // Расстояние по умолчанию, если Raycast не удался
+        Vector3 planeNormal = -arCamera.transform.forward; // Нормаль по умолчанию
+
+        if (Physics.Raycast(screenRay, out hit, 10.0f))
         {
-            didHit = true;
-            distance = Mathf.Clamp(hit.distance, minDistance, maxDistance);
-            Debug.Log($"[ARManagerInitializer2] 🎯 Raycast попал в точку на расстоянии {distance}м");
+            distanceFromCamera = hit.distance;
+            planeNormal = hit.normal;
+            Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast hit! Distance: {distanceFromCamera:F2}m, Normal: {planeNormal}");
         }
         else
         {
-            // Не попали - используем фиксированное расстояние
-            distance = minDistance + 0.3f; // Фиксированное расстояние для стабильности
+            Debug.LogWarning("[ARManagerInitializer2-CreatePlaneForWallArea] Raycast miss. Using default distance and normal.");
         }
-        
-        // Позиция для плоскости
-        Vector3 planePosition = cameraTransform.position + rayDirection * distance;
-        
-        // Определяем ориентацию плоскости
-        Quaternion planeRotation;
-        if (didHit)
-        {
-            // Используем нормаль поверхности, но выравниваем по вертикали
-            Vector3 horizontalNormal = new Vector3(hit.normal.x, 0, hit.normal.z).normalized;
-            planeRotation = Quaternion.LookRotation(-horizontalNormal);
-        }
-        else
-        {
-            // Поворот плоскости лицом к камере, но выровнен вертикально
-            Vector3 horizontalDirection = new Vector3(rayDirection.x, 0, rayDirection.z).normalized;
-            planeRotation = Quaternion.LookRotation(-horizontalDirection);
-        }
-        
-        // Проверяем наличие дубликатов перед созданием плоскости
-        foreach (GameObject existingPlane in generatedPlanes)
+
+        // Позиция плоскости в мировом пространстве
+        // Смещаем немного от точки попадания вдоль нормали, чтобы плоскость была на поверхности
+        Vector3 planeWorldPosition = screenRay.GetPoint(distanceFromCamera - 0.01f); 
+
+        // Размеры плоскости в метрах (примерная оценка)
+        // Ширина плоскости пропорциональна ширине области на экране
+        // Этот расчет можно улучшить, учитывая FOV камеры и расстояние
+        float planeViewWidth = area.width / (float)textureWidth; // Ширина области в долях экрана
+        float planeWorldWidth = planeViewWidth * distanceFromCamera * Mathf.Tan(arCamera.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2.0f * arCamera.aspect;
+        planeWorldWidth = Mathf.Max(planeWorldWidth, this.minPlaneSize); // Учитываем минимальный размер
+        float planeWorldHeight = planeWorldWidth; // Делаем плоскость квадратной для простоты
+
+        // Проверка на дубликаты (используем более простой критерий)
+        foreach (GameObject existingPlane in this.generatedPlanes)
         {
             if (existingPlane == null) continue;
-            
-            // Не создаем плоскость, если она слишком близко к существующей
-            if (Vector3.Distance(existingPlane.transform.position, planePosition) < 0.5f)
+            if (Vector3.Distance(existingPlane.transform.position, planeWorldPosition) < 0.5f && // Близко
+                Vector3.Dot(existingPlane.transform.forward, planeNormal) > 0.9f) // Похожая ориентация
             {
-                Debug.Log("[ARManagerInitializer2] ⚠️ Обнаружен дубликат плоскости, пропускаем создание");
+                Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] ⚠️ Обнаружен дубликат плоскости, пропускаем создание. Pos: {planeWorldPosition}, ExistingPos: {existingPlane.transform.position}");
                 return;
             }
         }
+
+        // string planeName = "MyARPlane_Debug"; // Старое имя
+        string planeName = $"MyARPlane_Debug_{planeInstanceCounter++}"; // Новое уникальное имя
+        GameObject planeObject = new GameObject(planeName);
+        planeObject.transform.SetParent(null); 
+        planeObject.transform.position = planeWorldPosition;
+        planeObject.transform.rotation = Quaternion.LookRotation(-planeNormal); // Плоскость смотрит на камеру
+        planeObject.transform.localScale = new Vector3(planeWorldWidth, planeWorldHeight, 0.01f); // Тонкая плоскость
         
-        // Создаем плоскость
-        GameObject planeObject = new GameObject("WallPlane");
-        planeObject.transform.position = planePosition;
-        planeObject.transform.rotation = planeRotation;
-        planeObject.transform.localScale = new Vector3(planeWidth, planeHeight, 1.0f);
-        
-        // Добавляем меш-фильтр и меш-рендерер
+        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Created {planeName}. World Position: {planeObject.transform.position}, Rotation: {planeObject.transform.rotation.eulerAngles}, Scale: {planeObject.transform.localScale}, Parent: {(planeObject.transform.parent == null ? "null (Root)" : planeObject.transform.parent.name)}");
+
         MeshFilter meshFilter = planeObject.AddComponent<MeshFilter>();
-        meshFilter.mesh = CreatePlaneMesh(1, 1); // Используем единичный размер, т.к. масштабируем через transform
+        meshFilter.mesh = CreatePlaneMesh(1, 1); // Используем меш 1x1, масштабируем через transform
         
         MeshRenderer meshRenderer = planeObject.AddComponent<MeshRenderer>();
-        meshRenderer.material = verticalPlaneMaterial;
+        // if (this.verticalPlaneMaterial != null) // Временно отключаем использование verticalPlaneMaterial
+        // {
+        //     meshRenderer.material = new Material(this.verticalPlaneMaterial); // Создаем экземпляр материала
+        //     Color color = meshRenderer.material.color;
+        //     color.a = 0.7f; // Делаем полупрозрачным для отладки
+        //     meshRenderer.material.color = color;
+        // }
+        // else
+        // {
+        //     Debug.LogError("[ARManagerInitializer2-CreatePlaneForWallArea] Vertical plane material is not set!");
+        // }
+
+        // ВРЕМЕННО: Используем простой Unlit/Color материал для теста
+        Material simpleMaterial = new Material(Shader.Find("Unlit/Color"));
+        simpleMaterial.color = Color.magenta; // Новый цвет для отладки
+        meshRenderer.material = simpleMaterial;
+        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Applied simple Unlit/Color (magenta) material to {planeName}.");
+        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Instance ID of created {planeName}: {planeObject.GetInstanceID()}"); // Логируем InstanceID
         
-        // Настраиваем прозрачность материала
-        if (meshRenderer.material != null)
-        {
-            // Создаем копию материала для этой плоскости
-            meshRenderer.material = new Material(verticalPlaneMaterial);
-            
-            // Устанавливаем прозрачность для лучшей визуализации
-            Color color = meshRenderer.material.color;
-            color.a = 0.5f; // 50% прозрачность
-            meshRenderer.material.color = color;
-        }
-        
-        // Добавляем коллайдер для взаимодействия
         MeshCollider meshCollider = planeObject.AddComponent<MeshCollider>();
         meshCollider.sharedMesh = meshFilter.mesh;
         
-        // Добавляем плоскость в список
-        generatedPlanes.Add(planeObject);
-        
-        // Сохраняем время создания для защиты от раннего удаления
-        planeCreationTimes[planeObject] = Time.time;
+        this.generatedPlanes.Add(planeObject);
+        this.planeCreationTimes[planeObject] = Time.time;
     }
     
     // Создание сетки для плоскости с улучшенной геометрией
@@ -831,14 +961,36 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             if (plane == null) continue;
             
-            // Проверяем несколько условий для определения плоскости поверх камеры:
-            
-            // 1. Расстояние до камеры
             Vector3 directionToPlane = plane.transform.position - arCamera.transform.position;
             float distanceToCamera = directionToPlane.magnitude;
             
+            float protectionTime = 1.0f; 
+            bool isRecentlyCreated = planeCreationTimes.ContainsKey(plane) && 
+                                      Time.time - planeCreationTimes[plane] < protectionTime;
+
+            // НОВАЯ ПРОВЕРКА: Экстремально близкие плоскости
+            if (distanceToCamera < 0.2f) // Порог для "экстремально близко", например, 20 см
+            {
+                if (!isRecentlyCreated)
+                {
+                    planesToRemove.Add(plane);
+                    Debug.LogWarning($"[ARManagerInitializer2] 🚨 Удаление экстремально близкой плоскости: dist={distanceToCamera:F2}м, name={plane.name}");
+                }
+                else
+                {
+                    Debug.Log($"[ARManagerInitializer2] Экстремально близкая плоскость '{plane.name}' защищена (недавно создана): dist={distanceToCamera:F2}м. Пропускаем дальнейшие проверки наложения.");
+                }
+                continue; // Пропускаем остальные проверки для этой плоскости, если она экстремально близка
+            }
+            
+            // Проверяем несколько условий для определения плоскости поверх камеры:
+            
+            // 1. Расстояние до камеры (остается актуальным для плоскостей > 0.2м)
+            // float distanceToCamera = directionToPlane.magnitude; // Уже вычислено
+            
             // 2. Угол между направлением камеры и направлением к плоскости
             // (насколько плоскость находится прямо перед камерой)
+            // Нормализация безопасна, так как distanceToCamera >= 0.2f
             float alignmentWithCamera = Vector3.Dot(cameraForward.normalized, directionToPlane.normalized);
             
             // 3. Угол между нормалью плоскости и направлением камеры
@@ -852,20 +1004,22 @@ public class ARManagerInitializer2 : MonoBehaviour
                                        viewportPos.z > 0);
             
             // Условие для определения плоскости-наложения:
-            // - Плоскость находится близко к камере (менее 1.2 метра)
+            // - Плоскость находится близко к камере (менее 2.0 метра)
             // - И плоскость находится примерно перед камерой (положительный dot product)
             // - И плоскость почти перпендикулярна направлению взгляда
             // - И плоскость находится в центральной части экрана
-            // Добавляем защиту от удаления недавно созданных плоскостей
-        float protectionTime = 5.0f; // 5 секунд защиты от удаления
-        bool isRecentlyCreated = planeCreationTimes.ContainsKey(plane) && 
-                              Time.time - planeCreationTimes[plane] < protectionTime;
-                              
-        if (!isRecentlyCreated && distanceToCamera < 1.2f && alignmentWithCamera > 0.7f && facingDot > 0.6f && isInCentralViewport)
+            // Защита от удаления недавно созданных плоскостей уже проверена выше для экстремально близких.
+            // Здесь она применяется для "обычных" наложений.
+                                  
+            if (!isRecentlyCreated && distanceToCamera < 2.0f && alignmentWithCamera > 0.7f && facingDot > 0.6f && isInCentralViewport)
             {
                 planesToRemove.Add(plane);
-                Debug.Log($"[ARManagerInitializer2] Обнаружена плоскость-наложение: dist={distanceToCamera:F2}м, " + 
+                Debug.Log($"[ARManagerInitializer2] Обнаружена плоскость-наложение '{plane.name}': dist={distanceToCamera:F2}м, " + 
                          $"align={alignmentWithCamera:F2}, facing={facingDot:F2}, inCenter={isInCentralViewport}");
+            }
+            else if (isRecentlyCreated && distanceToCamera < 2.0f && alignmentWithCamera > 0.7f && facingDot > 0.6f && isInCentralViewport)
+            {
+                 Debug.Log($"[ARManagerInitializer2] Плоскость-наложение '{plane.name}' защищена (недавно создана): dist={distanceToCamera:F2}м");
             }
         }
         
@@ -873,6 +1027,10 @@ public class ARManagerInitializer2 : MonoBehaviour
         foreach (GameObject planeToRemove in planesToRemove)
         {
             generatedPlanes.Remove(planeToRemove);
+            if (planeCreationTimes.ContainsKey(planeToRemove))
+            {
+                planeCreationTimes.Remove(planeToRemove);
+            }
             Destroy(planeToRemove);
         }
         
@@ -885,36 +1043,38 @@ public class ARManagerInitializer2 : MonoBehaviour
     // НОВЫЙ МЕТОД: Обновление позиций плоскостей для обеспечения стабильности
     private void UpdatePlanePositions()
     {
-        if (xrOrigin == null || xrOrigin.Camera == null || generatedPlanes.Count == 0)
+        if (generatedPlanes.Count == 0) // Убрана проверка xrOrigin/Camera, т.к. здесь не используется
             return;
         
-        Camera arCamera = xrOrigin.Camera;
-        int updatedPlanes = 0;
-        
-        foreach (GameObject plane in generatedPlanes)
+        int detachedPlanes = 0;
+
+        // Итерация в обратном порядке для безопасного удаления из списка при необходимости (хотя здесь только чистим null)
+        for (int i = generatedPlanes.Count - 1; i >= 0; i--) 
         {
-            if (plane == null) continue;
+            GameObject plane = generatedPlanes[i];
+            if (plane == null)
+            {
+                generatedPlanes.RemoveAt(i); // Удаляем null ссылки из списка
+                continue;
+            }
             
             // Проверяем, не прикреплена ли плоскость к камере или другому объекту
             if (plane.transform.parent != null)
             {
-                // Отсоединяем плоскость от родительского объекта
-                Vector3 worldPos = plane.transform.position;
-                Quaternion worldRot = plane.transform.rotation;
-                Vector3 worldScale = plane.transform.lossyScale;
+                Debug.LogWarning($"[ARManagerInitializer2-UpdatePlanePositions] Плоскость '{plane.name}' (ID: {plane.GetInstanceID()}) была присоединена к '{GetGameObjectPath(plane.transform.parent)}'. Отсоединяем.");
                 
-                plane.transform.SetParent(null, false);
-                plane.transform.position = worldPos;
-                plane.transform.rotation = worldRot;
-                plane.transform.localScale = worldScale;
+                // Отсоединяем плоскость. Аргумент 'true' сохраняет мировые координаты,
+                // localScale будет скорректирован для сохранения текущего lossyScale.
+                plane.transform.SetParent(null, true); 
                 
-                updatedPlanes++;
+                detachedPlanes++;
             }
         }
         
-        if (updatedPlanes > 0)
+        if (detachedPlanes > 0)
         {
-            Debug.Log($"[ARManagerInitializer2] ⚠️ Отсоединено {updatedPlanes} плоскостей от родительских объектов");
+            // Сообщение изменено для ясности
+            Debug.Log($"[ARManagerInitializer2] Отсоединено {detachedPlanes} плоскостей, которые были некорректно присоединены к родительским объектам.");
         }
     }
 
@@ -1933,5 +2093,19 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
         
         Debug.Log($"[ARManagerInitializer2] 🧹 Удалено {planesToRemove} старых плоскостей. Осталось {generatedPlanes.Count}");
+    }
+
+    // Вспомогательный метод для получения полного пути к GameObject
+    public static string GetGameObjectPath(Transform transform)
+    {
+        if (transform == null) return "null_transform";
+        string path = transform.name;
+        Transform current = transform.parent;
+        while (current != null)
+        {
+            path = current.name + "/" + path;
+            current = current.parent;
+        }
+        return path;
     }
 }

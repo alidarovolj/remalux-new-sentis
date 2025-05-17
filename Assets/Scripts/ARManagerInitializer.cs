@@ -16,16 +16,16 @@ public class ARManagerInitializer : MonoBehaviour
       public ARSessionManager SessionManager { get; private set; }
 
       // Метод выполняется перед стартом приложения
-      [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-      private static void Initialize()
-      {
-            // Создаем GameObject с этим компонентом, который переживет перезагрузку сцены
-            GameObject initializer = new GameObject("AR Manager Initializer");
-            initializer.AddComponent<ARManagerInitializer>();
+      // [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+      // private static void Initialize()
+      // {
+      //       // Создаем GameObject с этим компонентом, который переживет перезагрузку сцены
+      //       GameObject initializer = new GameObject("AR Manager Initializer");
+      //       initializer.AddComponent<ARManagerInitializer>();
 
-            // Объект не уничтожится при перезагрузке сцены
-            DontDestroyOnLoad(initializer);
-      }
+      //       // Объект не уничтожится при перезагрузке сцены
+      //       DontDestroyOnLoad(initializer);
+      // }
 
       private void Awake()
       {
@@ -244,6 +244,13 @@ public class ARManagerInitializer : MonoBehaviour
             if (xrOrigin == null) return;
 
             Debug.Log("Исправление существующего XROrigin...");
+
+            // Убеждаемся, что XROrigin не имеет родителя
+            if (xrOrigin.transform.parent != null)
+            {
+                  Debug.LogWarning($"Существующий XROrigin '{xrOrigin.name}' имеет родителя '{xrOrigin.transform.parent.name}'. Отсоединяем для правильной работы AR.");
+                  xrOrigin.transform.SetParent(null, true); // true, чтобы сохранить текущую мировую позицию, ориентацию и масштаб
+            }
 
             // Проверяем наличие Camera Offset
             Transform cameraOffset = null;

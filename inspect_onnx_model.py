@@ -214,7 +214,7 @@ void ProcessModelOutput(Tensor<float> outputTensor)
                 print(f"  Ошибка: {e}")
 
 def main():
-    model_path = "Assets/Models/model.onnx"
+    model_path = "Assets/Models/model_unity_final.onnx"
     if not os.path.exists(model_path):
         print(f"Ошибка: Файл модели не найден: {model_path}")
         return

@@ -289,7 +289,7 @@ MonoBehaviour:
   m_Camera: {fileID: 1608659448}
   m_OriginBaseGameObject: {fileID: 1390337227}
   m_CameraFloorOffsetObject: {fileID: 2048057496}
-  m_RequestedTrackingOriginMode: 0
+  m_RequestedTrackingOriginMode: 1
   m_CameraYOffset: 1.1176
 --- !u!4 &1390337232
 Transform:
@@ -557,7 +557,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1621543620
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -620,10 +620,10 @@ MonoBehaviour:
   useSafeModelLoading: 1
   modelLoadTimeout: 30
   forceXRSimulationCapture: 1
-  wallClassIndex: 9
-  floorClassIndex: 12
-  wallThreshold: 0.5
-  floorThreshold: 0.3
+  wallClassIndex: 0
+  floorClassIndex: 3
+  wallThreshold: 0.1
+  floorThreshold: 0.1
   detectFloor: 1
   inputResolution: {x: 320, y: 320}
   useSimulationIfNoCamera: 1
@@ -631,7 +631,16 @@ MonoBehaviour:
   arSessionManager: {fileID: 0}
   xrOrigin: {fileID: 1390337231}
   segmentationMaskTexture: {fileID: 0}
-  saveDebugMask: 0
+  segmentationConfidenceThreshold: 0.05
+  floorConfidenceThreshold: 0.05
+  modelPath: model.sentis
+  selectedBackend: 0
+  segmentationMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,
+    type: 2}
+  debugMaskSavePath: DebugMasks
+  debugMode: 1
+  debugFlags: -1
+  saveDebugMask: 1
   debugSavePath: SegmentationDebug
   useSimulationIfCameraFails: 1
   maxConsecutiveFailsBeforeSimulation: 5
