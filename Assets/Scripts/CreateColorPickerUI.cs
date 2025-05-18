@@ -1,5 +1,8 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.XR.Interaction.Toolkit.AR;
+using System.IO;
+using Unity.XR.CoreUtils; // Для XROrigin
 
 /// <summary>
 /// Вспомогательный класс для создания UI панели выбора цветов в runtime
@@ -28,10 +31,10 @@ public class CreateColorPickerUI : MonoBehaviour
         CreateUIAssets();
         
         // Создаем UI для выбора цветов
-        BuildColorPickerUI();
+        // BuildColorPickerUI(); // ВРЕМЕННО ОТКЛЮЧАЕМ СОЗДАНИЕ UI
         
         // Добавляем контроллер
-        SetupColorPickerController();
+        // SetupColorPickerController(); // ВРЕМЕННО ОТКЛЮЧАЕМ НАСТРОЙКУ КОНТРОЛЛЕРА
     }
     
     /// <summary>
@@ -70,7 +73,7 @@ public class CreateColorPickerUI : MonoBehaviour
             GameObject textObj = new GameObject("Text");
             textObj.transform.SetParent(buttonPrefab.transform);
             Text text = textObj.AddComponent<Text>();
-            text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             text.alignment = TextAnchor.MiddleCenter;
             text.color = Color.white;
             text.text = "";
@@ -110,24 +113,6 @@ public class CreateColorPickerUI : MonoBehaviour
         panelRect.sizeDelta = panelSize;
         panelRect.anchoredPosition = new Vector2(0, 20);
         
-        // Добавляем заголовок
-        GameObject titleObj = new GameObject("TitleText");
-        titleObj.transform.SetParent(colorPickerPanel.transform);
-        Text titleText = titleObj.AddComponent<Text>();
-        titleText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        titleText.fontSize = 24;
-        titleText.alignment = TextAnchor.MiddleCenter;
-        titleText.color = Color.white;
-        titleText.text = "Недавние цвета";
-        
-        // Настраиваем RectTransform заголовка
-        RectTransform titleRect = titleText.GetComponent<RectTransform>();
-        titleRect.anchorMin = new Vector2(0, 1);
-        titleRect.anchorMax = new Vector2(1, 1);
-        titleRect.pivot = new Vector2(0.5f, 1);
-        titleRect.sizeDelta = new Vector2(0, 40);
-        titleRect.anchoredPosition = Vector2.zero;
-        
         // Создаем контейнер для цветов
         GameObject colorsContainer = new GameObject("RecentColorsContainer");
         colorsContainer.transform.SetParent(colorPickerPanel.transform);
@@ -145,8 +130,8 @@ public class CreateColorPickerUI : MonoBehaviour
         recentColorsContainer.anchorMin = new Vector2(0, 0);
         recentColorsContainer.anchorMax = new Vector2(1, 1);
         recentColorsContainer.pivot = new Vector2(0.5f, 0.5f);
-        recentColorsContainer.sizeDelta = new Vector2(0, -40); // Учитываем высоту заголовка
-        recentColorsContainer.anchoredPosition = new Vector2(0, -20);
+        recentColorsContainer.sizeDelta = new Vector2(0, 0); // Учитываем высоту заголовка - УБРАЛИ ЗАГОЛОВОК
+        recentColorsContainer.anchoredPosition = Vector2.zero; // СКОРРЕКТИРОВАЛИ ПОЗИЦИЮ
         
         // Создаем кнопку закрытия
         GameObject closeButtonObj = Instantiate(buttonPrefab, colorPickerPanel.transform);
@@ -200,16 +185,7 @@ public class CreateColorPickerUI : MonoBehaviour
         }
         
         // Находим AR камеру
-        Camera arCamera = null;
-        var xrOrigin = FindObjectOfType<UnityEngine.XR.ARFoundation.ARSessionOrigin>();
-        if (xrOrigin != null && xrOrigin.camera != null)
-        {
-            arCamera = xrOrigin.camera;
-        }
-        else
-        {
-            arCamera = Camera.main;
-        }
+        Camera arCamera = FindARCamera();
         
         System.Reflection.FieldInfo cameraField = type.GetField("arCamera", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         if (cameraField != null && arCamera != null)
@@ -227,5 +203,21 @@ public class CreateColorPickerUI : MonoBehaviour
                 button.onClick.AddListener(controller.HideColorPicker);
             }
         }
+    }
+
+    private Camera FindARCamera()
+    {
+        XROrigin xrOrigin = FindObjectOfType<XROrigin>();
+        if (xrOrigin != null)
+        {
+            return xrOrigin.Camera;
+        }
+        Debug.LogError("XROrigin не найден в сцене!");
+        return null;
+    }
+
+    private void OnDestroy()
+    {
+        // Implement any necessary cleanup code here
     }
 } 

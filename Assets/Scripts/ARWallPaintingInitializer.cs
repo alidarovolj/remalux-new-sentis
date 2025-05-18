@@ -1,5 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.XR.ARFoundation;
+using Unity.XR.CoreUtils; // Для XROrigin
 
 /// <summary>
 /// Инициализатор системы покраски стен в AR
@@ -7,6 +9,12 @@ using UnityEngine.SceneManagement;
 [DefaultExecutionOrder(-20)]
 public class ARWallPaintingInitializer : MonoBehaviour
 {
+    [Header("Ссылки на объекты сцены")]
+    public GameObject стеныДляПокраски; // Родительский объект для стен
+    public XROrigin xrOrigin; // Заменено ARSessionOrigin на XROrigin
+    public ARPlaneManager planeManager;
+    public ARRaycastManager raycastManager;
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void Initialize()
     {
@@ -25,7 +33,7 @@ public class ARWallPaintingInitializer : MonoBehaviour
         }
 
         // Проверяем наличие необходимых компонентов AR
-        bool hasARSessionOrigin = Object.FindObjectOfType<UnityEngine.XR.ARFoundation.ARSessionOrigin>() != null;
+        bool hasARSessionOrigin = Object.FindObjectOfType<XROrigin>() != null;
         bool hasARSession = Object.FindObjectOfType<UnityEngine.XR.ARFoundation.ARSession>() != null;
 
         if (!hasARSessionOrigin || !hasARSession)

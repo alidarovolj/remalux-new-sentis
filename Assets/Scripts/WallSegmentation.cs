@@ -46,20 +46,12 @@ public class WallSegmentation : MonoBehaviour
     public bool forceXRSimulationCapture = true;
 
     [Header("Настройки сегментации")]
-    [Tooltip("Индекс класса стены в модели")]
-    public int wallClassIndex = 0; // Изменено с 2 на 0, согласно предположению о модели ADE20K
-
-    [Tooltip("Индекс класса пола в модели")]
-    public int floorClassIndex = 12;
-
+    [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1; // Стена
+    [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = -1; // Пол (если есть, иначе -1)
     [Tooltip("Порог вероятности для определения стены")]
-    public float wallThreshold = 0.3f;
-
-    [Tooltip("Порог вероятности для определения пола")]
-    public float floorThreshold = 0.3f;
-
-    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")]
-    public bool detectFloor = true;
+    [SerializeField, Range(0.01f, 1.0f)] private float wallConfidence = 0.9f; // ИЗМЕНЕНО: было 0.7f, пробуем значительно выше
+    [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.5f;
+    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")]public bool detectFloor = false;
 
     [Tooltip("Разрешение входного изображения")]
     public Vector2Int inputResolution = new Vector2Int(320, 320);
@@ -74,11 +66,9 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Ссылка на ARSessionManager")]
     public ARSessionManager arSessionManager;
 
-    [Tooltip("Ссылка на XROrigin")]
-    public XROrigin xrOrigin;
+    [Tooltip("Ссылка на XROrigin")] public XROrigin xrOrigin = null;
 
-    [Tooltip("Текстура для вывода маски сегментации")]
-    public RenderTexture segmentationMaskTexture;
+    [Tooltip("Текстура для вывода маски сегментации")] public RenderTexture segmentationMaskTexture;
 
     [Tooltip("Порог вероятности для определения стены")]
     public float segmentationConfidenceThreshold = 0.01f; // Временно очень низкий порог для теста
@@ -86,8 +76,7 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Порог вероятности для определения пола")]
     public float floorConfidenceThreshold = 0.5f;    // Или другое значение по умолчанию
 
-    [Tooltip("Путь к файлу модели (.sentis или .onnx) в StreamingAssets")]
-    public string modelPath = "model.sentis";
+    [Tooltip("Путь к файлу модели (.sentis или .onnx) в StreamingAssets")] public string modelPath = "";
 
     [Tooltip("Предпочитаемый бэкенд для исполнения модели (0 = CPU, 1 = GPUCompute)")]
     public int selectedBackend = 0; // 0 = CPU, 1 = GPUCompute (через BackendType)
@@ -728,14 +717,14 @@ public class WallSegmentation : MonoBehaviour
         // Если флаг установлен вручную, всегда возвращаем true
         if (forceXRSimulationCapture)
         {
-            return true; // Удален лог
+            return true;
         }
 
         // Проверка на имя сцены
         string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
         if (sceneName.Contains("Simulation") || sceneName.Contains("XR"))
         {
-            return true; // Удален лог
+            return true;
         }
 
         // Проверка на редактор Unity
@@ -747,7 +736,7 @@ public class WallSegmentation : MonoBehaviour
 
         if (simulationObjects.Length > 0)
         {
-            return true; // Удален лог
+            return true;
         }
 
         // Проверяем, есть ли объект "XRSimulationEnvironment" в сцене
@@ -757,7 +746,7 @@ public class WallSegmentation : MonoBehaviour
 
         if (simEnvObjects.Length > 0)
         {
-            return true; // Удален лог
+            return true;
         }
 
         // Проверяем активен ли XR Simulation в настройках проекта (через рефлексию)
@@ -769,7 +758,7 @@ public class WallSegmentation : MonoBehaviour
                 {
                     if (type.Name.Contains("Simulation") && type.Name.Contains("Provider"))
                     {
-                        return true; // Удален лог
+                        return true;
                     }
                 }
             }
@@ -784,7 +773,7 @@ public class WallSegmentation : MonoBehaviour
 #if UNITY_EDITOR
         if (FindObjectOfType<ARSession>() != null)
         {
-            return true; // Удален лог
+            return true;
         }
 #endif
 
@@ -1022,30 +1011,30 @@ public class WallSegmentation : MonoBehaviour
         bool shouldLogExec = debugFlags.HasFlag(DebugFlags.ExecutionFlow);
         bool shouldLogDetailedExec = debugFlags.HasFlag(DebugFlags.DetailedExecution);
 
-        if (shouldLogExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Запуск сегментации с текстурой: {(inputTexture == null ? "NULL" : $"{inputTexture.width}x{inputTexture.height}")}");
+        // if (shouldLogExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Запуск сегментации с текстурой: {(inputTexture == null ? "NULL" : $"{inputTexture.width}x{inputTexture.height}")}");
 
         if (isProcessing)
         {
-            if (shouldLogExec) Debug.LogWarning("[WallSegmentation-PerformSegmentation] ⚠️ Процесс сегментации уже запущен, новый запуск отменен.");
+            // if (shouldLogExec) Debug.LogWarning("[WallSegmentation-PerformSegmentation] ⚠️ Процесс сегментации уже запущен, новый запуск отменен.");
             return;
         }
 
         if (!isModelInitialized || worker == null || runtimeModel == null)
         {
             lastErrorMessage = "Модель не инициализирована или worker/runtimeModel не доступны.";
-            if (shouldLogExec) Debug.LogError($"[WallSegmentation-PerformSegmentation] ❌ {lastErrorMessage}");
+            // if (shouldLogExec) Debug.LogError($"[WallSegmentation-PerformSegmentation] ❌ {lastErrorMessage}");
             isProcessing = false;
             
             if (!isModelInitialized && !isInitializing)
             {
-                if (shouldLogExec) Debug.LogWarning("[WallSegmentation-PerformSegmentation] ⚠️ Модель не инициализирована, попытка повторной инициализации...");
+                // if (shouldLogExec) Debug.LogWarning("[WallSegmentation-PerformSegmentation] ⚠️ Модель не инициализирована, попытка повторной инициализации...");
                 StartCoroutine(InitializeSegmentation());
             }
             return;
         }
 
         isProcessing = true;
-        if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Установлен флаг isProcessing = true. Input Texture: {(inputTexture != null ? "OK" : "NULL")}");
+        // if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Установлен флаг isProcessing = true. Input Texture: {(inputTexture != null ? "OK" : "NULL")}");
 
         Tensor<float> inputTensor = null;
         try
@@ -1086,7 +1075,7 @@ public class WallSegmentation : MonoBehaviour
                 isProcessing = false;
                 return;
             }
-            if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Входной тензор создан: {inputTensor.shape}");
+            // if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Входной тензор создан: {inputTensor.shape}");
 
             // Запускаем корутину для выполнения и обработки
             StartCoroutine(ExecuteModelAndProcessResultCoroutine(inputTensor));
@@ -1109,7 +1098,7 @@ public class WallSegmentation : MonoBehaviour
         bool shouldLogDetailedExec = debugFlags.HasFlag(DebugFlags.DetailedExecution);
         bool shouldLogTensorProc = debugFlags.HasFlag(DebugFlags.TensorProcessing);
 
-        if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Корутина запущена с тензором {inputTensor.shape}.");
+        // if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Корутина запущена с тензором {inputTensor.shape}.");
 
         if (worker == null || runtimeModel == null)
         {
@@ -1127,9 +1116,9 @@ public class WallSegmentation : MonoBehaviour
             {
                 // Установка входа перед Schedule(), если inputTensor передается в корутину
                 worker.SetInput(runtimeModel.inputs[0].name, inputTensor);
-                if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ✅ Входной тензор '{runtimeModel.inputs[0].name}' установлен.");
+                // if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ✅ Входной тензор '{runtimeModel.inputs[0].name}' установлен.");
                 worker.Schedule(); // Запуск без аргументов, так как вход установлен через SetInput
-                if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ▶️ worker.Schedule() вызван.");
+                // if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ▶️ worker.Schedule() вызван.");
             }
             else
             {
@@ -1166,11 +1155,11 @@ public class WallSegmentation : MonoBehaviour
                 yield break;
             }
             
-            if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Peeked output tensor (base): {peekedBaseTensor.shape}");
+            // if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Peeked output tensor (base): {peekedBaseTensor.shape}");
 
             // Дожидаемся завершения операций на тензоре
             peekedBaseTensor.CompleteAllPendingOperations();
-            if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ✅ peekedBaseTensor.CompleteAllPendingOperations() вызван.");
+            // if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ✅ peekedBaseTensor.CompleteAllPendingOperations() вызван.");
 
             Tensor<float> peekedTensorFloat = peekedBaseTensor as Tensor<float>;
 
@@ -1184,7 +1173,7 @@ public class WallSegmentation : MonoBehaviour
                 yield break;
             }
             
-            if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Output tensor '{outputName}' успешно преобразован в Tensor<float>. Форма: {peekedTensorFloat.shape}");
+            // if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Output tensor '{outputName}' успешно преобразован в Tensor<float>. Форма: {peekedTensorFloat.shape}");
 
             TensorShape outputShape = peekedTensorFloat.shape;
             if (outputShape.length == 0) {
@@ -1201,7 +1190,7 @@ public class WallSegmentation : MonoBehaviour
             {
                 // Заменяем ToReadOnlyArray() на DownloadToArray()
                 dataArray = peekedTensorFloat.DownloadToArray();
-                if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ✅ Данные из Tensor<float> скопированы в dataArray через DownloadToArray(). Длина: {dataArray?.Length}");
+                // if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ✅ Данные из Tensor<float> скопированы в dataArray через DownloadToArray(). Длина: {dataArray?.Length}");
             }
             catch (Exception ex)
             {
@@ -1236,10 +1225,10 @@ public class WallSegmentation : MonoBehaviour
             if (inputTensor != null)
             {
                 inputTensor.Dispose();
-                if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] 🧹 Входной тензор освобожден.");
+                // if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] 🧹 Входной тензор освобожден.");
             }
             isProcessing = false; 
-            if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Установлен флаг isProcessing = false (finally). Корутина завершена.");
+            // if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Установлен флаг isProcessing = false (finally). Корутина завершена.");
         }
     }
 
@@ -1761,19 +1750,19 @@ public class WallSegmentation : MonoBehaviour
         bool flowLog = debugFlags.HasFlag(DebugFlags.ExecutionFlow);
         bool detailedLog = debugFlags.HasFlag(DebugFlags.DetailedExecution);
 
-        if (flowLog && Time.frameCount % 60 == 0) // Логируем не каждый кадр, чтобы не засорять консоль
-        {
-            Debug.Log($"[WallSegmentation-Update-STATUS] Frame: {Time.frameCount}, " +
-                      $"isModelInitialized: {isModelInitialized}, " +
-                      $"isInitializing: {isInitializing}, " +
-                      $"isProcessing: {isProcessing}, " +
-                      $"worker is null: {(worker == null)}, " +
-                      $"runtimeModel is null: {(runtimeModel == null)}");
-        }
+        // if (flowLog && Time.frameCount % 60 == 0) // Логируем не каждый кадр, чтобы не засорять консоль
+        // {
+        // Debug.Log($"[WallSegmentation-Update-STATUS] Frame: {Time.frameCount}, " +
+        // $"isModelInitialized: {isModelInitialized}, " +
+        // $"isInitializing: {isInitializing}, " +
+        // $"isProcessing: {isProcessing}, " +
+        // $"worker is null: {(worker == null)}, " +
+        // $"runtimeModel is null: {(runtimeModel == null)}");
+        // }
 
         if (isInitializationFailed)
         {
-            Debug.LogWarning("[WallSegmentation-Update] ⚠️ Модель не инициализирована. Попытка автоматической инициализации...");
+            // Debug.LogWarning("[WallSegmentation-Update] ⚠️ Модель не инициализирована. Попытка автоматической инициализации...");
             StartCoroutine(InitializeSegmentation());
             return;
         }
@@ -1783,7 +1772,7 @@ public class WallSegmentation : MonoBehaviour
             // Если модель не инициализирована, но прошло значительное время, попробуем инициализировать ее снова
             if (Time.frameCount % 100 == 0 && !isInitializing && !isModelInitialized)
             {
-                Debug.LogWarning("[WallSegmentation-Update] ⚠️ Модель не инициализирована. Попытка автоматической инициализации...");
+                // Debug.LogWarning("[WallSegmentation-Update] ⚠️ Модель не инициализирована. Попытка автоматической инициализации...");
                 StartCoroutine(InitializeSegmentation());
             }
             return;
@@ -1798,25 +1787,25 @@ public class WallSegmentation : MonoBehaviour
             consecutiveFailCount++;
             usingSimulation = true;
             
-            if (Time.frameCount % 50 == 0) {
-                Debug.LogWarning($"[WallSegmentation-Update] ⚠️ Не удалось получить изображение с камеры (попыток: {consecutiveFailCount})");
-            }
+            // if (Time.frameCount % 50 == 0) {
+            // Debug.LogWarning($"[WallSegmentation-Update] ⚠️ Не удалось получить изображение с камеры (попыток: {consecutiveFailCount})");
+            // }
             
             // Проверяем нужно ли использовать симуляцию
             if (useSimulationIfNoCamera && consecutiveFailCount >= failureThresholdForSimulation) 
             {
                 if (!usingSimulatedSegmentation) {
-                    Debug.Log($"[WallSegmentation-Update] 🔄 Включение режима симуляции после {consecutiveFailCount} неудачных попыток");
+                    // Debug.Log($"[WallSegmentation-Update] 🔄 Включение режима симуляции после {consecutiveFailCount} неудачных попыток");
                     usingSimulatedSegmentation = true;
                 }
                 
                 cameraPixels = GetCameraTextureFromSimulation();
-                if (cameraPixels != null)
-                {
-                    if (Time.frameCount % 100 == 0) {
-                        Debug.Log($"[WallSegmentation-Update] ℹ️ Используется симуляция изображения с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
-                    }
-                }
+                // if (cameraPixels != null)
+                // {
+                // if (Time.frameCount % 100 == 0) {
+                // Debug.Log($"[WallSegmentation-Update] ℹ️ Используется симуляция изображения с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
+                // }
+                // }
             }
         }
         else
@@ -1824,17 +1813,17 @@ public class WallSegmentation : MonoBehaviour
             // Сбрасываем счетчик неудач, если удалось получить изображение
             consecutiveFailCount = 0;
             usingSimulatedSegmentation = false;
-            if (Time.frameCount % 500 == 0) {
-                Debug.Log($"[WallSegmentation-Update] ✅ Получено изображение с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
-            }
+            // if (Time.frameCount % 500 == 0) {
+            // Debug.Log($"[WallSegmentation-Update] ✅ Получено изображение с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
+            // }
         }
         
         // Если не удалось получить изображение даже из симуляции, выходим
         if (cameraPixels == null)
         {
-            if (Time.frameCount % 100 == 0) {
-                Debug.LogWarning("[WallSegmentation-Update] ❌ Не удалось получить изображение ни с камеры, ни из симуляции");
-            }
+            // if (Time.frameCount % 100 == 0) {
+            // Debug.LogWarning("[WallSegmentation-Update] ❌ Не удалось получить изображение ни с камеры, ни из симуляции");
+            // }
             return;
         }
         
@@ -1948,13 +1937,13 @@ public class WallSegmentation : MonoBehaviour
     // Новый метод для обработки результатов сегментации
     private void ProcessSegmentationResult(float[] dataArray, TensorShape outputShape)
     {
-        if ((debugFlags & DebugFlags.TensorProcessing) != 0)
-            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Начало обработки. outputShape: {outputShape}, wallClassIndex: {wallClassIndex}, floorClassIndex: {floorClassIndex}, segmentationConfidenceThreshold: {segmentationConfidenceThreshold}, floorConfidenceThreshold: {floorConfidenceThreshold}");
+        // if ((debugFlags & DebugFlags.TensorProcessing) != 0)
+        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Начало обработки. outputShape: {outputShape}, wallClassIndex: {wallClassIndex}, floorClassIndex: {floorClassIndex}, segmentationConfidenceThreshold: {segmentationConfidenceThreshold}, floorConfidenceThreshold: {floorConfidenceThreshold}");
 
         if (dataArray == null || dataArray.Length == 0)
         {
-            if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-                Debug.LogError("[WallSegmentation-ProcessSegmentationResult] Входной массив данных пуст или null.");
+            // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+            // Debug.LogError("[WallSegmentation-ProcessSegmentationResult] Входной массив данных пуст или null.");
             return;
         }
 
@@ -1964,23 +1953,23 @@ public class WallSegmentation : MonoBehaviour
         int height = outputShape[2];
         int width = outputShape[3];
 
-        if (batchSize != 1)
-        {
-            if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-                Debug.LogWarning($"[WallSegmentation-ProcessSegmentationResult] Размер батча {batchSize} не равен 1. Обрабатывается только первый элемент.");
-        }
+        // if (batchSize != 1)
+        // {
+        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+        // Debug.LogWarning($"[WallSegmentation-ProcessSegmentationResult] Размер батча {batchSize} не равен 1. Обрабатывается только первый элемент.");
+        // }
         
-        if (wallClassIndex < 0 || wallClassIndex >= numClasses)
-        {
-            if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-                Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] wallClassIndex ({wallClassIndex}) выходит за пределы допустимых классов ({numClasses}).");
-            // Не выходим, если detectFloor все еще может быть валидным
-        }
-        if (detectFloor && (floorClassIndex < 0 || floorClassIndex >= numClasses))
-        {
-            if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-                Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] floorClassIndex ({floorClassIndex}) выходит за пределы допустимых классов ({numClasses}). Обнаружение пола может не работать.");
-        }
+        // if (wallClassIndex < 0 || wallClassIndex >= numClasses)
+        // {
+        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+        // Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] wallClassIndex ({wallClassIndex}) выходит за пределы допустимых классов ({numClasses}).");
+        // // Не выходим, если detectFloor все еще может быть валидным
+        // }
+        // if (detectFloor && (floorClassIndex < 0 || floorClassIndex >= numClasses))
+        // {
+        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+        // Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] floorClassIndex ({floorClassIndex}) выходит за пределы допустимых классов ({numClasses}). Обнаружение пола может не работать.");
+        // }
 
 
         if (segmentationMaskTexture == null || segmentationMaskTexture.width != width || segmentationMaskTexture.height != height || segmentationMaskTexture.format != RenderTextureFormat.ARGB32)
@@ -1989,8 +1978,8 @@ public class WallSegmentation : MonoBehaviour
             segmentationMaskTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32); // ИЗМЕНЕНО: ARGB32
             segmentationMaskTexture.enableRandomWrite = true;
             segmentationMaskTexture.Create();
-            if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-                Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Создана или пересоздана segmentationMaskTexture ({width}x{height}, ARGB32).");
+            // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+            // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Создана или пересоздана segmentationMaskTexture ({width}x{height}, ARGB32).");
         }
 
         Texture2D tempMaskTexture = new Texture2D(width, height, TextureFormat.RGBA32, false); // ИЗМЕНЕНО: RGBA32
@@ -2046,11 +2035,11 @@ public class WallSegmentation : MonoBehaviour
             }
         }
         
-        if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        {
-            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как стена (вероятность > {segmentationConfidenceThreshold}): {pixelsDetectedAsWall} из {width * height}");
-            if(detectFloor) Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как пол (вероятность > {floorConfidenceThreshold}): {pixelsDetectedAsFloor} из {width * height}");
-        }
+        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+        // {
+        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как стена (вероятность > {segmentationConfidenceThreshold}): {pixelsDetectedAsWall} из {width * height}");
+        // if(detectFloor) Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как пол (вероятность > {floorConfidenceThreshold}): {pixelsDetectedAsFloor} из {width * height}");
+        // }
 
         tempMaskTexture.SetPixels32(pixelColors); // ИЗМЕНЕНО: SetPixels32
         tempMaskTexture.Apply();
@@ -2058,10 +2047,10 @@ public class WallSegmentation : MonoBehaviour
         Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
         Destroy(tempMaskTexture); 
 
-        if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        {
-            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Маска для класса стены (индекс {wallClassIndex}) и пола (индекс {floorClassIndex}, если включено) обработана и записана в segmentationMaskTexture (ARGB32).");
-        }
+        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
+        // {
+        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Маска для класса стены (индекс {wallClassIndex}) и пола (индекс {floorClassIndex}, если включено) обработана и записана в segmentationMaskTexture (ARGB32).");
+        // }
 
         OnMaskCreated(segmentationMaskTexture);
 

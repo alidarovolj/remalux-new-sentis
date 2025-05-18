@@ -2,6 +2,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.Interaction.Toolkit.AR;
+using Unity.XR.CoreUtils;
 
 /// <summary>
 /// Контроллер выбора цвета для AR стен в стиле Dulux Visualizer
@@ -18,29 +20,26 @@ public class ColorPickerController : MonoBehaviour
     [SerializeField] private List<Color> predefinedColors = new List<Color>();
     
     [Header("AR компоненты")]
-    [SerializeField] private Camera arCamera;
     [SerializeField] private float maxRaycastDistance = 10f;
     [SerializeField] private LayerMask wallLayerMask = -1;
     
     private ColorPickTarget currentTarget;
     private List<Color> recentColors = new List<Color>();
-    
-    private void Start()
+    private Camera arCamera;
+    private XROrigin arSessionOrigin;
+
+    private void Awake()
     {
-        // Находим AR камеру, если не указана
-        if (arCamera == null)
+        arSessionOrigin = FindObjectOfType<XROrigin>();
+        if (arSessionOrigin != null)
         {
-            var xrOrigin = FindObjectOfType<ARSessionOrigin>();
-            if (xrOrigin != null && xrOrigin.camera != null)
-            {
-                arCamera = xrOrigin.camera;
-            }
-            else
-            {
-                arCamera = Camera.main;
-            }
+            arCamera = arSessionOrigin.Camera;
         }
-        
+        else
+        {
+            Debug.LogError("XROrigin не найден в сцене!");
+        }
+
         // Инициализируем UI цветов
         InitializePredefinedColors();
         UpdateRecentColorsUI();
@@ -264,5 +263,10 @@ public class ColorPickerController : MonoBehaviour
     {
         Debug.Log("[ColorPickerController] Открыта расширенная палитра цветов");
         // Здесь можно добавить реализацию показа полной палитры цветов
+    }
+
+    public void SetSelectedObject(GameObject obj)
+    {
+        // Implementation of SetSelectedObject method
     }
 } 
