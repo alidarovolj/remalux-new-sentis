@@ -555,9 +555,20 @@ MonoBehaviour:
   minPlaneSizeInMeters: 0.1
   minPixelsDimensionForArea: 2
   minAreaSizeInPixels: 10
-  wallAreaDetectionThreshold: 30
-  verticalPlaneMaterial: {fileID: 0}
-  horizontalPlaneMaterial: {fileID: 0}
+  wallAreaRedChannelThreshold: 30
+  enableDetailedRaycastLogging: 1
+  maxRayDistance: 10
+  hitLayerMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  minHitDistanceThreshold: 0.1
+  maxWallNormalAngleDeviation: 45
+  minFloorCeilingNormalAngle: 15
+  verticalPlaneMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,
+    type: 2}
+  horizontalPlaneMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
+    type: 2}
+  debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
 --- !u!4 &367304187
 Transform:
   m_ObjectHideFlags: 0
@@ -3828,6 +3839,53 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1939512505}
   m_CullTransparentMesh: 1
+--- !u!1 &1959552977
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1959552979}
+  - component: {fileID: 1959552978}
+  m_Layer: 0
+  m_Name: WallMaterialSetter
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1959552978
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1959552977}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5268173fa85f1064ca06a1366bf6016f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  wallMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b, type: 2}
+  floorMaterial: {fileID: 2100000, guid: 3e1c49e7077310249b71ba38ae9a8799, type: 2}
+  applyOnStart: 1
+--- !u!4 &1959552979
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1959552977}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1.8234138, y: -5.4171276, z: 6.4684234}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1962116422
 GameObject:
   m_ObjectHideFlags: 0
@@ -4582,3 +4640,4 @@ SceneRoots:
   - {fileID: 956393579}
   - {fileID: 367304187}
   - {fileID: 1288005833}
+  - {fileID: 1959552979}

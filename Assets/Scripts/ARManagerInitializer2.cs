@@ -41,16 +41,35 @@ public class ARManagerInitializer2 : MonoBehaviour
     [SerializeField] private int minAreaSizeInPixels = 10; // Новое поле, раньше было minAreaSize = 2*2=4 или 50
     
     [Tooltip("Порог значения красного канала (0-255) для пикселя, чтобы считать его частью области стены при поиске связных областей.")]
-    [SerializeField] private byte wallAreaDetectionThreshold = 30;
-    
+    [Range(0, 255)] public byte wallAreaRedChannelThreshold = 30;
+
+    [Header("Настройки Рейкастинга для Плоскостей")]
+    [Tooltip("Включить подробное логирование процесса рейкастинга и фильтрации попаданий.")]
+    public bool enableDetailedRaycastLogging = false;
+    [Tooltip("Максимальное расстояние для рейкастов при поиске поверхностей")]
+    public float maxRayDistance = 10f;
+    [Tooltip("Маска слоев для рейкастинга (например, Default, SimulatedEnvironment, Wall)")]
+    public LayerMask hitLayerMask;
+    [Tooltip("Минимальное расстояние до объекта, чтобы считать попадание валидным (м). Помогает отфильтровать попадания 'внутрь' объектов или слишком близкие поверхности.")]
+    public float minHitDistanceThreshold = 0.01f; // ИЗМЕНЕНО ДЛЯ ТЕСТА (было 0.1f)
+    [Tooltip("Максимальное допустимое отклонение нормали стены от идеальной вертикали (в градусах). Используется для определения, является ли поверхность стеной.")]
+    public float maxWallNormalAngleDeviation = 45.0f; // ВРЕМЕННО УВЕЛИЧЕНО ДЛЯ ТЕСТА (было 20.0f или значение из инспектора)
+    [Tooltip("Минимальный допустимый угол нормали пола/потолка к вертикали (в градусах), чтобы считать поверхность горизонтальной. Например, 15 градусов означает, что поверхности с наклоном до 15 градусов от горизонтали считаются полом/потолком.")]
+    public float minFloorCeilingNormalAngle = 15.0f; // Значение по умолчанию или из инспектора
+
     // Добавляем защиту от удаления недавно созданных плоскостей
     private Dictionary<GameObject, float> planeCreationTimes = new Dictionary<GameObject, float>();
     
     [Tooltip("Материал для вертикальных плоскостей")]
-    public Material verticalPlaneMaterial;
+    [SerializeField] private Material verticalPlaneMaterial; // Должно быть private
     
     [Tooltip("Материал для горизонтальных плоскостей")]
-    public Material horizontalPlaneMaterial;
+    [SerializeField] private Material horizontalPlaneMaterial; // Должно быть private
+
+    [Header("Отладочная Визуализация Лучей")]
+    [Tooltip("Материал для отладочной визуализации лучей. Если не назначен, визуализация лучей LineRenderer'ом будет отключена.")]
+    [SerializeField] private Material debugRayMaterial;
+    private MaterialPropertyBlock debugRayMaterialPropertyBlock;
 
     // Поле для RawImage будет установлено извне
     private UnityEngine.UI.RawImage отображениеМаскиUI;
@@ -100,6 +119,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             {
                 // Debug.LogWarning("[ARManagerInitializer2] Instance is not a root object, not setting DontDestroyOnLoad. This might be an issue if it's destroyed on scene changes.");
             }
+            enableDetailedRaycastLogging = true; // ВКЛЮЧЕНО ПО УМОЛЧАНИЮ ДЛЯ ОТЛАДКИ
         }
         else if (Instance != this)
         {
@@ -108,6 +128,10 @@ public class ARManagerInitializer2 : MonoBehaviour
             return;
         }
         
+        if (debugRayMaterial != null)
+        {
+            debugRayMaterialPropertyBlock = new MaterialPropertyBlock();
+        }
         // Debug.Log($"[ARManagerInitializer2] Awake complete. Instance ID: {this.GetInstanceID()}, Name: {this.gameObject.name}");
     }
 
@@ -145,7 +169,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
         else
         {
-            // Debug.LogError("[ARManagerInitializer2-Start] XROrigin or XROrigin.TrackablesParent is not assigned!");
+            Debug.LogError("[ARManagerInitializer2-Start] XROrigin or XROrigin.TrackablesParent is not assigned!");
         }
         // CreateBasicPlaneInFrontOfUser();
     }
@@ -249,7 +273,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
             else
             {
-                // Debug.LogError("[ARManagerInitializer2] ❌ ARSessionManager не найден в сцене!");
+                Debug.LogError("[ARManagerInitializer2] ❌ ARSessionManager не найден в сцене!");
             }
         }
         // else
@@ -267,7 +291,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
             else
             {
-                // Debug.LogError("[ARManagerInitializer2] ❌ XROrigin не найден в сцене!");
+                Debug.LogError("[ARManagerInitializer2] ❌ XROrigin не найден в сцене!");
             }
         }
 
@@ -327,7 +351,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
         else
         {
-            // Debug.LogError("[ARManagerInitializer2] ❌ Экземпляр WallSegmentation не найден в сцене. Невозможно подписаться на обновления маски.");
+            Debug.LogError("[ARManagerInitializer2] ❌ Экземпляр WallSegmentation не найден в сцене. Невозможно подписаться на обновления маски.");
             // Попробуем переподписаться через некоторое время, если сцена еще загружается
             StartCoroutine(RetrySubscriptionAfterDelay(1.0f));
         }
@@ -379,7 +403,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                 renderer.material.EnableKeyword("USE_MASK");
             }
             
-            Debug.Log($"[ARManagerInitializer2] Настроена новая плоскость: {plane.trackableId}, тип: {(isVertical ? "вертикальная" : "горизонтальная")}");
+            // Debug.Log($"[ARManagerInitializer2] Настроена новая плоскость: {plane.trackableId}, тип: {(isVertical ? "вертикальная" : "горизонтальная")}");
         }
     }
     
@@ -511,7 +535,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Количество потенциально активных пикселей (r > 10) в маске: {activePixelCount} из {textureData.Length}");
 
 
-        List<Rect> wallAreas = FindWallAreas(textureData, maskTexture.width, maskTexture.height, wallAreaDetectionThreshold);
+        List<Rect> wallAreas = FindWallAreas(textureData, maskTexture.width, maskTexture.height, wallAreaRedChannelThreshold);
         // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Найдено областей (wallAreas.Count): {wallAreas.Count}");
 
         // Словарь для отслеживания "посещенных" (обновленных или подтвержденных) плоскостей в этом кадре
@@ -708,7 +732,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         if (Physics.Raycast(ray, out hit, maxDistance: 20.0f, layerMask: دیوارИлиПолДляРейкаста)) // Ограничиваем дистанцию рейкаста
         {
             distanceFromCamera = hit.distance;
-            Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast hit! Distance: {distanceFromCamera:F2}m, Normal: {hit.normal:F2}, Point: {hit.point:F2}, Hit Object: {hit.collider.name}");
+            // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast hit! Distance: {distanceFromCamera:F2}m, Normal: {hit.normal:F2}, Point: {hit.point:F2}, Hit Object: {hit.collider.name}");
             planeRotation = Quaternion.LookRotation(-hit.normal, mainCamera.transform.up); // Ориентируем Z плоскости по нормали
             planePosition = hit.point + hit.normal * 0.01f; // Смещаем немного от поверхности, чтобы избежать Z-fighting
         }
@@ -718,7 +742,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             distanceFromCamera = fallbackDistance; // Используем заданное расстояние по умолчанию
             planePosition = mainCamera.transform.position + mainCamera.transform.forward * distanceFromCamera;
             planeRotation = mainCamera.transform.rotation; // Ориентация как у камеры
-            Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast miss. Using fixed distance ({distanceFromCamera}m) and camera-parallel orientation.");
+            // Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast miss. Using fixed distance ({distanceFromCamera}m) and camera-parallel orientation.");
         }
 
 
@@ -734,11 +758,11 @@ public class ARManagerInitializer2 : MonoBehaviour
         // Проверка на минимальный размер перед созданием
         if (planeWorldWidth < this.minPlaneSizeInMeters || planeWorldHeight < this.minPlaneSizeInMeters)
         {
-            Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Плоскость для области ({area.width}x{area.height}px) слишком мала ({planeWorldWidth:F2}x{planeWorldHeight:F2}m) для создания. Min size: {this.minPlaneSizeInMeters}m.");
+            // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Плоскость для области ({area.width}x{area.height}px) слишком мала ({planeWorldWidth:F2}x{planeWorldHeight:F2}m) для создания. Min size: {this.minPlaneSizeInMeters}m.");
             return;
         }
 
-        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Plane World Size: Width={planeWorldWidth:F2}, Height={planeWorldHeight:F2} at distance {distanceFromCamera:F2}m");
+        // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Plane World Size: Width={planeWorldWidth:F2}, Height={planeWorldHeight:F2} at distance {distanceFromCamera:F2}m");
 
         // Проверка на дубликаты (упрощенная)
         foreach (GameObject existingPlane in this.generatedPlanes)
@@ -746,7 +770,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             if (existingPlane == null) continue;
             if (Vector3.Distance(existingPlane.transform.position, planePosition) < 0.2f) // Если очень близко
             {
-                Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] ⚠️ Обнаружена потенциально дублирующаяся плоскость (слишком близко), пропускаем создание. Pos: {planePosition}, ExistingPos: {existingPlane.transform.position}");
+                // Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] ⚠️ Обнаружена потенциально дублирующаяся плоскость (слишком близко), пропускаем создание. Pos: {planePosition}, ExistingPos: {existingPlane.transform.position}");
                 return; // Пропускаем создание этой плоскости
             }
         }
@@ -764,7 +788,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         planeObject.transform.localScale = Vector3.one; // Масштаб будет применен к мешу напрямую
         
-        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Created {planeName}. World Position: {planeObject.transform.position}, Rotation: {planeObject.transform.rotation.eulerAngles}, Initial Scale: {planeObject.transform.localScale}");
+        // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Created {planeName}. World Position: {planeObject.transform.position}, Rotation: {planeObject.transform.rotation.eulerAngles}, Initial Scale: {planeObject.transform.localScale}");
 
         MeshFilter meshFilter = planeObject.AddComponent<MeshFilter>();
         meshFilter.mesh = CreatePlaneMesh(planeWorldWidth, planeWorldHeight); // Используем мировые размеры для меша
@@ -785,7 +809,7 @@ public class ARManagerInitializer2 : MonoBehaviour
              simpleMaterial.color = Color.magenta;
              meshRenderer.material = simpleMaterial;
         }
-        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Applied material to {planeName}. Mesh bounds: {meshFilter.mesh.bounds.size}");
+        // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Applied material to {planeName}. Mesh bounds: {meshFilter.mesh.bounds.size}");
         
         MeshCollider meshCollider = planeObject.AddComponent<MeshCollider>();
         meshCollider.sharedMesh = meshFilter.mesh;
@@ -802,7 +826,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                 (this.xrOrigin.TrackablesParent.gameObject.activeInHierarchy && this.xrOrigin.TrackablesParent.GetInstanceID() == this.trackablesParentInstanceID_FromStart))
             {
                 planeObject.transform.SetParent(this.xrOrigin.TrackablesParent, true); 
-                Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] {planeName} привязан к {this.xrOrigin.TrackablesParent.name} (ID: {this.xrOrigin.TrackablesParent.GetInstanceID()}).");
+                // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] {planeName} привязан к {this.xrOrigin.TrackablesParent.name} (ID: {this.xrOrigin.TrackablesParent.GetInstanceID()}).");
             }
             else
             {
@@ -942,11 +966,11 @@ public class ARManagerInitializer2 : MonoBehaviour
                 if (!isRecentlyCreated)
                 {
                     planesToRemove.Add(plane);
-                    Debug.LogWarning($"[ARManagerInitializer2] 🚨 Удаление экстремально близкой плоскости: dist={distanceToCamera:F2}м, name={plane.name}");
+                    // Debug.LogWarning($"[ARManagerInitializer2] 🚨 Удаление экстремально близкой плоскости: dist={distanceToCamera:F2}м, name={plane.name}");
                 }
                 else
                 {
-                    Debug.Log($"[ARManagerInitializer2] Экстремально близкая плоскость '{plane.name}' защищена (недавно создана): dist={distanceToCamera:F2}м. Пропускаем дальнейшие проверки наложения.");
+                    // Debug.Log($"[ARManagerInitializer2] Экстремально близкая плоскость '{plane.name}' защищена (недавно создана): dist={distanceToCamera:F2}м. Пропускаем дальнейшие проверки наложения.");
                 }
                 continue; // Пропускаем остальные проверки для этой плоскости, если она экстремально близка
             }
@@ -982,12 +1006,12 @@ public class ARManagerInitializer2 : MonoBehaviour
             if (!isRecentlyCreated && distanceToCamera < 2.0f && alignmentWithCamera > 0.7f && facingDot > 0.6f && isInCentralViewport)
             {
                 planesToRemove.Add(plane);
-                Debug.Log($"[ARManagerInitializer2] Обнаружена плоскость-наложение '{plane.name}': dist={distanceToCamera:F2}м, " + 
-                         $"align={alignmentWithCamera:F2}, facing={facingDot:F2}, inCenter={isInCentralViewport}");
+                // Debug.Log($"[ARManagerInitializer2] Обнаружена плоскость-наложение '{plane.name}': dist={distanceToCamera:F2}м, " + 
+                         // $"align={alignmentWithCamera:F2}, facing={facingDot:F2}, inCenter={isInCentralViewport}");
             }
             else if (isRecentlyCreated && distanceToCamera < 2.0f && alignmentWithCamera > 0.7f && facingDot > 0.6f && isInCentralViewport)
             {
-                 Debug.Log($"[ARManagerInitializer2] Плоскость-наложение '{plane.name}' защищена (недавно создана): dist={distanceToCamera:F2}м");
+                 // Debug.Log($"[ARManagerInitializer2] Плоскость-наложение '{plane.name}' защищена (недавно создана): dist={distanceToCamera:F2}м");
             }
         }
         
@@ -1004,7 +1028,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         
         if (planesToRemove.Count > 0)
         {
-            Debug.Log($"[ARManagerInitializer2] ⚠️ Удалено {planesToRemove.Count} плоскостей-наложений");
+            Debug.LogWarning($"[ARManagerInitializer2] ⚠️ Удалено {planesToRemove.Count} плоскостей-наложений");
         }
     }
 
@@ -1118,7 +1142,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                 }
             }
             
-            Debug.Log("[ARManagerInitializer2] ✅ Отключены стандартные визуализаторы плоскостей AR Foundation");
+            // Debug.Log("[ARManagerInitializer2] ✅ Отключены стандартные визуализаторы плоскостей AR Foundation");
         }
         
         // 2. Отключаем визуализаторы точек
@@ -1126,7 +1150,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         if (pointCloudManager != null)
         {
             pointCloudManager.enabled = false;
-            Debug.Log("[ARManagerInitializer2] ✅ Отключен ARPointCloudManager");
+            // Debug.Log("[ARManagerInitializer2] ✅ Отключен ARPointCloudManager");
         }
         
         // 3. Поиск и отключение всех визуальных объектов TrackablesParent
@@ -1144,7 +1168,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                         renderer.enabled = false;
                     }
                 }
-                Debug.Log("[ARManagerInitializer2] ✅ Отключены рендереры в Trackables");
+                // Debug.Log("[ARManagerInitializer2] ✅ Отключены рендереры в Trackables");
             }
         }
     }
@@ -1294,7 +1318,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         // Также сохраняем время создания плоскости для защиты от раннего удаления
         planeCreationTimes[planeObject] = Time.time;
         
-        Debug.Log("[ARManagerInitializer2] ✅ Создана стабильная базовая плоскость перед пользователем");
+        // Debug.Log("[ARManagerInitializer2] ✅ Создана стабильная базовая плоскость перед пользователем");
 
         planeObject.name = $"MyARPlane_Debug_Basic_{planeInstanceCounter++}";
         // Debug.Log($"[ARManagerInitializer2] Создана базовая плоскость: {planeObj.name} на расстоянии {distanceFromCamera}m");
@@ -1314,97 +1338,89 @@ public class ARManagerInitializer2 : MonoBehaviour
     // НОВЫЙ МЕТОД: Обновление существующей плоскости или создание новой для области стены
     private bool UpdateOrCreatePlaneForWallArea(Rect area, int textureWidth, int textureHeight, Dictionary<GameObject, bool> visitedPlanes)
     {
+        Camera currentMainCamera = Camera.main; // Переименовано во избежание конфликта
+        if (currentMainCamera == null)
+        {
+            if (enableDetailedRaycastLogging) Debug.LogError("[ARManagerInitializer2-UOCP] Камера Camera.main не найдена!");
+            return false;
+        }
+
+        // DEBUG: Логирование информации о камере
+        if (enableDetailedRaycastLogging)
+        {
+            Debug.Log($"[ARManagerInitializer2-UOCP-CAMDEBUG] Используется камера: {currentMainCamera.name}, Pos: {currentMainCamera.transform.position}, Rot: {currentMainCamera.transform.rotation.eulerAngles}");
+        }
+
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] === ЗАПУСК UpdateOrCreatePlaneForWallArea для области: X={area.x}, Y={area.y}, W={area.width}, H={area.height} (Текстура: {textureWidth}x{textureHeight}) ===");
         if (xrOrigin == null || xrOrigin.Camera == null)
         {
-            Debug.LogError("[ARManagerInitializer2] ❌ XROrigin или его камера не найдены");
+            Debug.LogError("[ARManagerInitializer2-UOCP] ❌ XROrigin или его камера не найдены. Выход.");
             return false;
         }
         
-        // Получаем размеры и положение плоскости
-        float planeWidthInMeters = area.width / textureWidth * 5.0f;
-        
-        // Проверяем минимальный размер
-        if (planeWidthInMeters < minPlaneSizeInMeters)
+        Camera mainCamera = xrOrigin.Camera;
+        Vector3 cameraRight = mainCamera.transform.right; 
+        Vector3 cameraUp = mainCamera.transform.up;       
+        Vector3 cameraForward = mainCamera.transform.forward; // <--- ДОБАВЛЕНО ОБЪЯВЛЕНИЕ
+
+        // Текущее положение и ориентация камеры
+        Vector3 cameraPosition = mainCamera.transform.position;
+        // Quaternion cameraRotation = mainCamera.transform.rotation; // Раскомментировать, если понадобится
+
+        float normalizedCenterX = (area.x + area.width / 2f) / textureWidth;
+        float normalizedCenterY = (area.y + area.height / 2f) / textureHeight; 
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Нормализованный центр области (UV): X={normalizedCenterX:F2}, Y={normalizedCenterY:F2}");
+
+        if (normalizedCenterX < 0 || normalizedCenterX > 1 || normalizedCenterY < 0 || normalizedCenterY > 1)
         {
-            return false;
+            // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Нормализованные координаты центра области ({normalizedCenterX:F2}, {normalizedCenterY:F2}) выходят за пределы [0,1].");
         }
+
+        Ray centerRay = mainCamera.ViewportPointToRay(new Vector3(normalizedCenterX, normalizedCenterY, 0));
+        Vector3 initialRayDirection = centerRay.direction;
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Исходное направление луча (из ViewportPointToRay({normalizedCenterX:F2},{normalizedCenterY:F2})): {initialRayDirection.ToString("F3")}");
         
-        float aspectRatio = 0.75f;
-        float planeHeightInMeters = planeWidthInMeters * aspectRatio;
+        // Новый, более надежный способ создания и логирования LayerMask
+        // string[] layerNames = new string[] { "SimulatedEnvironment", "Default", "Wall" }; // ЗАКОММЕНТИРОВАНО - БУДЕМ ИСПОЛЬЗОВАТЬ this.hitLayerMask
+        // LayerMask layerMask = 0; // Начинаем с пустой маски // ЗАКОММЕНТИРОВАНО
+        // string includedLayersString = ""; // ЗАКОММЕНТИРОВАНО
+        // bool layersFound = false; // ЗАКОММЕНТИРОВАНО
+
+        // foreach (string name in layerNames) // ЗАКОММЕНТИРОВАНО
+        // { // ЗАКОММЕНТИРОВАНО
+        //     int layer = LayerMask.NameToLayer(name); // ЗАКОММЕНТИРОВАНО
+        //     if (layer != -1) // Если слой найден // ЗАКОММЕНТИРОВАНО
+        //     { // ЗАКОММЕНТИРОВАНО
+        //         layerMask |= (1 << layer); // Добавляем его в маску // ЗАКОММЕНТИРОВАНО
+        //         if (layersFound) includedLayersString += ", "; // ЗАКОММЕНТИРОВАНО
+        //         includedLayersString += $"{name} (id:{layer})"; // ЗАКОММЕНТИРОВАНО
+        //         layersFound = true; // ЗАКОММЕНТИРОВАНО
+        //     } // ЗАКОММЕНТИРОВАНО
+        //     else // ЗАКОММЕНТИРОВАНО
+        //     { // ЗАКОММЕНТИРОВАНО
+        //         Debug.LogWarning($"[ARManagerInitializer2-UOCP] Слой '{name}' не найден в LayerMask settings. Проверьте Project Settings -> Tags and Layers."); // ЗАКОММЕНТИРОВАНО
+        //     } // ЗАКОММЕНТИРОВАНО
+        // } // ЗАКОММЕНТИРОВАНО
+
+        // if (layersFound) // ЗАКОММЕНТИРОВАНО
+        // { // ЗАКОММЕНТИРОВАНО
+        //     if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask: {LayerMaskToString(layerMask)} (Value: {layerMask.value}), Включенные слои: [{includedLayersString}]"); // ЗАКОММЕНТИРОВАНО
+        // } // ЗАКОММЕНТИРОВАНО
+        // else // ЗАКОММЕНТИРОВАНО
+        // { // ЗАКОММЕНТИРОВАНО
+        //     Debug.LogWarning($"[ARManagerInitializer2-UOCP] Ни один из целевых слоев ({string.Join(", ", layerNames)}) не найден. Рейкаст будет использовать маску по умолчанию (Default)."); // ЗАКОММЕНТИРОВАНО
+        //     layerMask = 1 << LayerMask.NameToLayer("Default"); // Только Default слой, если другие не найдены // ЗАКОММЕНТИРОВАНО
+        // } // ЗАКОММЕНТИРОВАНО
         
-        // Получаем данные камеры
-        Camera arCamera = xrOrigin.Camera;
-        Vector3 cameraPosition = arCamera.transform.position;
-        Vector3 cameraForward = arCamera.transform.forward;
-        Vector3 cameraUp = arCamera.transform.up;
-        Vector3 cameraRight = arCamera.transform.right;
-        
-        // Нормализуем координаты из текстуры
-        float normalizedX = area.x / textureWidth;
-        float normalizedY = area.y / textureHeight;
-        
-        // Смягченная фильтрация по краям и углам экрана - позволяем обрабатывать больше областей
-        if (normalizedX < 0.05f || normalizedX > 0.95f || normalizedY < 0.05f || normalizedY > 0.95f)
-        {
-            return false; // Отсекаем только самые крайние области (5% от краев)
-        }
-        
-        // Более мягкая фильтрация углов - позволяем обнаруживать больше стен
-        if ((normalizedX < 0.1f && normalizedY < 0.1f) || 
-            (normalizedX > 0.9f && normalizedY < 0.1f) ||  
-            (normalizedX < 0.1f && normalizedY > 0.9f) ||  
-            (normalizedX > 0.9f && normalizedY > 0.9f))
-        {
-            return false; // Фильтруем только самые угловые области (10%)
-        }
-        
-        // Немного менее агрессивная фильтрация верхней части экрана
-        if (normalizedY < 0.08f) // Уменьшено с 0.15
-        {
-            return false; // Отсекаем только самую верхнюю часть
-        }
-        
-        // УЛУЧШЕННОЕ ПРОЕЦИРОВАНИЕ: Более точные расчеты на основе перспективы камеры
-        float horizontalFov = 2.0f * Mathf.Atan(Mathf.Tan(arCamera.fieldOfView * Mathf.Deg2Rad * 0.5f) * arCamera.aspect);
-        float angleH = (normalizedX - 0.5f) * horizontalFov;
-        float angleV = (normalizedY - 0.5f) * arCamera.fieldOfView * Mathf.Deg2Rad;
-        
-        // УЛУЧШЕННАЯ НЕЛИНЕЙНАЯ КОРРЕКЦИЯ: адаптивная коррекция на основе глубины сцены
-        float focalDepth = 2.5f; // Предполагаемая глубина фокуса
-        float perspectiveStrength = 0.15f; // Сила перспективной коррекции
-        
-        // Более сильная коррекция для краевых областей с учетом дисторсии объектива
-        float distortionFactor = 1.5f; // Фактор дисторсии объектива (больше для широкоугольных камер)
-        float correctionH = Mathf.Sign(angleH) * Mathf.Pow(Mathf.Abs(angleH) / (0.5f * horizontalFov), distortionFactor) * perspectiveStrength * focalDepth;
-        float correctionV = Mathf.Sign(angleV) * Mathf.Pow(Mathf.Abs(angleV) / (0.5f * arCamera.fieldOfView * Mathf.Deg2Rad), distortionFactor) * perspectiveStrength * focalDepth;
-        
-        // Дополнительная коррекция для более точного выравнивания с реальным миром
-        if (Mathf.Abs(angleH) > horizontalFov * 0.3f)
-        {
-            // Усиленная коррекция для боковых областей экрана
-            correctionH *= 1.2f;
-        }
-        
-        if (Mathf.Abs(angleV) > arCamera.fieldOfView * Mathf.Deg2Rad * 0.3f)
-        {
-            // Усиленная коррекция для верхних/нижних областей экрана
-            correctionV *= 1.2f;
-        }
-        
-        angleH += correctionH;
-        angleV += correctionV;
-        
-        Vector3 rayDirection = cameraForward +
-                               cameraRight * Mathf.Tan(angleH) +
-                               cameraUp * Mathf.Tan(angleV);
-        rayDirection.Normalize();
-        
-        // УЛУЧШЕННОЕ ОПРЕДЕЛЕНИЕ РАССТОЯНИЯ: Многослойный подход для точного определения расстояния до стены
-        float distanceFromCamera = 2.2f; // Умеренное начальное значение для предотвращения перекрытия экрана
-        
-        // УЛУЧШЕННЫЙ МНОГОТОЧЕЧНЫЙ РЕЙКАСТИНГ: Расширенный набор лучей и анализ их результатов
-        RaycastHit hit = new RaycastHit();
-        int layerMask = ~0; // Все слои
+        // ИСПОЛЬЗУЕМ hitLayerMask, НАСТРОЕННУЮ В ИНСПЕКТОРЕ
+        LayerMask layerMask = this.hitLayerMask;
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask из инспектора: {LayerMaskToString(layerMask)} (Value: {layerMask.value})");
+
+
+        // Параметры для рейкастинга
+        float maxRayDistance = 10.0f; // Максимальная дальность луча
+        RaycastHit hitInfo; // <--- ОБЪЯВЛЕНО
+
         bool didHit = false;
         
         // Массив смещений для лучей с более широким охватом и разной плотностью
@@ -1432,6 +1448,15 @@ public class ARManagerInitializer2 : MonoBehaviour
         rayOffsets.Add(cameraUp * outerRadius);                    // Дальний верхний
         rayOffsets.Add(-cameraUp * outerRadius);                   // Дальний нижний
         
+        // Веса для лучей. Должны соответствовать порядку в rayOffsets
+        List<float> rayWeights = new List<float>
+        {
+            2.0f, // Центральный
+            1.5f, 1.5f, 1.5f, 1.5f, // Ближние основные (право, лево, верх, низ)
+            1.0f, 1.0f, 1.0f, 1.0f, // Ближние диагональные
+            0.5f, 0.5f, 0.5f, 0.5f  // Дальние
+        };
+
         float bestDistance = float.MaxValue;
         Vector3 bestNormal = Vector3.zero;
         float bestConfidence = 0f;
@@ -1444,72 +1469,140 @@ public class ARManagerInitializer2 : MonoBehaviour
         int totalRaysShot = 0;
         int raysHitSomething = 0;
         int raysHitValidSurface = 0;
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] --- Начало серии рейкастов ({rayOffsets.Count} лучей) ---");
         // --- КОНЕЦ БЛОКА ЛОГИРОВАНИЯ РЕЙКАСТОВ ---
 
         // ВЫПОЛНЯЕМ СЕРИЮ РЕЙКАСТОВ с разными смещениями и весовыми коэффициентами
         for (int i = 0; i < rayOffsets.Count; i++)
         {
-            Vector3 offsetPos = cameraPosition + rayOffsets[i];
-            float rayWeight = 1.0f; // Базовый вес
-            totalRaysShot++; // --- ЛОГИРОВАНИЕ ---
+            Vector3 offsetDirection = rayOffsets[i]; // Это небольшое смещение направления в мировых координатах
+            Vector3 currentRayOrigin = cameraPosition; // Все лучи исходят из позиции камеры
+            Vector3 currentRayDirection = (initialRayDirection + offsetDirection).normalized; // Корректное направление луча
+
+            // Отладочный вывод
+            // Проверяем, что rayWeights имеет достаточно элементов
+            float currentWeight = (i < rayWeights.Count) ? rayWeights[i] : 0.5f; // Фоллбэк вес, если что-то пошло не так с количеством
+
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1}: " +
+                      $"Начало={currentRayOrigin.ToString("F2")}, " +
+                      $"Направление={currentRayDirection.ToString("F2")}, " +
+                      $"Вес={currentWeight:F1}, " + // Используем currentWeight
+                      $"исходноеНапр={initialRayDirection.ToString("F2")}, " +
+                      $"смещениеНапр={offsetDirection.ToString("F2")}");
             
-            // Центральные лучи имеют больший вес
-            if (i == 0) rayWeight = 2.0f; // Центральный луч
-            else if (i < 5) rayWeight = 1.5f; // Ближние к центру
-            
-            if (Physics.Raycast(offsetPos, rayDirection, out hit, 10.0f, layerMask))
+            totalRaysShot++; 
+
+            if (debugRayMaterial != null && debugRayMaterialPropertyBlock != null)
             {
-                // УЛУЧШЕННАЯ ФИЛЬТРАЦИЯ: Исключаем AR объекты, UI элементы, другие плоскости
-                bool isValidHit = true;
-                raysHitSomething++; // --- ЛОГИРОВАНИЕ ---
-                
-                // Имя объекта содержит ключевые слова, которые указывают на AR/UI элементы
-                if (hit.collider.gameObject.name.Contains("AR") || 
-                    hit.collider.gameObject.name.Contains("UI") ||
-                    hit.collider.gameObject.name.Contains("XR") ||
-                    hit.collider.gameObject.name.Contains("Plane"))
+                debugRayMaterialPropertyBlock.SetColor("_Color", Color.blue); // Лучи перед пуском - синие
+                // ... (код для LineRenderer, если вы его используете, убедитесь, что он использует currentRayOrigin и currentRayDirection)
+            }
+
+            if (Physics.Raycast(currentRayOrigin, currentRayDirection, out hitInfo, maxRayDistance, layerMask, QueryTriggerInteraction.Ignore))
+            {
+                raysHitSomething++; 
+                Debug.DrawRay(currentRayOrigin, currentRayDirection * hitInfo.distance, Color.green, 1.0f); // ДОБАВЛЕНО: Визуализация успешного луча
+                // if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ПОПАЛ: Объект '{hitInfo.collider.gameObject.name}', Точка={hitInfo.point}, Нормаль={hitInfo.normal}, Расстояние={hitInfo.distance}");
+
+                if (debugRayMaterial != null && debugRayMaterialPropertyBlock != null)
                 {
-                    isValidHit = false;
-                    // --- ЛОГИРОВАНИЕ ---
-                    // Debug.Log($"[ARManagerInitializer2] Рейкаст отфильтрован по имени: {hit.collider.gameObject.name}");
-                    // --- КОНЕЦ ЛОГИРОВАНИЯ ---
+                    // Визуализация попадания (например, красный цвет)
+                    // debugRayMaterialPropertyBlock.SetColor("_Color", Color.green);
+                    // Graphics.DrawMesh(debugRayMesh, Matrix4x4.TRS(hitInfo.point, Quaternion.LookRotation(hitInfo.normal), Vector3.one * 0.05f), debugRayMaterial, 0, null, 0, debugRayMaterialPropertyBlock);
+                    // Debug.DrawRay(currentRayOrigin, currentRayDirection * hitInfo.distance, Color.green, 0.6f);
+                }
+
+                // Фильтр результатов (пример):
+                // Пропускаем попадания в другие сгенерированные нами плоскости или слишком близкие/далекие объекты.
+                if (hitInfo.collider.gameObject.name.StartsWith("MyARPlane_Debug_") || hitInfo.collider.gameObject.CompareTag("Player")) // Игнорируем другие наши плоскости и игрока
+                {
+                    if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ({hitInfo.collider.name}) ОТФИЛЬТРОВАН по ИМЕНИ/ТЕГУ: Имя='{hitInfo.collider.gameObject.name}', Тег='{hitInfo.collider.gameObject.tag}'");
+                    continue; // Пропускаем этот хит
+                }
+
+                // Проверяем, не слишком ли близко к камере (например, внутренняя часть симуляции)
+                // Это может потребовать более сложной логики, если камера внутри объекта
+                if (hitInfo.distance < minHitDistanceThreshold)
+                {
+                    if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ({hitInfo.collider.name}) ОТФИЛЬТРОВАН по ДИСТАНЦИИ: {hitInfo.distance:F3}м < {minHitDistanceThreshold:F3}м");
+                    continue;
                 }
                 
-                // Проверяем слой объекта (можно добавить проверки конкретных слоев)
-                // if (hit.collider.gameObject.layer == 8) isValidHit = false; // Пример проверки слоя
+                float angleWithUp = Vector3.Angle(hitInfo.normal, Vector3.up);
+                // Используем maxWallNormalAngleDeviation из полей класса, а не maxAllowedWallAngleDeviation, если последнее - старое/неправильное имя
+                bool isVerticalEnough = angleWithUp > (90f - maxWallNormalAngleDeviation) && angleWithUp < (90f + maxWallNormalAngleDeviation);
                 
-                if (isValidHit)
+                if (enableDetailedRaycastLogging)
                 {
-                    raysHitValidSurface++; // --- ЛОГИРОВАНИЕ ---
-                    // Сохраняем информацию о попадании
-                    successfulHits.Add(hit);
-                    hitWeights.Add(rayWeight);
-                    
-                    // Определяем лучшее попадание на основе веса луча и расстояния
-                    float combinedMetric = hit.distance / rayWeight;
-                    
-                    if (combinedMetric < bestDistance)
+                    Debug.Log($"[ARManagerInitializer2-UOCP] РЕЙКАСТ #{i+1} ({hitInfo.collider.name}) ПРОВЕРКА НОРМАЛИ: " +
+                              $"Дистанция={hitInfo.distance:F3} (Min={minHitDistanceThreshold:F3}), " +
+                              $"Нормаль={hitInfo.normal:F3}, Угол с Vector3.up={angleWithUp:F1}°, " +
+                              $"КритерийВертикальности (maxWallNormalAngleDeviation)={maxWallNormalAngleDeviation:F1}°, " +
+                              $"ВертикальнаДостаточно={isVerticalEnough}");
+                }
+
+                if (isVerticalEnough)
+                {
+                    raysHitValidSurface++;
+                    successfulHits.Add(hitInfo);
+                    hitWeights.Add(currentWeight); // Сохраняем вес этого успешного попадания
+
+                    // Обновление лучшего попадания на основе метрики (расстояние/вес)
+                    // Меньшее значение метрики лучше (ближе и/или более уверенное попадание)
+                    float currentHitMetric = hitInfo.distance / currentWeight; 
+
+                    if (currentHitMetric < bestDistance) // bestDistance здесь используется как bestMetric
                     {
-                        bestDistance = combinedMetric;
-                        bestNormal = hit.normal;
-                        bestConfidence = rayWeight;
+                        bestDistance = currentHitMetric; // Обновляем лучшую метрику
+                        // Сохраняем фактическое расстояние и нормаль от этого лучшего хита
+                        // Эти значения будут использоваться, если кластеризация не даст лучшего результата.
+                        // На данный момент, эти переменные (actualBestDistance, actualBestNormal) могут быть не объявлены.
+                        // Их нужно будет объявить выше, если эта логика будет использоваться.
+                        // actualBestDistanceForSingleHit = hitInfo.distance; 
+                        // actualBestNormalForSingleHit = hitInfo.normal;
+                        
+                        bestNormal = hitInfo.normal; // Пока что сохраняем нормаль лучшего одиночного хита сюда
+                        bestConfidence = currentWeight; // И его вес (уверенность)
+                        
                         didHit = true;
+                        // if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ОБНОВИЛ ЛУЧШИЙ РЕЗУЛЬТАТ (одиночный): Метрика={currentHitMetric:F2} (Расст={hitInfo.distance:F2}/Вес={currentWeight:F1}), Нормаль={hitInfo.normal:F2}");
                     }
+                }
+                else
+                {
+                    if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ({hitInfo.collider.name}) ОТФИЛЬТРОВАН по НОРМАЛИ: Угол с Vector3.up={angleWithUp:F1}°, НеВертикальна (isVerticalEnough={isVerticalEnough}, maxWallNormalAngleDeviation={maxWallNormalAngleDeviation:F1}°)");
+                }
+            }
+            else
+            {
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ПРОМАХ");
+                Debug.DrawRay(currentRayOrigin, currentRayDirection * maxRayDistance, Color.red, 1.0f); // ДОБАВЛЕНО: Визуализация промахнувшегося луча
+                if (debugRayMaterial != null && debugRayMaterialPropertyBlock != null)
+                {
+                    // Визуализация промаха (например, фиолетовый цвет)
+                   // debugRayMaterialPropertyBlock.SetColor("_Color", Color.magenta);
+                   // Graphics.DrawMesh(debugRayMesh, Matrix4x4.TRS(currentRayOrigin + currentRayDirection * maxRayDistance, Quaternion.identity, Vector3.one * 0.03f), debugRayMaterial, 0, null, 0, debugRayMaterialPropertyBlock);
+                   // Debug.DrawRay(currentRayOrigin, currentRayDirection * maxRayDistance, Color.magenta, 0.3f);
                 }
             }
         }
         
-        // --- ЛОГИРОВАНИЕ РЕЗУЛЬТАТОВ РЕЙКАСТОВ ---
-        // Debug.Log($"[ARManagerInitializer2] Рейкасты: Всего выпущено={totalRaysShot}, Попало во что-то={raysHitSomething}, Прошло фильтр={raysHitValidSurface}, SuccessfulHits.Count={successfulHits.Count}");
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] --- Результаты серии рейкастов ---");
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Всего выпущено лучей: {totalRaysShot}");
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Попало во что-то (до фильтра): {raysHitSomething}");
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Валидных попаданий (после фильтра): {raysHitValidSurface}");
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Количество успешных попаданий в списке successfulHits: {successfulHits.Count}");
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Флаг didHit (был ли хоть один валидный хит, обновивший bestNormal/bestDistance): {didHit}");
+
         if (raysHitSomething > 0 && raysHitValidSurface == 0)
         {
-            // Debug.Log("[ARManagerInitializer2] Все попадания рейкастов были отфильтрованы по имени или слою.");
+            Debug.LogWarning("[ARManagerInitializer2-UOCP] ВНИМАНИЕ: Все попадания рейкастов были отфильтрованы. Проверьте фильтры и слои объектов в сцене.");
         }
-        // --- КОНЕЦ ЛОГИРОВАНИЯ РЕЗУЛЬТАТОВ РЕЙКАСТОВ ---
         
-        // УЛУЧШЕННЫЙ АНАЛИЗ РЕЗУЛЬТАТОВ: Кластеризация попаданий для более точного определения стены
-        if (successfulHits.Count > 3) // Если у нас достаточно данных для кластеризации
+        float bestClusterWeight = 0f; // Инициализация bestClusterWeight
+        if (successfulHits.Count > 3) 
         {
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Запуск кластеризации попаданий (Найдено {successfulHits.Count} валидных хитов).");
             // Группируем попадания по расстоянию и нормали
             var distanceClusters = new Dictionary<float, List<int>>();
             
@@ -1535,7 +1628,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
             
             // Находим самый значимый кластер (с наибольшим суммарным весом)
-            float bestClusterWeight = 0f;
+            // float bestClusterWeight = 0f; // Перенесена инициализация выше
             float bestClusterDistance = 0f;
             Vector3 bestClusterNormal = Vector3.zero;
             
@@ -1550,57 +1643,95 @@ public class ARManagerInitializer2 : MonoBehaviour
                     clusterNormal += successfulHits[index].normal * hitWeights[index];
                 }
                 
-                if (clusterWeight > bestClusterWeight)
+                if (clusterWeight > bestClusterWeight) // Используем bestClusterWeight из внешнего scope
                 {
-                    bestClusterWeight = clusterWeight;
+                    bestClusterWeight = clusterWeight; // Обновляем bestClusterWeight из внешнего scope
                     bestClusterDistance = cluster.Key;
-                    bestClusterNormal.Normalize();
-                    bestClusterNormal = clusterNormal / clusterWeight;
+                    if (clusterWeight > 0) bestClusterNormal = (clusterNormal / clusterWeight).normalized; // Нормализуем и проверяем делитель
+                    else bestClusterNormal = Vector3.zero;
                 }
             }
             
             // Используем данные лучшего кластера, если он достаточно значимый
             if (bestClusterWeight > bestConfidence)
             {
-                bestDistance = bestClusterDistance;
-                bestNormal = bestClusterNormal.normalized;
-                bestConfidence = bestClusterWeight;
+                bestDistance = bestClusterDistance; // Это реальное расстояние кластера
+                bestNormal = bestClusterNormal;
+                bestConfidence = bestClusterWeight; // Суммарный вес кластера
+                didHit = true; // Подтверждаем, что кластеризация дала результат
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Кластеризация обновила лучший результат: Дистанция кластера={bestDistance:F2}, Нормаль кластера={bestNormal:F2}, Вес кластера={bestConfidence:F1}");
+            }
+            else
+            {
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Кластеризация не дала лучшего результата, чем одиночный лучший хит (Вес кластера: {bestClusterWeight:F1} <= Вес лучшего хита: {bestConfidence:F1})");
             }
         }
         
-        // УЛУЧШЕННЫЙ АЛГОРИТМ ОПРЕДЕЛЕНИЯ РАССТОЯНИЯ: Многоуровневый подход
-        if (didHit)
+        Vector3 finalPlanePosition;
+        Quaternion finalPlaneRotation;
+        float actualDistanceFromCameraForPlane = 2.2f; // Инициализация actualDistanceFromCameraForPlane
+
+        if (didHit) // Если был хотя бы один валидный хит (возможно, уточненный кластеризацией)
         {
-            // Результат рейкастинга найден - используем его с небольшим отступом
-            // bestDistance содержит значение метрики (distance/weight), нужно восстановить настоящее расстояние
-            float actualDistance = successfulHits.Count > 0 ? successfulHits[0].distance : bestDistance;
-            for (int i = 0; i < successfulHits.Count; i++)
+            // Если didHit=true, то bestDistance уже содержит либо метрику от лучшего одиночного хита,
+            // либо реальное расстояние от лучшего кластера. bestNormal и bestConfidence также установлены.
+
+            float determinedDistance;
+            if (successfulHits.Count > 3 && bestClusterWeight > 0) // Если кластеризация была успешна и дала результат
             {
-                if (hitWeights[i] == bestConfidence)
+                determinedDistance = bestDistance; // bestDistance уже хранит реальное расстояние кластера
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Используется расстояние от КЛАСТЕРИЗАЦИИ: {determinedDistance:F2}м");
+            }
+            else // Используем лучший одиночный хит (если был)
+            {
+                // Нужно найти RaycastHit, соответствующий bestConfidence и bestDistance (метрике)
+                float targetMetric = bestDistance; 
+                determinedDistance = 2.2f; // Фоллбэк, если не найдем
+                bool foundOriginalHit = false;
+                for(int k=0; k < successfulHits.Count; ++k)
                 {
-                    actualDistance = successfulHits[i].distance;
-                    break;
+                    if (Mathf.Approximately(successfulHits[k].distance / hitWeights[k], targetMetric) && Mathf.Approximately(hitWeights[k], bestConfidence))
+                    {
+                        determinedDistance = successfulHits[k].distance;
+                        foundOriginalHit = true;
+                        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Используется расстояние от ЛУЧШЕГО ОДИНОЧНОГО ХИТА #{k}: {determinedDistance:F2}м (Нормаль: {successfulHits[k].normal})");
+                        break;
+                    }
+                }
+                if (!foundOriginalHit && successfulHits.Count > 0) { // Если не нашли точное совпадение по метрике, но хиты были
+                    determinedDistance = successfulHits[0].distance; // Берем первый попавший, как крайний случай
+                    bestNormal = successfulHits[0].normal; // И его нормаль
+                     // Debug.LogWarning($"[ARManagerInitializer2-UOCP] Не удалось точно восстановить лучший одиночный хит по метрике. Используется первый хит: Дистанция={determinedDistance:F2}м, Нормаль={bestNormal}");
+                } else if (!foundOriginalHit && successfulHits.Count == 0) { // Эта ветка не должна достигаться если didHit=true
+                     Debug.LogError($"[ARManagerInitializer2-UOCP] КРИТИЧЕСКАЯ ОШИБКА: didHit=true, но successfulHits пуст и не удалось восстановить одиночный хит.");
                 }
             }
             
-            // Применяем небольшой отступ для избежания наложений
-            distanceFromCamera = actualDistance + 0.02f;
-            
-            // Ограничиваем минимальное и максимальное значения для предотвращения экстремальных случаев
-            distanceFromCamera = Mathf.Clamp(distanceFromCamera, 1.0f, 6.0f);
-            Debug.Log($"[ARManagerInitializer2] 📏 Найдена реальная поверхность на расстоянии {distanceFromCamera:F2}м (доверие: {bestConfidence:F1})");
+            actualDistanceFromCameraForPlane = determinedDistance + 0.02f; // Небольшой отступ
+            actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.0f, 6.0f);
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 РЕЗУЛЬТАТ РЕЙКАСТА: Финальное расстояние до плоскости = {actualDistanceFromCameraForPlane:F2}м (на основе хита/кластера, с отступом и clamp). Исходная нормаль = {bestNormal:F2}");
+
+            finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
+            // Ориентируем Z плоскости ПО нормали к поверхности (чтобы плоскость "лежала" на поверхности)
+            // forward плоскости будет смотреть ОТ поверхности.
+            finalPlaneRotation = Quaternion.LookRotation(bestNormal, mainCamera.transform.up);  // ИЗМЕНЕНО: arCamera -> mainCamera
+            // Если bestNormal почти параллельна arCamera.transform.up (например, пол/потолок), LookRotation может дать непредсказуемый результат для "up" вектора.
+            // Можно добавить проверку и использовать другой up вектор, например, cameraRight, если normal.y близок к +/-1.
+            if (Mathf.Abs(Vector3.Dot(bestNormal, mainCamera.transform.up)) > 0.95f) { // ИЗМЕНЕНО: arCamera -> mainCamera
+                finalPlaneRotation = Quaternion.LookRotation(bestNormal, -cameraForward); // Используем -cameraForward как "верх" для горизонтальных плоскостей
+                 if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Нормаль ({bestNormal}) почти параллельна camera.up. Используем -cameraForward как второй аргумент LookRotation.");
+            }
+
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🧭 Параметры для плоскости ПОСЛЕ РЕЙКАСТА: Pos={finalPlanePosition:F2}, Rot(Эйлер)={finalPlaneRotation.eulerAngles:F1}");
         }
-        else
+        else // Если didHit == false (ни один рейкаст не попал или все были отфильтрованы)
         {
+            Debug.LogWarning("[ARManagerInitializer2-UOCP] ⚠️ Ни один рейкаст не дал валидного попадания. Используется ЭВРИСТИКА.");
             // РАСШИРЕННЫЙ АЛГОРИТМ для случаев, когда рейкастинг не нашел поверхностей
-            
-            // Шаг 1: Пробуем использовать информацию от существующих AR плоскостей
             bool foundARPlane = false;
             if (planeManager != null && planeManager.trackables.count > 0)
             {
-                // --- ЛОГИРОВАНИЕ ПОИСКА AR ПЛОСКОСТЕЙ ---
-                // Debug.Log($"[ARManagerInitializer2] Поиск AR-плоскостей: Всего {planeManager.trackables.count} AR-плоскостей в сцене.");
-                // --- КОНЕЦ ЛОГИРОВАНИЯ ---
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Эвристика: Попытка найти существующую AR плоскость ({planeManager.trackables.count} шт.)...");
                 ARPlane bestMatchPlane = null;
                 float bestMatchScore = 0f;
                 float bestMatchDistance = 0f;
@@ -1616,19 +1747,22 @@ public class ARManagerInitializer2 : MonoBehaviour
                     // Учитываем ориентацию, расстояние и размер плоскости
                     
                     // Фактор ориентации - насколько плоскость параллельна лучу
-                    float angleWithRay = Vector3.Angle(planeSurfaceNormal, -rayDirection);
+                    // float angleWithRay = Vector3.Angle(planeSurfaceNormal, -rayDirection); // ИЗМЕНЕНО: rayDirection -> initialRayDirection
+                    float angleWithRay = Vector3.Angle(planeSurfaceNormal, -initialRayDirection); // Используем initialRayDirection
                     float orientationFactor = Mathf.Cos(angleWithRay * Mathf.Deg2Rad);
                     if (orientationFactor < 0.3f) continue; // Игнорируем плоскости с плохой ориентацией
                     
                     // Фактор расстояния - насколько плоскость близко к проекции луча
                     Vector3 toCenterVector = planeCenter - cameraPosition;
-                    float projectionLength = Vector3.Dot(toCenterVector, rayDirection);
+                    // float projectionLength = Vector3.Dot(toCenterVector, rayDirection); // ИЗМЕНЕНО: rayDirection -> initialRayDirection
+                    float projectionLength = Vector3.Dot(toCenterVector, initialRayDirection); // Используем initialRayDirection
                     
                     // Игнорируем плоскости позади камеры или слишком далеко
                     if (projectionLength <= 0.5f || projectionLength > 8.0f) continue;
                     
                     // Находим ближайшую точку луча к центру плоскости
-                    Vector3 projectedPoint = cameraPosition + rayDirection * projectionLength;
+                    // Vector3 projectedPoint = cameraPosition + rayDirection * projectionLength; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
+                    Vector3 projectedPoint = cameraPosition + initialRayDirection * projectionLength; // Используем initialRayDirection
                     float perpendicularDistance = Vector3.Distance(projectedPoint, planeCenter);
                     
                     // Фактор перпендикулярного расстояния - насколько точка проекции близка к центру плоскости
@@ -1654,55 +1788,28 @@ public class ARManagerInitializer2 : MonoBehaviour
                     }
                 }
                 
-                // --- ЛОГИРОВАНИЕ ПОИСКА AR ПЛОСКОСТЕЙ ---
-                if (bestMatchPlane == null && planeManager.trackables.count > 0)
-                {
-                    // Debug.Log($"[ARManagerInitializer2] Подходящая AR-плоскость не найдена (макс. скор был {bestMatchScore:F2}, порог 0.6).");
-                }
-                // --- КОНЕЦ ЛОГИРОВАНИЯ ---
-                
-                // Если нашли подходящую AR плоскость, используем её
                 if (bestMatchPlane != null && bestMatchScore > 0.6f) // Требуем достаточно высокий скор
                 {
-                    // Небольшой отступ от плоскости
-                    distanceFromCamera = bestMatchDistance - 0.05f;
-                    
-                    // Ограничиваем диапазон для безопасности
-                    distanceFromCamera = Mathf.Clamp(distanceFromCamera, 1.0f, 5.0f);
-                    
-                    // Сохраняем тип плоскости для ориентации
+                    actualDistanceFromCameraForPlane = bestMatchDistance - 0.05f;
+                    actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.0f, 5.0f);
                     bool isVertical = Mathf.Abs(Vector3.Dot(bestMatchPlane.normal, Vector3.up)) < 0.3f;
-                    
-                    Debug.Log($"[ARManagerInitializer2] 📏 Используется AR плоскость: {distanceFromCamera:F2}м (скор: {bestMatchScore:F2}, {(isVertical ? "вертикальная" : "горизонтальная")})");
+                    if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 Эвристика: Используется AR плоскость '{bestMatchPlane.name}' на расстоянии {actualDistanceFromCameraForPlane:F2}м (скор: {bestMatchScore:F2}, {(isVertical ? "вертикальная" : "горизонтальная")})");
                     foundARPlane = true;
-                    
-                    // Используем нормаль плоскости для bestNormal, если нет результатов рейкастинга
-                    bestNormal = bestMatchPlane.normal;
-                }
-            }
-            
-            // Шаг 2: Если не нашли AR плоскость, используем адаптивный эвристический подход
-            if (!foundARPlane)
-            {
-                // --- ЛОГИРОВАНИЕ ПРИЧИНЫ ЭВРИСТИКИ ---
-                if (planeManager == null || planeManager.trackables.count == 0)
-                {
-                    // Debug.Log("[ARManagerInitializer2] Эвристика: ARPlaneManager не доступен или нет AR-плоскостей.");
-                }
-                else if (didHit) // Эта ветка сейчас не достижима, т.к. эвристика вызывается если didHit == false
-                {
-                     // Debug.Log("[ARManagerInitializer2] Эвристика: Рейкасты что-то нашли, но AR-плоскость не подошла.");
+                    bestNormal = bestMatchPlane.normal; // Используем нормаль найденной AR плоскости
                 }
                 else
                 {
-                    // Debug.Log("[ARManagerInitializer2] Эвристика: Ни рейкасты, ни поиск по AR-плоскостям не дали результата.");
+                     if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Эвристика: Подходящая AR-плоскость не найдена (макс. скор был {bestMatchScore:F2}, порог 0.6).");
                 }
-                // --- КОНЕЦ ЛОГИРОВАНИЯ ПРИЧИНЫ ЭВРИСТИКИ ---
-
+            }
+            
+            if (!foundARPlane)
+            {
+                // Debug.LogWarning("[ARManagerInitializer2-UOCP] Эвристика: AR-плоскости не найдены или не подошли. Используется адаптивное расстояние.");
                 // Используем комбинацию статистических данных и контекстной информации
                 
                 // Анализ текущей позиции в пространстве
-                float viewportY = normalizedY;
+                float viewportY = normalizedCenterY; // ИЗМЕНЕНО: normalizedY -> normalizedCenterY
                 float adaptiveBaseDistance;
                 
                 // Для разных частей экрана используем разные базовые расстояния
@@ -1723,204 +1830,127 @@ public class ARManagerInitializer2 : MonoBehaviour
                 }
                 
                 // Адаптируем расстояние на основе размера плоскости и позиции на экране
-                float sizeAdjustment = planeWidthInMeters * 0.3f;
-                float positionAdjustment = Mathf.Abs(normalizedX - 0.5f) * 0.5f; // Боковые части немного дальше
+                // float sizeAdjustment = estimatedPlaneWidthInMetersBasedOnArea * 0.3f; // ИЗМЕНЕНО ниже
+                // Вычисляем estimatedPlaneWidthInMetersBasedOnArea на основе actualDistanceFromCameraForPlane, которое было установлено эвристикой выше
+                float tempWorldHeightAtActualDistance = 2.0f * actualDistanceFromCameraForPlane * Mathf.Tan(mainCamera.fieldOfView * 0.5f * Mathf.Deg2Rad);
+                float tempWorldWidthAtActualDistance = tempWorldHeightAtActualDistance * mainCamera.aspect;
+                float estimatedPlaneWidthInMetersBasedOnArea = (area.width / (float)textureWidth) * tempWorldWidthAtActualDistance;
+
+                float sizeAdjustment = estimatedPlaneWidthInMetersBasedOnArea * 0.3f;
+                float positionAdjustment = Mathf.Abs(normalizedCenterX - 0.5f) * 0.5f; // ИЗМЕНЕНО: normalizedX -> normalizedCenterX // Боковые части немного дальше
                 
-                distanceFromCamera = adaptiveBaseDistance + sizeAdjustment + positionAdjustment;
-                
-                // Ограничиваем диапазон для безопасности
-                distanceFromCamera = Mathf.Clamp(distanceFromCamera, 1.4f, 4.5f);
-                
-                Debug.Log($"[ARManagerInitializer2] ⚠️ Используется адаптивное эвристическое расстояние: {distanceFromCamera:F2}м");
-                
-                // По умолчанию ориентируем плоскость перпендикулярно лучу
-                bestNormal = -rayDirection;
+                actualDistanceFromCameraForPlane = adaptiveBaseDistance + sizeAdjustment + positionAdjustment;
+                actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.4f, 4.5f);
+                // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Эвристика: Адаптивное расстояние = {actualDistanceFromCameraForPlane:F2}м (est.Width={estimatedPlaneWidthInMetersBasedOnArea:F2})");
+                bestNormal = -initialRayDirection; // ИЗМЕНЕНО: rayDirection -> initialRayDirection // Ориентируем перпендикулярно лучу, если нет лучшей информации
             }
-        }
-        
-        // Позиция плоскости в мировом пространстве
-        Vector3 planePos = cameraPosition + rayDirection * distanceFromCamera;
-        
-        // Вычисляем ориентацию плоскости (нормаль)
-        Vector3 planeNormal;
-        Quaternion planeRotation;
-        
-        if (didHit && bestNormal != Vector3.zero) 
-        {
-            // Если нашли реальную поверхность, используем ее нормаль
-            planeNormal = bestNormal;
-            // Создаем поворот от базовой оси вперед к нормали плоскости
-            planeRotation = Quaternion.FromToRotation(Vector3.forward, -planeNormal);
-            Debug.Log($"[ARManagerInitializer2] 🧭 Используем нормаль реальной поверхности: {planeNormal}");
-        }
-        else 
-        {
-            // Иначе, ориентируем плоскость перпендикулярно лучу от камеры
-            planeNormal = -rayDirection;
-            
-            // Но проверяем, не слишком ли плоскость наклонена (не должна быть "полом")
-            float upDot = Vector3.Dot(planeNormal, Vector3.up);
-            if (Mathf.Abs(upDot) > 0.7f) 
-            {
-                // Если плоскость слишком горизонтальна, корректируем её ориентацию
-                // Делаем её более вертикальной
-                Vector3 horizontalDirection = rayDirection;
-                horizontalDirection.y = 0;
-                horizontalDirection.Normalize();
-                
-                // Плавно переходим от направления луча к горизонтальному направлению
-                planeNormal = Vector3.Lerp(-rayDirection, -horizontalDirection, Mathf.Abs(upDot) - 0.3f).normalized;
-                Debug.Log($"[ARManagerInitializer2] 🧭 Корректируем ориентацию слишком горизонтальной плоскости");
+
+            finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
+            // Логика определения ориентации для эвристического случая
+            Vector3 upDirectionForHeuristic = mainCamera.transform.up; // ИЗМЕНЕНО: arCamera -> mainCamera
+            if (Mathf.Abs(Vector3.Dot(bestNormal, mainCamera.transform.up)) > 0.95f) { // ИЗМЕНЕНО: arCamera -> mainCamera // Если нормаль почти вертикальна (пол/потолок по эвристике)
+                upDirectionForHeuristic = -cameraForward;
+                 if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Эвристика: Нормаль ({bestNormal}) почти параллельна camera.up. Используем -cameraForward как второй аргумент LookRotation.");
             }
-            
-            // Ориентация на основе нормали
-            planeRotation = Quaternion.FromToRotation(Vector3.forward, -planeNormal);
-            Debug.Log($"[ARManagerInitializer2] 🧭 Ориентация на основе луча: {planeNormal}");
+            finalPlaneRotation = Quaternion.LookRotation(bestNormal, upDirectionForHeuristic);
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🧭 Параметры для плоскости ПО ЭВРИСТИКЕ: Pos={finalPlanePosition:F2}, Rot(Эйлер)={finalPlaneRotation.eulerAngles:F1}, Нормаль={bestNormal:F2}");
         }
         
-        // Проверки и фильтрация
-        // После вычисления planePos, добавим более жесткую проверку
-        // на дубликаты и плоскости перед камерой
-        
+        // Теперь, когда у нас есть finalPlanePosition и actualDistanceFromCameraForPlane, мы можем вычислить мировые размеры плоскости
+        // Расчет мировых размеров плоскости, основанный на ее доле в маске И ФАКТИЧЕСКОМ РАССТОЯНИИ
+        float worldHeightAtActualDistance = 2.0f * actualDistanceFromCameraForPlane * Mathf.Tan(mainCamera.fieldOfView * 0.5f * Mathf.Deg2Rad); // ИЗМЕНЕНО: arCamera -> mainCamera
+        float worldWidthAtActualDistance = worldHeightAtActualDistance * mainCamera.aspect; // ИЗМЕНЕНО: arCamera -> mainCamera
+
+        float finalPlaneWorldWidth = (area.width / (float)textureWidth) * worldWidthAtActualDistance;
+        float finalPlaneWorldHeight = (area.height / (float)textureHeight) * worldHeightAtActualDistance;
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Расчетные мировые размеры плоскости: Ширина={finalPlaneWorldWidth:F2}м, Высота={finalPlaneWorldHeight:F2}м (на расстоянии {actualDistanceFromCameraForPlane:F2}м)");
+
+        // Проверка на минимальный мировой размер ПЕРЕД созданием/обновлением
+        if (finalPlaneWorldWidth < minPlaneSizeInMeters || finalPlaneWorldHeight < minPlaneSizeInMeters)
+        {
+            // Debug.LogWarning($"[ARManagerInitializer2-UOCP] Плоскость для области ({area.width}x{area.height}px) слишком мала по мировым размерам ({finalPlaneWorldWidth:F2}x{finalPlaneWorldHeight:F2}м) для создания/обновления. Min size: {minPlaneSizeInMeters}м. Выход.");
+            return false;
+        }
+
+
+        // Проверки и фильтрация дубликатов и наложений (используем finalPlanePosition)
+        if (finalPlanePosition == Vector3.zero) { // Дополнительная проверка на всякий случай
+            Debug.LogError("[ARManagerInitializer2-UOCP] КРИТИЧЕСКАЯ ОШИБКА: finalPlanePosition равен Vector3.zero перед созданием/обновлением плоскости! Выход.");
+            return false;
+        }
+
         // Проверка 1: Не создаем плоскость, если находится слишком близко к камере и прямо перед ней
-        Vector3 directionToPosition = planePos - arCamera.transform.position;
-        float distanceToCam = directionToPosition.magnitude;
-        float alignmentWithCamera = Vector3.Dot(arCamera.transform.forward.normalized, directionToPosition.normalized);
+        Vector3 directionToFinalPos = finalPlanePosition - mainCamera.transform.position; // ИЗМЕНЕНО: arCamera -> mainCamera
+        float distanceToCamFinal = directionToFinalPos.magnitude;
+        float alignmentWithCameraFinal = Vector3.Dot(mainCamera.transform.forward.normalized, directionToFinalPos.normalized); // ИЗМЕНЕНО: arCamera -> mainCamera
         
-        // ИЗМЕНЕНО: Смягчаем проверку на близость к камере
-        if (distanceToCam < 1.0f && alignmentWithCamera > 0.85f)
+        if (distanceToCamFinal < 0.5f && alignmentWithCameraFinal > 0.9f) // Более строгий порог для близких плоскостей прямо перед камерой
         {
-            // Debug.Log($"[ARManagerInitializer2] ⚠️ Плоскость слишком близко к камере ({distanceToCam:F2}м), пропускаем");
+            Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ ОТМЕНА: Плоскость слишком близко к камере и прямо перед ней (Дист: {distanceToCamFinal:F2}м, Совпадение с FWD: {alignmentWithCameraFinal:F2}). Pos={finalPlanePosition:F2}");
             return false;
         }
         
         // УЛУЧШЕННЫЙ АЛГОРИТМ: Интеллектуальное выявление дубликатов плоскостей
-        bool tooClose = false;
-        int similarOrientationCount = 0;
-        GameObject closestExistingPlane = null;
-        float closestDuplDistance = float.MaxValue;
-        
+        // ... (часть с tooClose, similarOrientationCount, closestExistingPlane была выше, но может быть применена здесь к finalPlanePosition)
         // === НАЧАЛО БЛОКА ПОИСКА И ОБНОВЛЕНИЯ СУЩЕСТВУЮЩЕЙ ПЛОСКОСТИ ===
-        // ИЩЕМ СУЩЕСТВУЮЩУЮ ПЛОСКОСТЬ ДЛЯ ОБНОВЛЕНИЯ
-        // Используем более мягкие критерии, чтобы чаще обновлять существующие плоскоСТИ, чем создавать новые.
-        // Это должно помочь с "миганием".
-        // Параметры для FindClosestExistingPlane: (позицияНовой, нормальНовой, максРасстояниеДляОбновления, максУголДляОбновления)
-        var (planeToUpdate, updateDistance, updateAngleDiff) = FindClosestExistingPlane(planePos, planeNormal, 1.5f, 60f); // Было 1.0f, 45f
+        var (planeToUpdate, updateDistance, updateAngleDiff) = FindClosestExistingPlane(finalPlanePosition, (finalPlaneRotation * Vector3.forward), 1.0f, 45f); 
+        // Используем (finalPlaneRotation * Vector3.forward) как нормаль, так как LookRotation(normal) делает forward плоскости = normal.
+        // А наш FindClosestExistingPlane ожидает нормаль поверхности.
 
         if (planeToUpdate != null)
         {
-            // Debug.Log($"[ARManagerInitializer2] 🔄 Обновляем существующую плоскость '{planeToUpdate.name}' вместо создания новой. Расстояние: {updateDistance:F2}м, Угол: {updateAngleDiff:F1}°");
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🔄 ОБНОВЛЯЕМ существующую плоскость '{planeToUpdate.name}'. Расстояние до новой позиции: {updateDistance:F2}м, Угол нормалей: {updateAngleDiff:F1}°");
             
-            // Обновляем позицию и ориентацию существующей плоскости
-            planeToUpdate.transform.position = planePos;
-            planeToUpdate.transform.rotation = planeRotation;
+            planeToUpdate.transform.position = finalPlanePosition;
+            planeToUpdate.transform.rotation = finalPlaneRotation;
             
-            // Опционально: Обновить меш, если размеры области значительно изменились
             MeshFilter mf = planeToUpdate.GetComponent<MeshFilter>();
             if (mf != null) 
             {
-               // Убедимся, что planeWidthInMeters и planeHeightInMeters доступны и корректны
-               mf.mesh = CreatePlaneMesh(planeWidthInMeters, planeHeightInMeters); 
+               mf.mesh = CreatePlaneMesh(finalPlaneWorldWidth, finalPlaneWorldHeight); // Обновляем меш с новыми размерами
+               if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Обновлен меш для '{planeToUpdate.name}', новые размеры: {finalPlaneWorldWidth:F2}x{finalPlaneWorldHeight:F2}м");
             }
-            // Масштаб (distanceScale) вычисляется позже, поэтому здесь его не обновляем, если выходим раньше.
-            // planeToUpdate.transform.localScale = new Vector3(distanceScale, distanceScale, 1.0f); 
 
-            if (visitedPlanes != null) visitedPlanes[planeToUpdate] = true; // Помечаем обновленную плоскость как посещенную
-            // planesCreatedThisFrame++; // Если считаем обновление за создание для статистики
-            Debug.Log($"[ARManagerInitializer2] Обновлена плоскость '{planeToUpdate.name}' для области X:{area.x:F0} Y:{area.y:F0} W:{area.width:F0} H:{area.height:F0}");
-            return true; // Успешно обновили существующую плоскость, дальше не идем
+            if (visitedPlanes != null) visitedPlanes[planeToUpdate] = true; 
+            // Debug.Log($"[ARManagerInitializer2-UOCP] ✅ Обновлена плоскость '{planeToUpdate.name}' финальными параметрами: Pos={finalPlanePosition:F2}, Rot={finalPlaneRotation.eulerAngles:F1}");
+            return true; 
         }
-        // === КОНЕЦ БЛОКА ПОИСКА И ОБНОВЛЕНИЯ СУЩЕСТВУЮЩЕЙ ПЛОСКОСТИ ===
         
+        // Если не нашли что обновить, проверяем, не нужно ли отфильтровать создание новой из-за дублирования
+        bool createNewPlane = true;
         foreach (GameObject existingPlane in generatedPlanes)
         {
             if (existingPlane == null) continue;
-            
-            // Рассчитываем расстояние между плоскостями
-            float distanceBetweenPlanes = Vector3.Distance(existingPlane.transform.position, planePos);
-            
-                         // Сохраняем ближайшую плоскость для возможной замены
-             if (distanceBetweenPlanes < closestDuplDistance)
-             {
-                 closestDuplDistance = distanceBetweenPlanes;
-                 closestExistingPlane = existingPlane;
-             }
-            
-            // Проверка на прямой дубликат (очень близкое расположение)
-            if (distanceBetweenPlanes < 0.35f)
+            float distBetweenFinalAndExisting = Vector3.Distance(existingPlane.transform.position, finalPlanePosition);
+            float angleBetweenNormals = Vector3.Angle(existingPlane.transform.forward, (finalPlaneRotation * Vector3.forward));
+
+            if (distBetweenFinalAndExisting < 0.35f && angleBetweenNormals < 20f) // Порог для близкого дубликата
             {
-                tooClose = true;
-                // Debug.Log($"[ARManagerInitializer2] ⚠️ Обнаружен близкий дубликат плоскости на расстоянии {distanceBetweenPlanes:F2}м");
+                // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ ОТМЕНА СОЗДАНИЯ НОВОЙ: Обнаружен слишком близкий дубликат '{existingPlane.name}' (Расст: {distBetweenFinalAndExisting:F2}м, Угол: {angleBetweenNormals:F1}°). Новая Pos={finalPlanePosition:F2}");
+                createNewPlane = false;
+                if (visitedPlanes != null && !visitedPlanes.ContainsKey(existingPlane)) { // Если существующая близкая не была посещена в этом кадре, помечаем ее.
+                    visitedPlanes[existingPlane] = true; 
+                    // Debug.Log($"[ARManagerInitializer2-UOCP] Близкая существующая плоскость '{existingPlane.name}' помечена как visited, т.к. новая не создается.");
+                }
                 break;
             }
-            
-            // Проверка на плоскости с похожей ориентацией в средней близости
-            if (distanceBetweenPlanes < 1.0f)
-            {
-                                 // Сравниваем направления нормалей плоскостей
-                 float dotProduct = Vector3.Dot(existingPlane.transform.forward, -rayDirection);
-                
-                if (Mathf.Abs(dotProduct) > 0.9f) // Очень похожая ориентация
-                {
-                    tooClose = true;
-                    // Debug.Log($"[ARManagerInitializer2] ⚠️ Обнаружена плоскость с похожей ориентацией на расстоянии {distanceBetweenPlanes:F2}м");
-                    break;
-                }
-                else if (Mathf.Abs(dotProduct) > 0.7f) // Умеренно похожая ориентация
-                {
-                    similarOrientationCount++;
-                }
-            }
-            
-            // Проверка на общее количество плоскостей в одном направлении
-            if (distanceBetweenPlanes < 2.0f)
-            {
-                                 float dotProduct = Vector3.Dot(existingPlane.transform.forward, -rayDirection);
-                if (Mathf.Abs(dotProduct) > 0.6f)
-                {
-                    similarOrientationCount++;
-                }
-            }
         }
-        
-        // Если уже несколько плоскостей смотрят в похожем направлении, пропускаем создание новой
-        if (similarOrientationCount >= 3)
-        {
-            // Debug.Log($"[ARManagerInitializer2] ⚠️ Уже существует {similarOrientationCount} плоскостей в похожем направлении");
-            return false;
-        }
-        
-                 // Улучшенный алгоритм замены плоскостей вместо добавления новых
-         if (tooClose && generatedPlanes.Count > 4 && closestExistingPlane != null && closestDuplDistance < 1.0f)
-        {
-            // Если мы обнаружили дубликат, и у нас уже много плоскостей, 
-            // то заменяем существующую плоскость вместо добавления новой
-            // Debug.Log($"[ARManagerInitializer2] 🔄 Заменяем существующую плоскость вместо создания дубликата");
-            generatedPlanes.Remove(closestExistingPlane);
-            Destroy(closestExistingPlane);
-            tooClose = false; // Разрешаем создание новой плоскости
-        }
-        else if (tooClose)
-        {
-            // Debug.Log($"[ARManagerInitializer2] ⚠️ Обнаружен дубликат плоскости, пропускаем создание");
-            return false;
-        }
-        
-        // ПРОВЕРКА 3: Отсеиваем объекты на экстремальных углах обзора
-        // ИЗМЕНЕНО: Слегка увеличиваем допустимый угол обзора для плоскостей
-        if (Mathf.Abs(angleH) > 0.95f || Mathf.Abs(angleV) > 0.95f) // Было 0.45f и 0.35f
-        {
-            // Debug.Log($"[ARManagerInitializer2] ⚠️ Плоскость находится на экстремальном угле обзора (НОВЫЕ МЯГКИЕ УСЛОВИЯ), пропускаем");
-            return false;
-        }
-        
-        // Создаем и настраиваем GameObject для плоскости
-        GameObject planeObj = new GameObject($"MyARPlane_Debug_{planeInstanceCounter++}");
-        // Debug.Log($"[ARManagerInitializer2] Создана новая плоскость '{planeObj.name}' для области X:{area.x:F0} Y:{area.y:F0} W:{area.width:F0} H:{area.height:F0}");
 
-        // Добавляем компоненты
+        if (!createNewPlane)
+        {
+            return false; // Не создаем новую, т.к. есть близкий дубликат
+        }
+
+        // Создаем и настраиваем GameObject для плоскости
+        string newPlaneName = $"MyARPlane_Debug_{planeInstanceCounter++}";
+        GameObject planeObj = new GameObject(newPlaneName);
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🧬 СОЗДАЕМ НОВУЮ ПЛОСКОСТЬ '{newPlaneName}'");
+
+        planeObj.transform.position = finalPlanePosition;
+        planeObj.transform.rotation = finalPlaneRotation;
+        
         MeshFilter meshFilter = planeObj.AddComponent<MeshFilter>();
-        meshFilter.mesh = CreatePlaneMesh(planeWidthInMeters, planeHeightInMeters);
+        meshFilter.mesh = CreatePlaneMesh(finalPlaneWorldWidth, finalPlaneWorldHeight);
         
         MeshRenderer meshRenderer = planeObj.AddComponent<MeshRenderer>();
         if (this.verticalPlaneMaterial != null) 
@@ -1933,12 +1963,12 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
         else
         {
-             Debug.LogError("[ARManagerInitializer2-CreatePlaneForWallArea] wallMaterialVertical is not set! Assigning default magenta.");
+             Debug.LogError("[ARManagerInitializer2-UOCP] wallMaterialVertical is not set! Assigning default magenta.");
              Material simpleMaterial = new Material(Shader.Find("Unlit/Color"));
              simpleMaterial.color = Color.magenta;
              meshRenderer.material = simpleMaterial;
         }
-        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Applied material to {planeObj.name}. Mesh bounds: {meshFilter.mesh.bounds.size}");
+        // Debug.Log($"[ARManagerInitializer2-UOCP] Applied material to {planeObj.name}. Mesh bounds: {meshFilter.mesh.bounds.size}");
         
         MeshCollider meshCollider = planeObj.AddComponent<MeshCollider>();
         meshCollider.sharedMesh = meshFilter.mesh;
@@ -1949,26 +1979,25 @@ public class ARManagerInitializer2 : MonoBehaviour
         // Попытка привязать к TrackablesParent, если он есть и не был равен null при старте
         if (this.xrOrigin != null && this.xrOrigin.TrackablesParent != null)
         {
-            // Проверяем, не является ли TrackablesParent частью самого XR Origin, который может быть отключен при симуляции
-            // и имеет ли он тот же InstanceID, что и при старте (на случай если он был пересоздан)
             if (this.trackablesParentInstanceID_FromStart == 0 || 
                 (this.xrOrigin.TrackablesParent.gameObject.activeInHierarchy && this.xrOrigin.TrackablesParent.GetInstanceID() == this.trackablesParentInstanceID_FromStart))
             {
                 planeObj.transform.SetParent(this.xrOrigin.TrackablesParent, true); 
-                Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] {planeObj.name} привязан к {this.xrOrigin.TrackablesParent.name} (ID: {this.xrOrigin.TrackablesParent.GetInstanceID()}).");
+                // Debug.Log($"[ARManagerInitializer2-UOCP] Новая плоскость '{planeObj.name}' привязана к '{this.xrOrigin.TrackablesParent.name}' (ID: {this.xrOrigin.TrackablesParent.GetInstanceID()}). Final Pos relative to Parent: {planeObj.transform.localPosition:F2}");
             }
             else
             {
-                Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] {planeObj.name} не привязан к TrackablesParent, так как он неактивен или был изменен (ожидался ID: {this.trackablesParentInstanceID_FromStart}, текущий: {this.xrOrigin.TrackablesParent.GetInstanceID()}, активен: {this.xrOrigin.TrackablesParent.gameObject.activeInHierarchy}). Оставлен в корне.");
+                Debug.LogWarning($"[ARManagerInitializer2-UOCP] Новая плоскость '{planeObj.name}' не привязана к TrackablesParent (неактивен/изменен). Оставлена в корне. World Pos: {planeObj.transform.position:F2}");
             }
         }
         else
         {
-            Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] {planeObj.name} не привязан, так как XROrigin или TrackablesParent не найдены. Оставлен в корне.");
+            Debug.LogWarning($"[ARManagerInitializer2-UOCP] Новая плоскость '{planeObj.name}' не привязана (XROrigin/TrackablesParent null). Оставлена в корне. World Pos: {planeObj.transform.position:F2}");
         }
 
-        if (visitedPlanes != null) visitedPlanes[planeObj] = true; // Помечаем новую плоскость как посещенную
-        return true; // Успешно создали новую плоскость
+        if (visitedPlanes != null) visitedPlanes[planeObj] = true;
+        // Debug.Log($"[ARManagerInitializer2-UOCP] ✅ Создана новая плоскость '{planeObj.name}': WorldPos={planeObj.transform.position:F2}, WorldRot(Эйлер)={planeObj.transform.rotation.eulerAngles:F1}, Parent={(planeObj.transform.parent ? planeObj.transform.parent.name : "null")}");
+        return true;
     }
 
     // Удаляем устаревшие плоскости, если их слишком много
@@ -2034,6 +2063,8 @@ public class ARManagerInitializer2 : MonoBehaviour
                 }
             }
         }
+        // if (closestPlane != null && enableDetailedRaycastLogging) Debug.Log($"[FindClosestExistingPlane] Найден близкий: {closestPlane.name}, dist: {minDistance:F2}, angle: {angleDifference:F1}");
+        // else if (enableDetailedRaycastLogging) Debug.Log("[FindClosestExistingPlane] Близкая существующая плоскость не найдена.");
         return (closestPlane, minDistance, angleDifference);
     }
 
@@ -2050,4 +2081,38 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
         return path;
     }
+
+    // Вспомогательный метод для красивого вывода LayerMask
+    public static string LayerMaskToString(LayerMask layerMask)
+    {
+        var included = new System.Text.StringBuilder();
+        for (int i = 0; i < 32; i++)
+        {
+            if ((layerMask.value & (1 << i)) != 0)
+            {
+                string layerName = LayerMask.LayerToName(i);
+                if (string.IsNullOrEmpty(layerName))
+                {
+                    // included.Append($"[Unnamed Layer {i}], "); // Можно раскомментировать, если нужны и безымянные слои
+                }
+                else
+                {
+                    included.Append($"[{layerName} (id:{i})], ");
+                }
+            }
+        }
+        if (included.Length > 0 && included[included.Length - 1] == ' ' && included[included.Length - 2] == ',') 
+        {
+            included.Length -= 2; // Удалить последнюю запятую и пробел
+        }
+        else if (included.Length == 0)
+        {
+            return "NONE";
+        }
+        return included.ToString();
+    }
+
+    // Публичные свойства для доступа к материалам извне
+    public Material VerticalPlaneMaterial => verticalPlaneMaterial;
+    public Material HorizontalPlaneMaterial => horizontalPlaneMaterial;
 }

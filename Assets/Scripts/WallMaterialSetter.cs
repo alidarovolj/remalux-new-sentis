@@ -10,97 +10,118 @@ public class WallMaterialSetter : MonoBehaviour
     public Material wallMaterial;
     
     [Tooltip("Материал для пола (горизонтальных плоскостей)")]
-    public Material floorMaterial;
+    public Material floorMaterial; // Пока не используется для обновления существующих, но может понадобиться
     
     [Header("Настройки")]
     [Tooltip("Применять материал автоматически при старте")]
     public bool applyOnStart = true;
     
-    private ARManagerInitializer2 arManager;
+    // private ARManagerInitializer2 arManager; // Не используется напрямую для изменения материалов
     
     private void Start()
     {
         if (applyOnStart)
-        {
-            SetMaterials();
+        {            
+            ApplyMaterialsToExistingPlanes();
         }
     }
     
     /// <summary>
-    /// Устанавливает материалы для стен и пола
+    /// Устанавливает материалы для существующих плоскостей.
+    /// Этот метод теперь не меняет материалы в ARManagerInitializer2.
     /// </summary>
-    public void SetMaterials()
+    public void ApplyMaterialsToExistingPlanes() // Переименован для ясности
     {
-        // Находим ARManagerInitializer2
-        arManager = FindObjectOfType<ARManagerInitializer2>();
-        if (arManager == null)
+        ARManagerInitializer2 arInitializer = ARManagerInitializer2.Instance;
+        if (arInitializer == null)
         {
-            Debug.LogError("[WallMaterialSetter] ❌ ARManagerInitializer2 не найден в сцене!");
+            Debug.LogError("[WallMaterialSetter] ❌ ARManagerInitializer2 не найден в сцене! Невозможно обновить материалы плоскостей.");
             return;
         }
         
-        // Применяем материал для стен
-        if (wallMaterial != null)
-        {
-            arManager.verticalPlaneMaterial = wallMaterial;
-            Debug.Log("[WallMaterialSetter] ✅ Установлен материал для стен");
-        }
+        // Логика ниже теперь не нужна, т.к. мы не меняем материалы в ARManagerInitializer2
+        // if (wallMaterial != null)
+        // {
+        //     // arInitializer.VerticalPlaneMaterial = wallMaterial; // ОШИБКА: Свойство только для чтения
+        //     Debug.Log("[WallMaterialSetter] ✅ Материал для стен (в WallMaterialSetter) готов к использованию.");
+        // }
         
-        // Применяем материал для пола
-        if (floorMaterial != null)
-        {
-            arManager.horizontalPlaneMaterial = floorMaterial;
-            Debug.Log("[WallMaterialSetter] ✅ Установлен материал для пола");
-        }
+        // if (floorMaterial != null)
+        // {
+        //     // arInitializer.HorizontalPlaneMaterial = floorMaterial; // ОШИБКА: Свойство только для чтения
+        //     Debug.Log("[WallMaterialSetter] ✅ Материал для пола (в WallMaterialSetter) готов к использованию.");
+        // }
         
-        // Обновляем существующие плоскости
-        UpdateExistingPlanes();
+        // Обновляем материалы существующих плоскостей, используя материалы из WallMaterialSetter
+        UpdateExistingPlanesGraphics();
     }
     
     /// <summary>
-    /// Обновляет материалы для существующих плоскостей
+    /// Обновляет графическое представление (материалы) для существующих плоскостей.
     /// </summary>
-    public void UpdateExistingPlanes()
+    public void UpdateExistingPlanesGraphics() // Переименован для ясности
     {
-        // Обновляем материалы для всех существующих WallPlane
+        // Важно: ARManagerInitializer2.Instance.generatedPlanes может быть более надежным источником
+        // чем поиск по тегу или имени, особенно если плоскости создаются/удаляются динамически.
+        // Однако, если WallMaterialSetter должен влиять и на плоскости, созданные не ARManagerInitializer2,
+        // то поиск по тегу/имени остается актуальным.
+
+        // Пока оставим поиск по тегу/имени, но рассмотрим использование generatedPlanes
         GameObject[] wallPlanes = GameObject.FindGameObjectsWithTag("WallPlane");
         if (wallPlanes.Length == 0)
         {
-            // Пробуем найти по имени, если тег не установлен
-            wallPlanes = FindWallPlanesByName();
+            wallPlanes = FindWallPlanesByName(); // Поиск по имени как фоллбэк
         }
         
+        Debug.Log($"[WallMaterialSetter] Найдено {wallPlanes.Length} плоскостей для возможного обновления материала.");
+
         int updatedCount = 0;
         foreach (GameObject plane in wallPlanes)
         {
             MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
-            if (renderer != null && wallMaterial != null)
+            if (renderer != null)
             {
-                renderer.material = new Material(wallMaterial);
-                updatedCount++;
+                // ПРИМЕЧАНИЕ: Здесь мы должны решить, какой материал применять.
+                // Если это вертикальная плоскость (стена), используем wallMaterial.
+                // Если горизонтальная (пол), используем floorMaterial.
+                // Для этого нужна информация о типе плоскости.
+                // Пока что, для простоты, все обновляются wallMaterial.
+                // TODO: Добавить логику определения типа плоскости, если это необходимо.
+                if (wallMaterial != null)
+                {
+                    renderer.material = new Material(wallMaterial); // Создаем новый экземпляр материала
+                    updatedCount++;
+                }
+                else
+                {
+                    Debug.LogWarning($"[WallMaterialSetter] wallMaterial не назначен. Невозможно обновить материал для {plane.name}");
+                }
             }
         }
         
-        Debug.Log($"[WallMaterialSetter] Обновлено материалов: {updatedCount}/{wallPlanes.Length}");
+        if (updatedCount > 0)
+        {
+            Debug.Log($"[WallMaterialSetter] Обновлены материалы для {updatedCount} из {wallPlanes.Length} найденных плоскостей.");
+        }
     }
     
     /// <summary>
-    /// Ищет объекты WallPlane по имени
+    /// Ищет объекты WallPlane по имени (должны начинаться с 'MyARPlane_Debug_')
     /// </summary>
     private GameObject[] FindWallPlanesByName()
-    {
-        // Находим все объекты с именем, начинающимся с "WallPlane"
-        GameObject[] allObjects = GameObject.FindObjectsOfType<GameObject>();
-        System.Collections.Generic.List<GameObject> wallPlanes = new System.Collections.Generic.List<GameObject>();
+    {        
+        GameObject[] allObjects = FindObjectsOfType<GameObject>(); // Используем неустаревший метод
+        System.Collections.Generic.List<GameObject> foundPlanes = new System.Collections.Generic.List<GameObject>();
         
         foreach (GameObject obj in allObjects)
         {
-            if (obj.name.StartsWith("WallPlane"))
+            // Плоскости, создаваемые ARManagerInitializer2, начинаются с "MyARPlane_Debug_"
+            if (obj.name.StartsWith("MyARPlane_Debug_"))
             {
-                wallPlanes.Add(obj);
+                foundPlanes.Add(obj);
             }
         }
-        
-        return wallPlanes.ToArray();
+        // Debug.Log($"[WallMaterialSetter] Найдено по имени (FindWallPlanesByName): {foundPlanes.Count} плоскостей.");
+        return foundPlanes.ToArray();
     }
 } 
