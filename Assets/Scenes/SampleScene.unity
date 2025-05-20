@@ -551,6 +551,7 @@ MonoBehaviour:
   sessionManager: {fileID: 1288005832}
   planeManager: {fileID: 151853166}
   xrOrigin: {fileID: 1004066121}
+  planeConfigurator: {fileID: 0}
   useDetectedPlanes: 0
   minPlaneSizeInMeters: 0.1
   minPixelsDimensionForArea: 2
@@ -560,15 +561,23 @@ MonoBehaviour:
   maxRayDistance: 10
   hitLayerMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 769
   minHitDistanceThreshold: 0.1
   maxWallNormalAngleDeviation: 45
-  minFloorCeilingNormalAngle: 15
+  minFloorNormalAngleWithVertical: 75
+  planesLayerName: ARPlanes
+  ignoreObjectNames: 
+  usePersistentPlanes: 1
+  highlightPersistentPlanes: 1
+  persistentPlaneColor: {r: 0, g: 0.8, b: 0.2, a: 0.7}
   verticalPlaneMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,
     type: 2}
   horizontalPlaneMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
     type: 2}
   debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
+  stableTimeThreshold: 0.5
+  enableDoubleTapSave: 1
+  doubleTapTimeThreshold: 0.3
 --- !u!4 &367304187
 Transform:
   m_ObjectHideFlags: 0
@@ -1499,8 +1508,8 @@ MonoBehaviour:
   forceXRSimulationCapture: 1
   wallClassIndex: 0
   floorClassIndex: 3
-  wallConfidence: 0.75
-  floorConfidence: 0.5
+  wallConfidence: 0.02
+  floorConfidence: 0.02
   detectFloor: 1
   inputResolution: {x: 320, y: 320}
   useSimulationIfNoCamera: 1
@@ -1508,18 +1517,24 @@ MonoBehaviour:
   arSessionManager: {fileID: 1288005832}
   xrOrigin: {fileID: 1004066121}
   segmentationMaskTexture: {fileID: 0}
-  segmentationConfidenceThreshold: 0.01
-  floorConfidenceThreshold: 0.5
+  segmentationConfidenceThreshold: 0.06
+  floorConfidenceThreshold: 0.06
   modelPath: model.sentis
   selectedBackend: 0
-  segmentationMaterial: {fileID: 0}
+  segmentationMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,
+    type: 2}
   debugMaskSavePath: DebugMasks
-  debugMode: 0
-  debugFlags: 0
-  saveDebugMask: 0
+  debugMode: 1
+  debugFlags: -1
+  saveDebugMask: 1
   debugSavePath: SegmentationMasks
   useSimulationIfCameraFails: 1
   maxConsecutiveFailsBeforeSimulation: 5
+  applyMaskSmoothing: 0
+  maskBlurSize: 3
+  enhanceEdges: 1
+  enhanceContrast: 1
+  contrastMultiplier: 1.5
 --- !u!4 &956393579
 Transform:
   m_ObjectHideFlags: 0
@@ -1601,7 +1616,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!224 &1009996020
 RectTransform:
   m_ObjectHideFlags: 0

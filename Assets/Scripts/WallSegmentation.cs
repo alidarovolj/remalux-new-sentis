@@ -51,14 +51,14 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Порог вероятности для определения стены")]
     [SerializeField, Range(0.01f, 1.0f)] private float wallConfidence = 0.9f; // ИЗМЕНЕНО: было 0.7f, пробуем значительно выше
     [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.5f;
-    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")]public bool detectFloor = false;
+    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = false;
 
     [Tooltip("Разрешение входного изображения")]
     public Vector2Int inputResolution = new Vector2Int(320, 320);
-    
+
     [Tooltip("Использовать симуляцию, если не удаётся получить изображение с камеры")]
     public bool useSimulationIfNoCamera = true;
-    
+
     [Tooltip("Количество неудачных попыток получения изображения перед включением симуляции")]
     public int failureThresholdForSimulation = 10;
 
@@ -91,38 +91,50 @@ public class WallSegmentation : MonoBehaviour
     private string debugMaskSavePath = "DebugMasks"; // Добавлено поле с значением по умолчанию
 
     // Свойства для получения AR компонентов
-    public ARSessionManager ARSessionManager {
-        get {
-            if (arSessionManager == null) {
+    public ARSessionManager ARSessionManager
+    {
+        get
+        {
+            if (arSessionManager == null)
+            {
                 arSessionManager = FindObjectOfType<ARSessionManager>();
             }
             return arSessionManager;
         }
-        set {
+        set
+        {
             arSessionManager = value;
         }
     }
 
-    public XROrigin XROrigin {
-        get {
-            if (xrOrigin == null) {
+    public XROrigin XROrigin
+    {
+        get
+        {
+            if (xrOrigin == null)
+            {
                 xrOrigin = FindObjectOfType<XROrigin>();
             }
             return xrOrigin;
         }
-        set {
+        set
+        {
             xrOrigin = value;
         }
     }
 
-    public ARCameraManager ARCameraManager {
-        get {
-            if (XROrigin != null && XROrigin.Camera != null) {
+    public ARCameraManager ARCameraManager
+    {
+        get
+        {
+            if (XROrigin != null && XROrigin.Camera != null)
+            {
                 return XROrigin.Camera.GetComponent<ARCameraManager>();
             }
             return FindObjectOfType<ARCameraManager>();
         }
-        set {
+        set
+        {
             // Тут мы можем сохранить ссылку на ARCameraManager, если нужно
             // Но так как в getter мы его получаем динамически, создадим приватное поле
             arCameraManager = value;
@@ -196,14 +208,151 @@ public class WallSegmentation : MonoBehaviour
 
     // Добавляем приватное поле для ARCameraManager
     private ARCameraManager arCameraManager;
-    
+
     // Поля для стабилизации маски сегментации
     private RenderTexture lastSuccessfulMask;
     private bool hasValidMask = false;
     private float lastValidMaskTime = 0f;
     private int stableFrameCount = 0;
-    private const int REQUIRED_STABLE_FRAMES = 3; // Количество стабильных кадров для принятия новой маски
-    
+    private const int REQUIRED_STABLE_FRAMES = 2; // Уменьшено с 3 до 2 для более быстрой реакции
+
+    // Параметры сглаживания маски для улучшения визуального качества
+    [Header("Настройки качества маски")]
+    [Tooltip("Применять сглаживание к маске сегментации")]
+    public bool applyMaskSmoothing = true;
+    [Tooltip("Значение размытия для сглаживания маски (в пикселях)")]
+    [Range(1, 10)]
+    public int maskBlurSize = 3;
+    [Tooltip("Повышать резкость краев на маске")]
+    public bool enhanceEdges = true;
+    [Tooltip("Повышать контраст маски")]
+    public bool enhanceContrast = true;
+    [Tooltip("Множитель контраста")]
+    [Range(1f, 3f)]
+    public float contrastMultiplier = 1.5f;
+
+    // Добавляем оптимизированный пул текстур для уменьшения аллокаций памяти
+    private class TexturePool
+    {
+        private Dictionary<Vector2Int, List<RenderTexture>> availableTextures = new Dictionary<Vector2Int, List<RenderTexture>>();
+        private Dictionary<Vector2Int, List<RenderTexture>> inUseTextures = new Dictionary<Vector2Int, List<RenderTexture>>();
+        private Dictionary<int, Vector2Int> textureToSize = new Dictionary<int, Vector2Int>();
+        private RenderTextureFormat defaultFormat;
+
+        // Добавляем конструктор, принимающий формат
+        public TexturePool(RenderTextureFormat format = RenderTextureFormat.ARGB32)
+        {
+            defaultFormat = format;
+        }
+
+        // Получить текстуру из пула или создать новую
+        public RenderTexture GetTexture(int width, int height, RenderTextureFormat format = RenderTextureFormat.ARGB32)
+        {
+            // Используем переданный формат или значение по умолчанию из конструктора
+            RenderTextureFormat textureFormat = format != RenderTextureFormat.ARGB32 ? format : defaultFormat;
+
+            Vector2Int size = new Vector2Int(width, height);
+
+            // Проверяем, есть ли доступные текстуры такого размера
+            if (availableTextures.ContainsKey(size) && availableTextures[size].Count > 0)
+            {
+                RenderTexture texture = availableTextures[size][0];
+                availableTextures[size].RemoveAt(0);
+
+                if (!inUseTextures.ContainsKey(size))
+                {
+                    inUseTextures[size] = new List<RenderTexture>();
+                }
+
+                inUseTextures[size].Add(texture);
+                textureToSize[texture.GetInstanceID()] = size;
+
+                return texture;
+            }
+
+            // Создаем новую текстуру если нет доступных
+            RenderTexture newTexture = new RenderTexture(width, height, 0, textureFormat);
+            newTexture.enableRandomWrite = true;
+            newTexture.Create();
+
+            if (!inUseTextures.ContainsKey(size))
+            {
+                inUseTextures[size] = new List<RenderTexture>();
+            }
+
+            inUseTextures[size].Add(newTexture);
+            textureToSize[newTexture.GetInstanceID()] = size;
+
+            return newTexture;
+        }
+
+        // Вернуть текстуру в пул
+        public void ReleaseTexture(RenderTexture texture)
+        {
+            if (texture == null) return;
+
+            int id = texture.GetInstanceID();
+
+            if (!textureToSize.ContainsKey(id))
+            {
+                // Это не наша текстура, просто уничтожаем
+                RenderTexture.ReleaseTemporary(texture);
+                return;
+            }
+
+            Vector2Int size = textureToSize[id];
+
+            if (inUseTextures.ContainsKey(size))
+            {
+                inUseTextures[size].Remove(texture);
+            }
+
+            if (!availableTextures.ContainsKey(size))
+            {
+                availableTextures[size] = new List<RenderTexture>();
+            }
+
+            availableTextures[size].Add(texture);
+        }
+
+        // Очистить все текстуры в пуле (используется при выходе или смене сцены)
+        public void ClearAll()
+        {
+            // Очищаем доступные текстуры
+            foreach (var sizeGroup in availableTextures)
+            {
+                foreach (var texture in sizeGroup.Value)
+                {
+                    if (texture != null && texture.IsCreated())
+                    {
+                        texture.Release();
+                        UnityEngine.Object.Destroy(texture);
+                    }
+                }
+            }
+
+            // Очищаем используемые текстуры
+            foreach (var sizeGroup in inUseTextures)
+            {
+                foreach (var texture in sizeGroup.Value)
+                {
+                    if (texture != null && texture.IsCreated())
+                    {
+                        texture.Release();
+                        UnityEngine.Object.Destroy(texture);
+                    }
+                }
+            }
+
+            availableTextures.Clear();
+            inUseTextures.Clear();
+            textureToSize.Clear();
+        }
+    }
+
+    // Пул текстур для оптимизации работы с памятью
+    private TexturePool texturePool;
+
     // Триггер события обновления маски
     // Триггер события обновления маски
     private void TriggerSegmentationMaskUpdatedEvent(RenderTexture mask)
@@ -219,14 +368,128 @@ public class WallSegmentation : MonoBehaviour
             Debug.LogWarning($"[WallSegmentation] ⚠️ Нет подписчиков на событие OnSegmentationMaskUpdated");
         }
     }
-    
-    // Вызываем событие при создании маски сегментации
+
+    // Вызываем событие при создании маски сегментации с улучшениями
     private void OnMaskCreated(RenderTexture mask)
     {
-        if (mask != null)
+        if (mask == null)
+            return;
+
+        // Создаем стабильное и улучшенное представление маски
+        RenderTexture enhancedMask = ProcessMaskForStabilityAndVisualization(mask);
+
+        // Вызываем событие с улучшенной маской
+        TriggerSegmentationMaskUpdatedEvent(enhancedMask);
+
+        // Очищаем усиленную маску, так как TriggerSegmentationMaskUpdatedEvent должен был сделать свою копию
+        // НЕ используем ReleaseTemporary, так как не все текстуры созданы через GetTemporary
+        if (enhancedMask != mask && enhancedMask != lastSuccessfulMask)
         {
-            TriggerSegmentationMaskUpdatedEvent(mask);
+            // Просто отпускаем ссылку на текстуру, сборщик мусора сам её освободит
+            // Это безопаснее, чем вызывать ReleaseTemporary для не-временных текстур
         }
+    }
+
+    /// <summary>
+    /// Обрабатывает маску для стабилизации и визуального улучшения
+    /// </summary>
+    private RenderTexture ProcessMaskForStabilityAndVisualization(RenderTexture currentMask)
+    {
+        if (currentMask == null || !currentMask.IsCreated())
+        {
+            Debug.LogWarning("[WallSegmentation] Получена пустая или невалидная маска в ProcessMaskForStabilityAndVisualization");
+            return null;
+        }
+
+        // Временная текстура для обработки
+        RenderTexture tempMask = texturePool.GetTexture(currentMask.width, currentMask.height);
+        RenderTexture resultMask = null;
+
+        try
+        {
+            // Копируем входную маску во временную
+            Graphics.Blit(currentMask, tempMask);
+
+            // Анализируем качество маски
+            float maskQuality = AnalyzeMaskQuality(tempMask);
+
+            // Применяем пост-обработку с учетом качества
+            resultMask = ApplyPostProcessing(tempMask, maskQuality);
+
+            return resultMask;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[WallSegmentation] Ошибка в ProcessMaskForStabilityAndVisualization: {e.Message}\n{e.StackTrace}");
+
+            // В случае ошибки освобождаем resultMask, если он был создан
+            if (resultMask != null)
+            {
+                texturePool.ReleaseTexture(resultMask);
+            }
+
+            return currentMask;
+        }
+        finally
+        {
+            // Возвращаем временную текстуру в пул
+            texturePool.ReleaseTexture(tempMask);
+        }
+    }
+
+    /// <summary>
+    /// Применяет пост-обработку к маске с учетом качества
+    /// </summary>
+    private RenderTexture ApplyPostProcessing(RenderTexture inputMask, float quality)
+    {
+        // Создаем результирующую текстуру
+        RenderTexture resultMask = texturePool.GetTexture(inputMask.width, inputMask.height);
+
+        // Применяем улучшение маски
+        RenderTexture enhancedMask = EnhanceSegmentationMask(inputMask);
+
+        // Копируем результат в выходную текстуру
+        Graphics.Blit(enhancedMask, resultMask);
+
+        return resultMask;
+    }
+
+    /// <summary>
+    /// Анализирует качество маски (доля значимых пикселей)
+    /// </summary>
+    private float AnalyzeMaskQuality(RenderTexture mask)
+    {
+        if (mask == null || !mask.IsCreated())
+            return 0f;
+
+        // Создаем временную текстуру для анализа
+        Texture2D tempTexture = new Texture2D(mask.width, mask.height, TextureFormat.RGBA32, false);
+        RenderTexture previousRT = RenderTexture.active;
+        RenderTexture.active = mask;
+
+        // Считываем пиксели
+        tempTexture.ReadPixels(new Rect(0, 0, mask.width, mask.height), 0, 0);
+        tempTexture.Apply();
+        RenderTexture.active = previousRT;
+
+        // Анализируем качество (доля ненулевых красных пикселей для стен)
+        Color[] pixels = tempTexture.GetPixels();
+        int significantPixels = 0;
+
+        foreach (Color pixel in pixels)
+        {
+            // Проверяем, является ли пиксель значимым (красный канал для стен)
+            if (pixel.r > 0.5f) // Значительное значение красного канала
+            {
+                significantPixels++;
+            }
+        }
+
+        // Освобождаем ресурсы
+        Destroy(tempTexture);
+
+        // Возвращаем долю значимых пикселей
+        return (float)significantPixels / pixels.Length;
     }
 
     /// <summary>
@@ -239,11 +502,25 @@ public class WallSegmentation : MonoBehaviour
         // Отписываемся от событий
         Debug.Log("[WallSegmentation-OnDestroy] Отписка от событий AR...");
 
-        // Освобождаем текстуру
+        // Освобождаем текстуру сегментации
         if (segmentationMaskTexture != null)
         {
             segmentationMaskTexture.Release();
             Debug.Log("[WallSegmentation-OnDestroy] Освобождена текстура сегментации");
+        }
+
+        // Освобождаем также lastSuccessfulMask
+        if (lastSuccessfulMask != null)
+        {
+            lastSuccessfulMask.Release();
+            Debug.Log("[WallSegmentation-OnDestroy] Освобождена текстура lastSuccessfulMask");
+        }
+
+        // Освобождаем материал
+        if (segmentationMaterial != null)
+        {
+            Destroy(segmentationMaterial);
+            Debug.Log("[WallSegmentation-OnDestroy] Освобожден сегментационный материал");
         }
 
         // Освобождаем текстуру изображения
@@ -257,6 +534,13 @@ public class WallSegmentation : MonoBehaviour
         DisposeEngine();
 
         Debug.Log("[WallSegmentation-OnDestroy] Ресурсы успешно очищены");
+
+        // Очищаем пул текстур
+        if (texturePool != null)
+        {
+            texturePool.ClearAll();
+            Debug.Log("[WallSegmentation-OnDestroy] Очищен пул текстур");
+        }
     }
 
     /// <summary>
@@ -328,6 +612,9 @@ public class WallSegmentation : MonoBehaviour
         lastErrorMessage = null;
         consecutiveFailCount = 0;
 
+        // Инициализируем пул текстур
+        texturePool = new TexturePool(RenderTextureFormat.ARGB32);
+
         // Если маска не инициализирована, создаем ее
         if (segmentationMaskTexture == null)
         {
@@ -342,6 +629,28 @@ public class WallSegmentation : MonoBehaviour
         {
             cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
             Debug.Log("[WallSegmentation] ✅ Создана cameraTexture (" + cameraTexture.width + "x" + cameraTexture.height + ")");
+        }
+
+        // Инициализируем материал для постобработки, если его нет
+        if (segmentationMaterial == null)
+        {
+            try
+            {
+                Shader shader = Shader.Find("Hidden/SegmentationPostProcess");
+                if (shader != null)
+                {
+                    segmentationMaterial = new Material(shader);
+                    Debug.Log("[WallSegmentation] ✅ Создан материал с шейдером SegmentationPostProcess");
+                }
+                else
+                {
+                    Debug.LogWarning("[WallSegmentation] ⚠️ Шейдер SegmentationPostProcess не найден");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[WallSegmentation] ❌ Ошибка при создании материала: {e.Message}");
+            }
         }
 
         // Начинаем инициализацию модели
@@ -442,11 +751,12 @@ public class WallSegmentation : MonoBehaviour
         }
 
         // Освобождаем предыдущий экземпляр движка
-        if (worker != null || runtimeModel != null) {
+        if (worker != null || runtimeModel != null)
+        {
             if (shouldLogInit) Debug.Log("[WallSegmentation-InitializeSegmentation] Обнаружен существующий worker или runtimeModel. Вызов DisposeEngine...");
             DisposeEngine(); // DisposeEngine должен корректно обработать runtimeModel и worker
         }
-        
+
         string fullPathToModel = "";
         Model loadedModel = null;
 
@@ -458,20 +768,25 @@ public class WallSegmentation : MonoBehaviour
                 // В Sentis 2.x ModelAsset может содержать непосредственно модель или байты
                 // Попробуем сначала получить модель напрямую, если она там есть (может быть внутренним полем)
                 // Если нет, то ModelLoader.Load(ModelAsset) должен работать
-                try {
+                try
+                {
                     // Пытаемся получить модель через рефлексию, если поле 'model' существует, но не публично
                     var modelField = typeof(Unity.Sentis.ModelAsset).GetField("model", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                    if (modelField != null && modelField.GetValue(sentisModelAsset) is Model directModel) {
+                    if (modelField != null && modelField.GetValue(sentisModelAsset) is Model directModel)
+                    {
                         loadedModel = directModel;
                         if (shouldLogInit) Debug.Log("[WallSegmentation-InitializeSegmentation] Модель получена напрямую из Sentis.ModelAsset.model (через рефлексию).");
                     }
-                } catch (Exception reflectEx) {
+                }
+                catch (Exception reflectEx)
+                {
                     if (shouldLogInit) Debug.LogWarning($"[WallSegmentation-InitializeSegmentation] Не удалось получить модель через рефлексию из ModelAsset: {reflectEx.Message}");
                 }
 
-                if (loadedModel == null) {
-                     // Стандартный способ загрузки из ModelAsset, если он есть
-                    loadedModel = ModelLoader.Load(sentisModelAsset); 
+                if (loadedModel == null)
+                {
+                    // Стандартный способ загрузки из ModelAsset, если он есть
+                    loadedModel = ModelLoader.Load(sentisModelAsset);
                     if (shouldLogInit && loadedModel != null) Debug.Log("[WallSegmentation-InitializeSegmentation] Модель загружена через ModelLoader.Load(Sentis.ModelAsset).");
                 }
             }
@@ -479,7 +794,7 @@ public class WallSegmentation : MonoBehaviour
             {
                 if (shouldLogInit) Debug.LogWarning($"[WallSegmentation-InitializeSegmentation] modelAsset ({modelAsset.name}, тип: {modelAsset.GetType()}) не является Unity.Sentis.ModelAsset. Попытка загрузки по пути this.modelPath.");
             }
-            
+
             // Если модель не загружена из ModelAsset, пробуем по пути
             if (loadedModel == null && !string.IsNullOrEmpty(this.modelPath))
             {
@@ -497,10 +812,10 @@ public class WallSegmentation : MonoBehaviour
             }
             else if (loadedModel == null)
             {
-                 lastErrorMessage = "ModelAsset не является корректным Sentis.ModelAsset ИЛИ modelPath не указан/недействителен.";
-                 Debug.LogError($"[WallSegmentation-InitializeSegmentation] ❌ {lastErrorMessage}");
-                 isInitializationFailed = true;
-                 yield break;
+                lastErrorMessage = "ModelAsset не является корректным Sentis.ModelAsset ИЛИ modelPath не указан/недействителен.";
+                Debug.LogError($"[WallSegmentation-InitializeSegmentation] ❌ {lastErrorMessage}");
+                isInitializationFailed = true;
+                yield break;
             }
 
             if (loadedModel == null)
@@ -530,7 +845,7 @@ public class WallSegmentation : MonoBehaviour
                 // и если Dispose() для Model существует (убрали пока)
                 // if (this.runtimeModel != null && (modelAsset == null || !(modelAsset is Unity.Sentis.ModelAsset))) 
                 // { this.runtimeModel.Dispose(); }
-                this.runtimeModel = null; 
+                this.runtimeModel = null;
                 yield break;
             }
             if (shouldLogInit) Debug.Log($"[WallSegmentation-InitializeSegmentation] Worker успешно создан и присвоен this.worker. (this.worker is null: {this.worker == null})");
@@ -566,7 +881,12 @@ public class WallSegmentation : MonoBehaviour
             Debug.LogError($"[WallSegmentation-InitializeSegmentation] ❌ Ошибка при инициализации модели: {e.Message}\n{e.StackTrace}");
             isInitializationFailed = true;
             lastErrorMessage = e.Message;
-            yield break;
+            // yield break; // Убрали yield break, чтобы isInitializing установился в false
+        }
+        finally // Добавляем блок finally
+        {
+            isInitializing = false; // Устанавливаем флаг в false здесь
+            if (shouldLogInit) Debug.Log($"[WallSegmentation-InitializeSegmentation] Процесс инициализации завершен. isInitializing = {isInitializing}");
         }
     }
 
@@ -800,7 +1120,8 @@ public class WallSegmentation : MonoBehaviour
         if (isSimulation)
         {
             Texture2D result = GetCameraTextureFromSimulation();
-            if (result == null) {
+            if (result == null)
+            {
                 Debug.LogError("[WallSegmentation-GetCameraTexture] ❌ GetCameraTextureFromSimulation вернул null");
             }
             return result;
@@ -852,8 +1173,9 @@ public class WallSegmentation : MonoBehaviour
         else
         {
             // Лог выводится только раз в 30 кадров
-            if (Time.frameCount % 30 == 0) {
-            Debug.LogWarning("[WallSegmentation-GetCameraTexture] TryAcquireLatestCpuImage не удалось получить изображение. Используем альтернативный метод для XR Simulation.");
+            if (Time.frameCount % 30 == 0)
+            {
+                Debug.LogWarning("[WallSegmentation-GetCameraTexture] TryAcquireLatestCpuImage не удалось получить изображение. Используем альтернативный метод для XR Simulation.");
             }
 
             // Альтернативный метод для XR Simulation - получение изображения с камеры напрямую
@@ -872,46 +1194,48 @@ public class WallSegmentation : MonoBehaviour
         {
             arCamera = cam;
         }
-        
+
         // Если не нашли камеру через ARCameraManager, ищем через XROrigin
         if (arCamera == null && xrOrigin != null)
         {
             arCamera = xrOrigin.Camera;
         }
-        
+
         // Если до сих пор нет камеры, ищем любую Camera с тегом MainCamera
         if (arCamera == null)
         {
             arCamera = Camera.main;
         }
-        
+
         // Если всё ещё нет камеры, ищем специальную SimulationCamera
         if (arCamera == null)
         {
             arCamera = GameObject.FindObjectsOfType<Camera>().FirstOrDefault(c => c.name.Contains("Simulation"));
         }
-        
+
         // Если камеры по-прежнему нет, показываем ошибку и возвращаем null
         if (arCamera == null)
         {
             // Лог только раз в 60 кадров
-            if (Time.frameCount % 60 == 0) {
+            if (Time.frameCount % 60 == 0)
+            {
                 Debug.LogError("[WallSegmentation-GetCameraTextureFromSimulation] ❌ Не удалось найти камеру для получения изображения");
             }
             return null;
         }
-        
+
         // Сохраняем текущий culling mask и очистку
         int originalCullingMask = arCamera.cullingMask;
         CameraClearFlags originalClearFlags = arCamera.clearFlags;
         Color originalBackgroundColor = arCamera.backgroundColor; // Сохраняем цвет фона
-        
-        
+
+
         // Временно устанавливаем параметры для рендеринга
         // Исключаем слой UI (по умолчанию слой 5)
         int uiLayer = LayerMask.NameToLayer("UI");
         int layersToExclude = 0;
-        if (uiLayer != -1) {
+        if (uiLayer != -1)
+        {
             layersToExclude |= (1 << uiLayer);
         }
         // При необходимости здесь можно добавить другие слои для исключения
@@ -923,42 +1247,42 @@ public class WallSegmentation : MonoBehaviour
         arCamera.cullingMask = ~layersToExclude; // Рендерить все, КРОМЕ исключенных слоев
         arCamera.clearFlags = CameraClearFlags.SolidColor;
         arCamera.backgroundColor = Color.clear; // Используем прозрачный фон
-        
+
         // Выполняем рендеринг // Этот вызов Render() здесь может быть не нужен, если следующий Render() с targetTexture покрывает все.
         // arCamera.Render(); 
-        
+
         // Создаем RenderTexture для захвата изображения
         RenderTexture rt = RenderTexture.GetTemporary(inputResolution.x, inputResolution.y, 24, RenderTextureFormat.ARGB32);
         RenderTexture prevRT = RenderTexture.active;
         RenderTexture.active = rt;
         arCamera.targetTexture = rt;
-        
+
         // Рендерим с установленной targetTexture
         arCamera.Render();
-        
+
         // Копируем изображение в нашу текстуру
         if (cameraTexture == null)
         {
             Debug.LogWarning("[WallSegmentation-GetCameraTextureFromSimulation] ⚠️ cameraTexture была null, создаем новую");
             cameraTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
         }
-        
+
         cameraTexture.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
         cameraTexture.Apply();
-        
+
         // Восстанавливаем состояние камеры и RenderTexture
         arCamera.targetTexture = null;
         RenderTexture.active = prevRT;
         RenderTexture.ReleaseTemporary(rt);
-        
+
         // Восстанавливаем оригинальные параметры камеры
         arCamera.cullingMask = originalCullingMask;
         arCamera.clearFlags = originalClearFlags;
         arCamera.backgroundColor = originalBackgroundColor;
-        
+
         // Добавляем дамп состояния, чтобы увидеть, в каком состоянии система
         // this.DumpCurrentState(); // Раскомментируйте для отладки, если необходимо
-        
+
         return cameraTexture;
     }
 
@@ -1024,7 +1348,7 @@ public class WallSegmentation : MonoBehaviour
             lastErrorMessage = "Модель не инициализирована или worker/runtimeModel не доступны.";
             // if (shouldLogExec) Debug.LogError($"[WallSegmentation-PerformSegmentation] ❌ {lastErrorMessage}");
             isProcessing = false;
-            
+
             if (!isModelInitialized && !isInitializing)
             {
                 // if (shouldLogExec) Debug.LogWarning("[WallSegmentation-PerformSegmentation] ⚠️ Модель не инициализирована, попытка повторной инициализации...");
@@ -1044,7 +1368,7 @@ public class WallSegmentation : MonoBehaviour
             // Если CreateTensorFromPixels сам обрабатывает изменение размера, этот блок можно упростить/удалить.
             if (inputTexture.width != inputResolution.x || inputTexture.height != inputResolution.y)
             {
-                 if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] 🔄 Изменяем размер входной текстуры с {inputTexture.width}x{inputTexture.height} на {inputResolution.x}x{inputResolution.y}");
+                if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] 🔄 Изменяем размер входной текстуры с {inputTexture.width}x{inputTexture.height} на {inputResolution.x}x{inputResolution.y}");
                 RenderTexture tempRT = RenderTexture.GetTemporary(inputResolution.x, inputResolution.y, 0, RenderTextureFormat.ARGB32);
                 Graphics.Blit(inputTexture, tempRT);
                 Texture2D resizedTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
@@ -1053,18 +1377,18 @@ public class WallSegmentation : MonoBehaviour
                 resizedTexture.Apply();
                 RenderTexture.active = null;
                 RenderTexture.ReleaseTemporary(tempRT);
-                
+
                 // Если inputTexture была временной (например, из GetCameraTextureFromSimulation), её нужно уничтожить, если она больше не нужна
                 // if (inputTexture != cameraTexture) Destroy(inputTexture); // Осторожно с этим, если inputTexture - это cameraTexture
                 inputTexture = resizedTexture; // Используем измененную текстуру
             }
 
             inputTensor = CreateTensorFromPixels(inputTexture); // Предполагаем, что inputTexture теперь правильного размера
-            
+
             // Если inputTexture была создана как resizedTexture, ее нужно уничтожить после создания тензора
             if (inputTexture.name.StartsWith("ResizedTexture_")) // Пример проверки, если вы так именуете их
             {
-                 Destroy(inputTexture);
+                Destroy(inputTexture);
             }
 
 
@@ -1144,9 +1468,10 @@ public class WallSegmentation : MonoBehaviour
             }
 
             string outputName = runtimeModel.outputs[0].name;
-            Tensor peekedBaseTensor = worker.PeekOutput(outputName); 
+            Tensor peekedBaseTensor = worker.PeekOutput(outputName);
 
-            if (peekedBaseTensor == null) {
+            if (peekedBaseTensor == null)
+            {
                 lastErrorMessage = $"PeekOutput вернул null для выхода '{outputName}'.";
                 Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ❌ {lastErrorMessage}");
                 RenderSimpleMask();
@@ -1154,7 +1479,7 @@ public class WallSegmentation : MonoBehaviour
                 inputTensor.Dispose();
                 yield break;
             }
-            
+
             // if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Peeked output tensor (base): {peekedBaseTensor.shape}");
 
             // Дожидаемся завершения операций на тензоре
@@ -1172,11 +1497,12 @@ public class WallSegmentation : MonoBehaviour
                 inputTensor.Dispose();
                 yield break;
             }
-            
+
             // if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Output tensor '{outputName}' успешно преобразован в Tensor<float>. Форма: {peekedTensorFloat.shape}");
 
             TensorShape outputShape = peekedTensorFloat.shape;
-            if (outputShape.length == 0) {
+            if (outputShape.length == 0)
+            {
                 lastErrorMessage = $"Выходной тензор '{outputName}' имеет нулевую длину формы: {outputShape}.";
                 Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ❌ {lastErrorMessage}");
                 RenderSimpleMask();
@@ -1184,7 +1510,7 @@ public class WallSegmentation : MonoBehaviour
                 inputTensor.Dispose();
                 yield break;
             }
-            
+
             float[] dataArray = null;
             try
             {
@@ -1196,13 +1522,13 @@ public class WallSegmentation : MonoBehaviour
             {
                 lastErrorMessage = $"Ошибка при вызове DownloadToArray() для тензора '{outputName}': {ex.Message}";
                 Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ❌ {lastErrorMessage} \nStackTrace: {ex.StackTrace}");
-                RenderSimpleMask(); 
-                isProcessing = false; 
+                RenderSimpleMask();
+                isProcessing = false;
                 inputTensor.Dispose();
-                yield break; 
+                yield break;
             }
 
-            if (dataArray == null) 
+            if (dataArray == null)
             {
                 lastErrorMessage = $"DownloadToArray() для тензора '{outputName}' вернул null.";
                 Debug.LogError($"[WallSegmentation-ExecuteModelAndProcessResultCoroutine] ❌ {lastErrorMessage}");
@@ -1212,7 +1538,7 @@ public class WallSegmentation : MonoBehaviour
                 yield break;
             }
 
-            ProcessSegmentationResult(dataArray, outputShape); 
+            ProcessSegmentationResult(dataArray, outputShape);
         }
         catch (Exception ex)
         {
@@ -1227,7 +1553,7 @@ public class WallSegmentation : MonoBehaviour
                 inputTensor.Dispose();
                 // if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] 🧹 Входной тензор освобожден.");
             }
-            isProcessing = false; 
+            isProcessing = false;
             // if (shouldLogDetailedExec) Debug.Log("[WallSegmentation-ExecuteModelAndProcessResultCoroutine] Установлен флаг isProcessing = false (finally). Корутина завершена.");
         }
     }
@@ -1375,7 +1701,7 @@ public class WallSegmentation : MonoBehaviour
     /// <summary>
     /// Вычисляет индекс для доступа к данным тензора в линеаризованном массиве
     /// </summary>
-    private int IndexFromCoordinates(int batch, int channel, int height, int width, 
+    private int IndexFromCoordinates(int batch, int channel, int height, int width,
                     int batchSize, int numChannels, int imgHeight, int imgWidth)
     {
         return batch * numChannels * imgHeight * imgWidth + channel * imgHeight * imgWidth + height * imgWidth + width;
@@ -1384,7 +1710,7 @@ public class WallSegmentation : MonoBehaviour
     /// <summary>
     /// Анализирует структуру тензора и выводит информацию о его значениях
     /// </summary>
-    private void AnalyzeTensorData(float[] tensorData, int batch, int classes, int height, int width) 
+    private void AnalyzeTensorData(float[] tensorData, int batch, int classes, int height, int width)
     {
         if (tensorData == null || tensorData.Length == 0)
         {
@@ -1406,11 +1732,11 @@ public class WallSegmentation : MonoBehaviour
         Dictionary<int, float> topClasses = new Dictionary<int, float>();
 
         // Проходим по всем классам для центрального пикселя
-        for (int c = 0; c < classes; c++) 
+        for (int c = 0; c < classes; c++)
         {
             int index = IndexFromCoordinates(0, c, sampleY, sampleX, batch, classes, height, width);
             float value = tensorData[index];
-            
+
             // Сохраняем топ классы
             if (topClasses.Count < 5 || value > topClasses.Values.Min())
             {
@@ -1422,7 +1748,7 @@ public class WallSegmentation : MonoBehaviour
                     topClasses.Remove(minClass);
                 }
             }
-            
+
             // Ищем класс с максимальной вероятностью
             if (value > maxClassValue)
             {
@@ -1476,20 +1802,20 @@ public class WallSegmentation : MonoBehaviour
                 for (int w = 0; w < width; w++)
                 {
                     // Простая логика симуляции - выделяем стены по краям и в центре
-                    bool isWall = (h < height * 0.2f) || (h > height * 0.8f) || 
+                    bool isWall = (h < height * 0.2f) || (h > height * 0.8f) ||
                                   (w < width * 0.2f) || (w > width * 0.8f) ||
                                   (Math.Abs(h - height / 2) < height * 0.1f && w > width * 0.3f && w < width * 0.7f);
-                    
+
                     bool isFloor = !isWall && (h > height * 0.5f);
 
                     // Задаем вероятности для классов
                     for (int c = 0; c < numClasses; c++)
                     {
                         int idx = IndexFromCoordinates(b, c, h, w, 1, numClasses, height, width);
-                        
+
                         // По умолчанию вероятность низкая
                         tensorData[idx] = 0.01f + (float)random.NextDouble() * 0.03f;
-                        
+
                         // Для целевых классов задаем высокую вероятность
                         if ((c == wallClass && isWall) || (c == floorClass && isFloor))
                         {
@@ -1554,7 +1880,7 @@ public class WallSegmentation : MonoBehaviour
             int height = inputTexture.height;
             int width = inputTexture.width;
             // Данные для тензора в формате NCHW (NumChannels x Height x Width)
-            float[] pixelsData = new float[3 * height * width]; 
+            float[] pixelsData = new float[3 * height * width];
 
             for (int y = 0; y < height; y++)
             {
@@ -1571,35 +1897,35 @@ public class WallSegmentation : MonoBehaviour
                     pixelsData[(2 * height * width) + (y * width) + x] = (pixel.b - mean[2]) / std[2];
                 }
             }
-            
-            try 
+
+            try
             {
                 // Используем правильный TensorShape из Unity.Sentis
                 return new Tensor<float>(
-                    new Unity.Sentis.TensorShape(1, 3, inputTexture.height, inputTexture.width), 
+                    new Unity.Sentis.TensorShape(1, 3, inputTexture.height, inputTexture.width),
                     pixelsData
                 );
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[TryCreateXRSimulationTensor] Не удалось создать тензор: {ex.Message}");
-                
+
                 // Пробуем альтернативный способ создания тензора при помощи рефлексии
                 Type tensorType = typeof(Tensor<float>);
                 var constructors = tensorType.GetConstructors();
                 foreach (var ctor in constructors)
                 {
                     var parameters = ctor.GetParameters();
-                    if (parameters.Length == 2 && 
-                        parameters[0].ParameterType == typeof(Unity.Sentis.TensorShape) && 
+                    if (parameters.Length == 2 &&
+                        parameters[0].ParameterType == typeof(Unity.Sentis.TensorShape) &&
                         parameters[1].ParameterType == typeof(float[]))
                     {
-                        try 
+                        try
                         {
-                            return (Tensor<float>)ctor.Invoke(new object[] 
-                            { 
+                            return (Tensor<float>)ctor.Invoke(new object[]
+                            {
                                 new Unity.Sentis.TensorShape(1, 3, inputTexture.height, inputTexture.width),
-                                pixelsData 
+                                pixelsData
                             });
                         }
                         catch (Exception innerEx)
@@ -1608,7 +1934,7 @@ public class WallSegmentation : MonoBehaviour
                         }
                     }
                 }
-                
+
                 return null;
             }
         }
@@ -1635,42 +1961,42 @@ public class WallSegmentation : MonoBehaviour
         {
             // Создаем одноканальный тензор
             float[] pixelsData = new float[inputTexture.width * inputTexture.height];
-            
+
             // Преобразуем пиксели в тензор, используя только яркость
             Color[] pixels = inputTexture.GetPixels();
             for (int i = 0; i < pixels.Length; i++)
             {
                 pixelsData[i] = pixels[i].grayscale;
             }
-            
-            try 
+
+            try
             {
                 // Используем правильный TensorShape из Unity.Sentis
                 return new Tensor<float>(
-                    new Unity.Sentis.TensorShape(1, 1, inputTexture.height, inputTexture.width), 
+                    new Unity.Sentis.TensorShape(1, 1, inputTexture.height, inputTexture.width),
                     pixelsData
                 );
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[CreateSingleChannelTensor] Не удалось создать тензор: {ex.Message}");
-                
+
                 // Пробуем альтернативный способ создания тензора при помощи рефлексии
                 Type tensorType = typeof(Tensor<float>);
                 var constructors = tensorType.GetConstructors();
                 foreach (var ctor in constructors)
                 {
                     var parameters = ctor.GetParameters();
-                    if (parameters.Length == 2 && 
-                        parameters[0].ParameterType == typeof(Unity.Sentis.TensorShape) && 
+                    if (parameters.Length == 2 &&
+                        parameters[0].ParameterType == typeof(Unity.Sentis.TensorShape) &&
                         parameters[1].ParameterType == typeof(float[]))
                     {
-                        try 
+                        try
                         {
-                            return (Tensor<float>)ctor.Invoke(new object[] 
-                            { 
+                            return (Tensor<float>)ctor.Invoke(new object[]
+                            {
                                 new Unity.Sentis.TensorShape(1, 1, inputTexture.height, inputTexture.width),
-                                pixelsData 
+                                pixelsData
                             });
                         }
                         catch (Exception innerEx)
@@ -1679,7 +2005,7 @@ public class WallSegmentation : MonoBehaviour
                         }
                     }
                 }
-                
+
                 return null;
             }
         }
@@ -1697,7 +2023,7 @@ public class WallSegmentation : MonoBehaviour
     {
         // Реализация сохранения отладочной маски
         Debug.Log("[WallSegmentation-SaveDebugMask] Сохранение отладочной маски #" + debugMaskCounter);
-        
+
         try
         {
             // Создаем директорию, если ее нет
@@ -1706,7 +2032,7 @@ public class WallSegmentation : MonoBehaviour
             {
                 Directory.CreateDirectory(dirPath);
             }
-            
+
             // Сохраняем текущее изображение с камеры
             if (cameraTexture != null)
             {
@@ -1715,23 +2041,23 @@ public class WallSegmentation : MonoBehaviour
                 File.WriteAllBytes(cameraFilePath, cameraBytes);
                 Debug.Log($"[WallSegmentation-SaveDebugMask] ✅ Сохранено изображение с камеры: {cameraFilePath}");
             }
-            
+
             // Сохраняем текущую маску сегментации
             if (segmentationMaskTexture != null && segmentationMaskTexture.IsCreated())
             {
                 RenderTexture prevRT = RenderTexture.active;
                 RenderTexture.active = segmentationMaskTexture;
-                
+
                 Texture2D maskCopy = new Texture2D(segmentationMaskTexture.width, segmentationMaskTexture.height, TextureFormat.RGBA32, false);
                 maskCopy.ReadPixels(new Rect(0, 0, segmentationMaskTexture.width, segmentationMaskTexture.height), 0, 0);
                 maskCopy.Apply();
-                
+
                 RenderTexture.active = prevRT;
-                
+
                 string maskFilePath = Path.Combine(dirPath, $"segmentation_mask_{debugMaskCounter}.png");
                 byte[] maskBytes = maskCopy.EncodeToPNG();
                 File.WriteAllBytes(maskFilePath, maskBytes);
-                
+
                 Destroy(maskCopy);
                 Debug.Log($"[WallSegmentation-SaveDebugMask] ✅ Сохранена маска сегментации: {maskFilePath}");
             }
@@ -1777,28 +2103,29 @@ public class WallSegmentation : MonoBehaviour
             }
             return;
         }
-        
+
         // Получаем изображение с камеры
         bool usingSimulation = false;
         Texture2D cameraPixels = GetCameraTexture();
-        
+
         if (cameraPixels == null)
         {
             consecutiveFailCount++;
             usingSimulation = true;
-            
+
             // if (Time.frameCount % 50 == 0) {
             // Debug.LogWarning($"[WallSegmentation-Update] ⚠️ Не удалось получить изображение с камеры (попыток: {consecutiveFailCount})");
             // }
-            
+
             // Проверяем нужно ли использовать симуляцию
-            if (useSimulationIfNoCamera && consecutiveFailCount >= failureThresholdForSimulation) 
+            if (useSimulationIfNoCamera && consecutiveFailCount >= failureThresholdForSimulation)
             {
-                if (!usingSimulatedSegmentation) {
+                if (!usingSimulatedSegmentation)
+                {
                     // Debug.Log($"[WallSegmentation-Update] 🔄 Включение режима симуляции после {consecutiveFailCount} неудачных попыток");
                     usingSimulatedSegmentation = true;
                 }
-                
+
                 cameraPixels = GetCameraTextureFromSimulation();
                 // if (cameraPixels != null)
                 // {
@@ -1817,7 +2144,7 @@ public class WallSegmentation : MonoBehaviour
             // Debug.Log($"[WallSegmentation-Update] ✅ Получено изображение с камеры (режим: {(usingSimulation ? "симуляция" : "реальное изображение")})");
             // }
         }
-        
+
         // Если не удалось получить изображение даже из симуляции, выходим
         if (cameraPixels == null)
         {
@@ -1826,7 +2153,7 @@ public class WallSegmentation : MonoBehaviour
             // }
             return;
         }
-        
+
         // Выполняем сегментацию с использованием полученного изображения
         PerformSegmentation(cameraPixels);
     }
@@ -1855,14 +2182,14 @@ public class WallSegmentation : MonoBehaviour
 
             long length = tensor.shape.length;
             data = new float[length];
-            
+
             Debug.Log($"[WallSegmentation-TryGetTensorData] Попытка чтения тензора формы ({batch}, {channels}, {height}, {width}). Общая длина: {length}");
 
             // Прямой доступ к данным, если это возможно (зависит от реализации Tensor<T>)
             // Это наиболее вероятный способ, если ToReadOnlyArray и MakeReadable недоступны.
             // Предполагается, что Tensor<float> реализует доступ по индексу.
             // Это предположение может быть неверным.
-            
+
             int dataIndex = 0;
             for (int b = 0; b < batch; ++b)
             {
@@ -1896,7 +2223,7 @@ public class WallSegmentation : MonoBehaviour
                 Debug.LogWarning($"[WallSegmentation-TryGetTensorData] ⚠️ Прочитано {dataIndex} элементов, ожидалось {length}. Возможна ошибка в логике чтения.");
                 // Можно вернуть false или продолжить с частично прочитанными данными, в зависимости от требований
             }
-            
+
             Debug.Log($"[WallSegmentation-TryGetTensorData] ✅ Данные тензора успешно прочитаны (прочитано {dataIndex} элементов).");
             return true;
         }
@@ -1958,7 +2285,7 @@ public class WallSegmentation : MonoBehaviour
         // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
         // Debug.LogWarning($"[WallSegmentation-ProcessSegmentationResult] Размер батча {batchSize} не равен 1. Обрабатывается только первый элемент.");
         // }
-        
+
         // if (wallClassIndex < 0 || wallClassIndex >= numClasses)
         // {
         // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
@@ -2003,25 +2330,25 @@ public class WallSegmentation : MonoBehaviour
                     {
                         float wallLogit = dataArray[wallDataIndex];
                         float wallProbability = 1.0f / (1.0f + Mathf.Exp(-wallLogit));
-                        if (wallProbability > segmentationConfidenceThreshold)
+                        if (wallProbability > wallConfidence) // ИЗМЕНЕНО: используется wallConfidence
                         {
                             rChannelValue = 255;
                             pixelsDetectedAsWall++;
                         }
                     }
-                    else if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0 && x ==0 && y == 0) // Лог только один раз
-                         Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] wallDataIndex ({wallDataIndex}) выходит за пределы dataArray ({dataArray.Length}).");
+                    else if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0 && x == 0 && y == 0) // Лог только один раз
+                        Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] wallDataIndex ({wallDataIndex}) выходит за пределы dataArray ({dataArray.Length}).");
                 }
 
                 // Обработка пола
-                if (detectFloor && floorClassIndex >=0 && floorClassIndex < numClasses)
+                if (detectFloor && floorClassIndex >= 0 && floorClassIndex < numClasses)
                 {
                     int floorDataIndex = (floorClassIndex * height * width) + (y * width) + x;
-                     if (floorDataIndex < dataArray.Length)
+                    if (floorDataIndex < dataArray.Length)
                     {
                         float floorLogit = dataArray[floorDataIndex];
                         float floorProbability = 1.0f / (1.0f + Mathf.Exp(-floorLogit));
-                        if (floorProbability > floorConfidenceThreshold) // Используем floorConfidenceThreshold
+                        if (floorProbability > floorConfidence) // ИЗМЕНЕНО: используется floorConfidence
                         {
                             gChannelValue = 255;
                             pixelsDetectedAsFloor++;
@@ -2030,22 +2357,22 @@ public class WallSegmentation : MonoBehaviour
                     else if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0 && x == 0 && y == 0) // Лог только один раз
                         Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] floorDataIndex ({floorDataIndex}) выходит за пределы dataArray ({dataArray.Length}).");
                 }
-                
+
                 pixelColors[y * width + x] = new Color32(rChannelValue, gChannelValue, 0, 255);
             }
         }
-        
+
         // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
         // {
-        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как стена (вероятность > {segmentationConfidenceThreshold}): {pixelsDetectedAsWall} из {width * height}");
-        // if(detectFloor) Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как пол (вероятность > {floorConfidenceThreshold}): {pixelsDetectedAsFloor} из {width * height}");
+        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как стена (вероятность > {wallConfidence}): {pixelsDetectedAsWall} из {width * height}"); // ИЗМЕНЕНО для лога
+        // if(detectFloor) Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как пол (вероятность > {floorConfidence}): {pixelsDetectedAsFloor} из {width * height}"); // ИЗМЕНЕНО для лога
         // }
 
         tempMaskTexture.SetPixels32(pixelColors); // ИЗМЕНЕНО: SetPixels32
         tempMaskTexture.Apply();
 
         Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
-        Destroy(tempMaskTexture); 
+        Destroy(tempMaskTexture);
 
         // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
         // {
@@ -2056,9 +2383,9 @@ public class WallSegmentation : MonoBehaviour
 
         if (saveDebugMask)
         {
-            SaveTextureAsPNG(segmentationMaskTexture, Path.Combine(Application.dataPath, debugSavePath), $"WallAndFloorMask_W{wallClassIndex}_F{floorClassIndex}_ProbW{segmentationConfidenceThreshold}_ProbF{floorConfidenceThreshold}.png");
+            SaveTextureAsPNG(segmentationMaskTexture, Path.Combine(Application.dataPath, debugSavePath), $"WallAndFloorMask_W{wallClassIndex}_F{floorClassIndex}_ProbW{wallConfidence}_ProbF{floorConfidence}.png"); // ИЗМЕНЕНО для имени файла
         }
-        
+
         // Убрали лог отсюда, т.к. он был до реализации логики
         // if (detectFloor)
         // {
@@ -2071,5 +2398,243 @@ public class WallSegmentation : MonoBehaviour
     private void SaveTextureAsPNG(RenderTexture rt, string directoryPath, string fileName)
     {
         // ... existing code ...
+    }
+
+    /// <summary>
+    /// Применяет улучшения к маске сегментации для повышения визуального качества
+    /// </summary>
+    private RenderTexture EnhanceSegmentationMask(RenderTexture inputMask)
+    {
+        if (inputMask == null || !inputMask.IsCreated())
+            return inputMask;
+
+        // Если улучшения отключены, возвращаем исходную маску
+        if (!applyMaskSmoothing && !enhanceEdges && !enhanceContrast)
+            return inputMask;
+
+        // Создаем временные текстуры для обработки
+        RenderTexture tempRT1 = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
+        RenderTexture tempRT2 = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
+
+        try
+        {
+            // Проверяем, доступен ли материал для эффектов постобработки
+            if (segmentationMaterial == null)
+            {
+                try
+                {
+                    // Пытаемся создать материал на лету
+                    Shader shader = Shader.Find("Hidden/SegmentationPostProcess");
+                    if (shader != null)
+                    {
+                        segmentationMaterial = new Material(shader);
+                        Debug.Log("[WallSegmentation] ✅ Создан новый материал для постобработки");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[WallSegmentation] ⚠️ Не удалось создать материал на лету: {e.Message}");
+                }
+            }
+
+            // Копируем исходную маску во временную текстуру
+            Graphics.Blit(inputMask, tempRT1);
+
+            // Применяем постобработку с использованием шейдера, если он доступен
+            if (segmentationMaterial != null)
+            {
+                // Применяем размытие по Гауссу (Pass 1)
+                if (applyMaskSmoothing)
+                {
+                    segmentationMaterial.SetFloat("_BlurSize", maskBlurSize);
+                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 1); // Pass 1: Blur
+                    // Меняем местами текстуры (результат в tempRT1)
+                    RenderTexture temp = tempRT1;
+                    tempRT1 = tempRT2;
+                    tempRT2 = temp;
+                }
+
+                // Повышаем резкость (Pass 2)
+                if (enhanceEdges)
+                {
+                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 2); // Pass 2: Sharpen
+                    // Меняем местами текстуры (результат в tempRT1)
+                    RenderTexture temp = tempRT1;
+                    tempRT1 = tempRT2;
+                    tempRT2 = temp;
+                }
+
+                // Повышаем контраст (Pass 3)
+                if (enhanceContrast)
+                {
+                    segmentationMaterial.SetFloat("_Contrast", contrastMultiplier);
+                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 3); // Pass 3: Contrast
+                    // Меняем местами текстуры (результат в tempRT1)
+                    RenderTexture temp = tempRT1;
+                    tempRT1 = tempRT2;
+                    tempRT2 = temp;
+                }
+            }
+            else
+            {
+                // Если шейдер недоступен, используем индивидуальные методы
+                // Применяем сглаживание, если оно включено
+                if (applyMaskSmoothing)
+                {
+                    ApplyGaussianBlur(tempRT1, tempRT2, maskBlurSize);
+                    // Меняем местами текстуры (результат в tempRT1)
+                    RenderTexture temp = tempRT1;
+                    tempRT1 = tempRT2;
+                    tempRT2 = temp;
+                }
+
+                // Повышаем резкость краев, если включено
+                if (enhanceEdges)
+                {
+                    ApplySharpen(tempRT1, tempRT2);
+                    // Меняем местами текстуры (результат в tempRT1)
+                    RenderTexture temp = tempRT1;
+                    tempRT1 = tempRT2;
+                    tempRT2 = temp;
+                }
+
+                // Повышаем контраст, если включено
+                if (enhanceContrast)
+                {
+                    ApplyContrast(tempRT1, tempRT2, contrastMultiplier);
+                    // Меняем местами текстуры (результат в tempRT1)
+                    RenderTexture temp = tempRT1;
+                    tempRT1 = tempRT2;
+                    tempRT2 = temp;
+                }
+            }
+
+            // Важно: не создаем новую текстуру каждый раз, это приводит к утечкам
+            // Вместо этого модифицируем входную текстуру и возвращаем её
+            Graphics.Blit(tempRT1, inputMask);
+            return inputMask;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[WallSegmentation] ❌ Ошибка при улучшении маски: {e.Message}");
+            // В случае ошибки просто вернуть исходную маску
+            return inputMask;
+        }
+        finally
+        {
+            // Освобождаем временные текстуры
+            RenderTexture.ReleaseTemporary(tempRT1);
+            RenderTexture.ReleaseTemporary(tempRT2);
+        }
+    }
+
+    /// <summary>
+    /// Применяет размытие по Гауссу к текстуре
+    /// </summary>
+    private void ApplyGaussianBlur(RenderTexture source, RenderTexture destination, int blurSize)
+    {
+        try
+        {
+            // Используем Material для размытия, если он есть
+            if (segmentationMaterial != null)
+            {
+                // Сохраняем оригинальное значение ключевого слова
+                bool originalValue = segmentationMaterial.IsKeywordEnabled("_GAUSSIAN_BLUR");
+
+                // Активируем ключевое слово для размытия
+                segmentationMaterial.EnableKeyword("_GAUSSIAN_BLUR");
+                segmentationMaterial.SetFloat("_BlurSize", blurSize);
+
+                // Применяем шейдер
+                Graphics.Blit(source, destination, segmentationMaterial);
+
+                // Восстанавливаем оригинальное значение
+                if (!originalValue)
+                    segmentationMaterial.DisableKeyword("_GAUSSIAN_BLUR");
+            }
+            else
+            {
+                // Если нет материала, просто копируем источник в назначение
+                Graphics.Blit(source, destination);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[WallSegmentation] Ошибка при применении размытия: {e.Message}. Используем простое копирование.");
+            Graphics.Blit(source, destination);
+        }
+    }
+
+    /// <summary>
+    /// Повышает резкость текстуры для выделения краев
+    /// </summary>
+    private void ApplySharpen(RenderTexture source, RenderTexture destination)
+    {
+        try
+        {
+            // Используем Material для повышения резкости, если он есть
+            if (segmentationMaterial != null)
+            {
+                // Сохраняем оригинальное значение ключевого слова
+                bool originalValue = segmentationMaterial.IsKeywordEnabled("_SHARPEN");
+
+                // Активируем ключевое слово для повышения резкости
+                segmentationMaterial.EnableKeyword("_SHARPEN");
+
+                // Применяем шейдер
+                Graphics.Blit(source, destination, segmentationMaterial);
+
+                // Восстанавливаем оригинальное значение
+                if (!originalValue)
+                    segmentationMaterial.DisableKeyword("_SHARPEN");
+            }
+            else
+            {
+                // Если нет материала, просто копируем источник в назначение
+                Graphics.Blit(source, destination);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[WallSegmentation] Ошибка при повышении резкости: {e.Message}. Используем простое копирование.");
+            Graphics.Blit(source, destination);
+        }
+    }
+
+    /// <summary>
+    /// Повышает контраст текстуры
+    /// </summary>
+    private void ApplyContrast(RenderTexture source, RenderTexture destination, float contrast)
+    {
+        try
+        {
+            // Используем Material для повышения контраста, если он есть
+            if (segmentationMaterial != null)
+            {
+                // Сохраняем оригинальное значение ключевого слова
+                bool originalValue = segmentationMaterial.IsKeywordEnabled("_CONTRAST");
+
+                // Активируем ключевое слово для повышения контраста
+                segmentationMaterial.EnableKeyword("_CONTRAST");
+                segmentationMaterial.SetFloat("_Contrast", contrast);
+
+                // Применяем шейдер
+                Graphics.Blit(source, destination, segmentationMaterial);
+
+                // Восстанавливаем оригинальное значение
+                if (!originalValue)
+                    segmentationMaterial.DisableKeyword("_CONTRAST");
+            }
+            else
+            {
+                // Если нет материала, просто копируем источник в назначение
+                Graphics.Blit(source, destination);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[WallSegmentation] Ошибка при повышении контраста: {e.Message}. Используем простое копирование.");
+            Graphics.Blit(source, destination);
+        }
     }
 }
