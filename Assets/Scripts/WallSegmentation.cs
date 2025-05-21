@@ -46,10 +46,9 @@ public class WallSegmentation : MonoBehaviour
     public bool forceXRSimulationCapture = true;
 
     [Header("Настройки сегментации")]
-    [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1; // Стена
+    [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 0;     // Стена
     [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = -1; // Пол (если есть, иначе -1)
-    [Tooltip("Порог вероятности для определения стены")]
-    [SerializeField, Range(0.01f, 1.0f)] private float wallConfidence = 0.9f; // ИЗМЕНЕНО: было 0.7f, пробуем значительно выше
+    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.5f; // Изменено минимальное значение с 0.01f на 0.0001f
     [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.5f;
     [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = false;
 
@@ -2261,16 +2260,25 @@ public class WallSegmentation : MonoBehaviour
         return fullPath;
     }
 
+    // Вспомогательная сигмоидная функция
+    private static float Sigmoid(float value)
+    {
+        return 1.0f / (1.0f + Mathf.Exp(-value));
+    }
+
     // Новый метод для обработки результатов сегментации
     private void ProcessSegmentationResult(float[] dataArray, TensorShape outputShape)
     {
-        // if ((debugFlags & DebugFlags.TensorProcessing) != 0)
-        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Начало обработки. outputShape: {outputShape}, wallClassIndex: {wallClassIndex}, floorClassIndex: {floorClassIndex}, segmentationConfidenceThreshold: {segmentationConfidenceThreshold}, floorConfidenceThreshold: {floorConfidenceThreshold}");
+        bool shouldLogTensorProc = (debugFlags & DebugFlags.TensorProcessing) != 0;
+        if (shouldLogTensorProc)
+            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] НАЧАЛО. outputShape: {outputShape}, wallClassIndex: {wallClassIndex} (conf: {wallConfidence}), floorClassIndex: {floorClassIndex} (conf: {floorConfidence}), detectFloor: {detectFloor}");
 
         if (dataArray == null || dataArray.Length == 0)
         {
-            // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-            // Debug.LogError("[WallSegmentation-ProcessSegmentationResult] Входной массив данных пуст или null.");
+            if (shouldLogTensorProc)
+                Debug.LogError("[WallSegmentation-ProcessSegmentationResult] ❌ Входной массив dataArray ПУСТ или NULL.");
+            RenderSimpleMask(); // Попытка отрисовать заглушку
+            OnMaskCreated(segmentationMaskTexture); // Отправляем заглушку дальше
             return;
         }
 
@@ -2280,40 +2288,85 @@ public class WallSegmentation : MonoBehaviour
         int height = outputShape[2];
         int width = outputShape[3];
 
-        // if (batchSize != 1)
-        // {
-        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        // Debug.LogWarning($"[WallSegmentation-ProcessSegmentationResult] Размер батча {batchSize} не равен 1. Обрабатывается только первый элемент.");
-        // }
+        if (shouldLogTensorProc)
+            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Размеры: batch={batchSize}, classes={numClasses}, height={height}, width={width}");
 
-        // if (wallClassIndex < 0 || wallClassIndex >= numClasses)
-        // {
-        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        // Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] wallClassIndex ({wallClassIndex}) выходит за пределы допустимых классов ({numClasses}).");
-        // // Не выходим, если detectFloor все еще может быть валидным
-        // }
-        // if (detectFloor && (floorClassIndex < 0 || floorClassIndex >= numClasses))
-        // {
-        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        // Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] floorClassIndex ({floorClassIndex}) выходит за пределы допустимых классов ({numClasses}). Обнаружение пола может не работать.");
-        // }
+        if (batchSize != 1)
+        {
+            if (shouldLogTensorProc)
+                Debug.LogWarning($"[WallSegmentation-ProcessSegmentationResult] ⚠️ Размер батча {batchSize} не равен 1. Обрабатывается только первый элемент.");
+        }
+
+        if (wallClassIndex < 0 || wallClassIndex >= numClasses)
+        {
+            if (shouldLogTensorProc)
+                Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] ❌ wallClassIndex ({wallClassIndex}) выходит за пределы допустимых классов ({numClasses}). Обнаружение стен НЕ БУДЕТ работать.");
+        }
+        if (detectFloor && (floorClassIndex < 0 || floorClassIndex >= numClasses))
+        {
+            if (shouldLogTensorProc)
+                Debug.LogWarning($"[WallSegmentation-ProcessSegmentationResult] ⚠️ floorClassIndex ({floorClassIndex}) выходит за пределы допустимых классов ({numClasses}). Обнаружение пола может не работать.");
+        }
 
 
         if (segmentationMaskTexture == null || segmentationMaskTexture.width != width || segmentationMaskTexture.height != height || segmentationMaskTexture.format != RenderTextureFormat.ARGB32)
         {
-            if (segmentationMaskTexture != null) segmentationMaskTexture.Release();
-            segmentationMaskTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32); // ИЗМЕНЕНО: ARGB32
-            segmentationMaskTexture.enableRandomWrite = true;
+            if (segmentationMaskTexture != null)
+            {
+                if (shouldLogTensorProc) Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Освобождаем старую segmentationMaskTexture ({segmentationMaskTexture.width}x{segmentationMaskTexture.height}, {segmentationMaskTexture.format})");
+                segmentationMaskTexture.Release();
+                Destroy(segmentationMaskTexture);
+            }
+            segmentationMaskTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+            segmentationMaskTexture.enableRandomWrite = true; // Важно для Compute Shaders, но и здесь не помешает
             segmentationMaskTexture.Create();
-            // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-            // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Создана или пересоздана segmentationMaskTexture ({width}x{height}, ARGB32).");
+            if (shouldLogTensorProc)
+                Debug.Log($"[WallSegmentation-ProcessSegmentationResult] ✅ Создана или пересоздана segmentationMaskTexture ({width}x{height}, ARGB32).");
         }
 
-        Texture2D tempMaskTexture = new Texture2D(width, height, TextureFormat.RGBA32, false); // ИЗМЕНЕНО: RGBA32
-        Color32[] pixelColors = new Color32[width * height]; // ИЗМЕНЕНО: Color32[]
+        Texture2D tempMaskTexture = new Texture2D(width, height, TextureFormat.RGBA32, false); // ИСПРАВЛЕНО: Возвращено создание Texture2D
+        Color32[] pixelColors = new Color32[width * height];
 
-        int pixelsDetectedAsWall = 0; // Для отладки
-        int pixelsDetectedAsFloor = 0; // Для отладки
+        int pixelsDetectedAsWall = 0;
+        int pixelsDetectedAsFloor = 0;
+        int wallDataIndexErrors = 0;
+        int floorDataIndexErrors = 0;
+
+        // ОТЛАДКА: Проверим первые несколько значений из dataArray
+        if (shouldLogTensorProc && dataArray.Length > 0)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append("[WallSegmentation-ProcessSegmentationResult] Первые ~10 значений dataArray: ");
+            for (int i = 0; i < Mathf.Min(dataArray.Length, 10 * numClasses); i += numClasses) // Шаг numClasses, чтобы посмотреть на разные пиксели
+            {
+                int currentPixelIndex = i / numClasses;
+                float currentWallScore = 0f;
+                float currentFloorScore = 0f;
+                bool wallScoreAvailable = false;
+                bool floorScoreAvailable = false;
+
+                if (wallClassIndex >=0 && wallClassIndex < numClasses && (i+wallClassIndex) < dataArray.Length)
+                {
+                   currentWallScore = dataArray[i+wallClassIndex];
+                   wallScoreAvailable = true;
+                   sb.Append($"px{currentPixelIndex}_wall({wallClassIndex}):{currentWallScore:F3} ");
+                }
+                if (detectFloor && floorClassIndex >=0 && floorClassIndex < numClasses && (i+floorClassIndex) < dataArray.Length)
+                {
+                   currentFloorScore = dataArray[i+floorClassIndex];
+                   floorScoreAvailable = true;
+                   sb.Append($"px{currentPixelIndex}_floor({floorClassIndex}):{currentFloorScore:F3} ");
+                }
+
+                float wallProbability = wallScoreAvailable ? Sigmoid(currentWallScore) : 0f;
+                float floorProbability = detectFloor && floorScoreAvailable ? Sigmoid(currentFloorScore) : 0f;
+                
+                // Добавляем вероятности в ту же строку лога
+                sb.Append($"wallProb:{wallProbability:F4} floorProb:{floorProbability:F4} ");
+            }
+            Debug.Log(sb.ToString());
+        }
+
 
         for (int y = 0; y < height; y++)
         {
@@ -2321,80 +2374,112 @@ public class WallSegmentation : MonoBehaviour
             {
                 byte rChannelValue = 0;
                 byte gChannelValue = 0;
+                byte bChannelValue = 0; // Для отладки можно что-то сюда писать
+                byte aChannelValue = 0; // По умолчанию полностью прозрачный
 
-                // Обработка стен
+                // Обработка стен (красный канал)
                 if (wallClassIndex >= 0 && wallClassIndex < numClasses)
                 {
+                    // Индекс в плоском массиве dataArray. Данные идут сначала все значения для одного класса, потом для следующего.
+                    // Т.е. [class0_pixel0, class0_pixel1, ..., class1_pixel0, class1_pixel1, ...]
                     int wallDataIndex = (wallClassIndex * height * width) + (y * width) + x;
                     if (wallDataIndex < dataArray.Length)
                     {
                         float wallLogit = dataArray[wallDataIndex];
-                        float wallProbability = 1.0f / (1.0f + Mathf.Exp(-wallLogit));
-                        if (wallProbability > wallConfidence) // ИЗМЕНЕНО: используется wallConfidence
+                        // ПРЕОБРАЗОВАНИЕ: Если модель уже выдает вероятность (0..1), то sigmoid не нужен.
+                        // Если модель выдает логиты (сырые значения), то нужен sigmoid.
+                        float wallProbability = Sigmoid(wallLogit);
+                        // float wallProbability = wallLogit; // Если уже вероятность
+
+                        if (shouldLogTensorProc && y < 2 && x < 5) // Логируем только для нескольких первых пикселей для примера
+                        {
+                            Debug.Log($"[ProcessSegmentationResult] Pixel({x},{y}) wallProb: {wallProbability:F4}");
+                        }
+
+                        if (wallProbability > wallConfidence)
                         {
                             rChannelValue = 255;
+                            aChannelValue = 255; // Делаем непрозрачным, если есть стена
                             pixelsDetectedAsWall++;
                         }
                     }
-                    else if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0 && x == 0 && y == 0) // Лог только один раз
-                        Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] wallDataIndex ({wallDataIndex}) выходит за пределы dataArray ({dataArray.Length}).");
+                    else if (wallDataIndexErrors == 0) // Логируем ошибку индекса только один раз
+                    {
+                        Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] ❌ wallDataIndex ({wallDataIndex}) выходит за пределы dataArray ({dataArray.Length}). Больше не логгируем.");
+                        wallDataIndexErrors++;
+                    }
                 }
 
-                // Обработка пола
+                // Обработка пола (зеленый канал)
                 if (detectFloor && floorClassIndex >= 0 && floorClassIndex < numClasses)
                 {
                     int floorDataIndex = (floorClassIndex * height * width) + (y * width) + x;
                     if (floorDataIndex < dataArray.Length)
                     {
                         float floorLogit = dataArray[floorDataIndex];
-                        float floorProbability = 1.0f / (1.0f + Mathf.Exp(-floorLogit));
-                        if (floorProbability > floorConfidence) // ИЗМЕНЕНО: используется floorConfidence
+                        // float floorProbability = 1.0f / (1.0f + Mathf.Exp(-floorLogit)); // Sigmoid
+                        float floorProbability = Sigmoid(floorLogit); // Sigmoid
+
+                        if (shouldLogTensorProc && y < 2 && x < 5) // Логируем только для нескольких первых пикселей для примера
+                        {
+                             Debug.Log($"[ProcessSegmentationResult] Pixel({x},{y}) floorProb: {floorProbability:F4}");
+                        }
+
+                        if (floorProbability > floorConfidence)
                         {
                             gChannelValue = 255;
+                            if (rChannelValue == 0) aChannelValue = 255; // Делаем непрозрачным, если есть пол (и нет стены)
                             pixelsDetectedAsFloor++;
                         }
                     }
-                    else if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0 && x == 0 && y == 0) // Лог только один раз
-                        Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] floorDataIndex ({floorDataIndex}) выходит за пределы dataArray ({dataArray.Length}).");
+                    else if (floorDataIndexErrors == 0) // Логируем ошибку индекса только один раз
+                    {
+                        Debug.LogError($"[WallSegmentation-ProcessSegmentationResult] ❌ floorDataIndex ({floorDataIndex}) выходит за пределы dataArray ({dataArray.Length}). Больше не логгируем.");
+                        floorDataIndexErrors++;
+                    }
                 }
-
-                pixelColors[y * width + x] = new Color32(rChannelValue, gChannelValue, 0, 255);
+                pixelColors[y * width + x] = new Color32(rChannelValue, gChannelValue, bChannelValue, aChannelValue);
             }
         }
 
-        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        // {
-        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как стена (вероятность > {wallConfidence}): {pixelsDetectedAsWall} из {width * height}"); // ИЗМЕНЕНО для лога
-        // if(detectFloor) Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Пикселей определено как пол (вероятность > {floorConfidence}): {pixelsDetectedAsFloor} из {width * height}"); // ИЗМЕНЕНО для лога
-        // }
-
-        tempMaskTexture.SetPixels32(pixelColors); // ИЗМЕНЕНО: SetPixels32
-        tempMaskTexture.Apply();
-
-        Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
-        Destroy(tempMaskTexture);
-
-        // if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        // {
-        // Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Маска для класса стены (индекс {wallClassIndex}) и пола (индекс {floorClassIndex}, если включено) обработана и записана в segmentationMaskTexture (ARGB32).");
-        // }
-
-        OnMaskCreated(segmentationMaskTexture);
-
-        if (saveDebugMask)
+        if (shouldLogTensorProc)
         {
-            SaveTextureAsPNG(segmentationMaskTexture, Path.Combine(Application.dataPath, debugSavePath), $"WallAndFloorMask_W{wallClassIndex}_F{floorClassIndex}_ProbW{wallConfidence}_ProbF{floorConfidence}.png"); // ИЗМЕНЕНО для имени файла
+            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] Статистика пикселей: Стены={pixelsDetectedAsWall}, Пол={pixelsDetectedAsFloor} (из {width * height} всего). Ошибок индекса стен: {wallDataIndexErrors}, пола: {floorDataIndexErrors}");
+            // ОТЛАДКА: Проверим несколько пикселей из pixelColors
+            if (pixelColors.Length > 0 && pixelsDetectedAsWall > 0)
+            {
+                System.Text.StringBuilder sbColor = new System.Text.StringBuilder();
+                sbColor.Append("[WallSegmentation-ProcessSegmentationResult] Первые ~5 обработанных пикселей (RGBA): ");
+                for (int i = 0; i < Mathf.Min(pixelColors.Length, 5); i++)
+                {
+                    sbColor.Append($"({pixelColors[i].r},{pixelColors[i].g},{pixelColors[i].b},{pixelColors[i].a}) ");
+                }
+                Debug.Log(sbColor.ToString());
+            }
         }
 
-        // Убрали лог отсюда, т.к. он был до реализации логики
-        // if (detectFloor)
-        // {
-        //      if (debugMode && (debugFlags & DebugFlags.TensorProcessing) != 0)
-        //         Debug.LogWarning("[WallSegmentation-ProcessSegmentationResult] Обнаружение пола включено, но логика обработки пола не реализована в этом блоке.");
-        // }
+        tempMaskTexture.SetPixels32(pixelColors);
+        tempMaskTexture.Apply();
+
+        RenderTexture prevRT = RenderTexture.active;
+        RenderTexture.active = segmentationMaskTexture;
+        GL.Clear(true, true, Color.clear); // Очищаем RenderTexture перед копированием в нее
+        Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
+        RenderTexture.active = prevRT;
+
+        Destroy(tempMaskTexture); // ИСПРАВЛЕНО: Возвращено Destroy для Texture2D
+
+        if (shouldLogTensorProc)
+            Debug.Log($"[WallSegmentation-ProcessSegmentationResult] ✅ Маска обновлена в segmentationMaskTexture. Вызов OnMaskCreated.");
+
+#if REAL_MASK_PROCESSING_DISABLED
+        Debug.LogWarning("[WallSegmentation-ProcessSegmentationResult] REAL_MASK_PROCESSING_DISABLED активен. Реальная маска не будет использована.");
+        RenderSimpleMask(); // Если мы хотим показать заглушку вместо реальной маски
+#endif
+
+        OnMaskCreated(segmentationMaskTexture); // Передаем обновленную маску дальше
     }
 
-    // Вспомогательный метод для сохранения RenderTexture как PNG (если его еще нет)
     private void SaveTextureAsPNG(RenderTexture rt, string directoryPath, string fileName)
     {
         // ... existing code ...
