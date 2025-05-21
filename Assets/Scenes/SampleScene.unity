@@ -563,7 +563,7 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 769
   minHitDistanceThreshold: 0.1
-  maxWallNormalAngleDeviation: 45
+  maxWallNormalAngleDeviation: 20
   minFloorNormalAngleWithVertical: 75
   planesLayerName: ARPlanes
   ignoreObjectNames: 
@@ -575,7 +575,8 @@ MonoBehaviour:
   horizontalPlaneMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
     type: 2}
   debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
-  stableTimeThreshold: 0.5
+  stableTimeThreshold: 1.5
+  unvisitedPlaneRemovalDelay: 0.5
   enableDoubleTapSave: 1
   doubleTapTimeThreshold: 0.3
 --- !u!4 &367304187
@@ -1508,8 +1509,8 @@ MonoBehaviour:
   forceXRSimulationCapture: 1
   wallClassIndex: 0
   floorClassIndex: 3
-  wallConfidence: 0.02
-  floorConfidence: 0.02
+  wallConfidence: 0.4
+  floorConfidence: 0.4
   detectFloor: 1
   inputResolution: {x: 320, y: 320}
   useSimulationIfNoCamera: 1
@@ -1517,8 +1518,8 @@ MonoBehaviour:
   arSessionManager: {fileID: 1288005832}
   xrOrigin: {fileID: 1004066121}
   segmentationMaskTexture: {fileID: 0}
-  segmentationConfidenceThreshold: 0.06
-  floorConfidenceThreshold: 0.06
+  segmentationConfidenceThreshold: 0.4
+  floorConfidenceThreshold: 0.4
   modelPath: model.sentis
   selectedBackend: 0
   segmentationMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,

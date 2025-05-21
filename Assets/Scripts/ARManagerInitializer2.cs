@@ -72,6 +72,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
     // Добавляем защиту от удаления недавно созданных плоскостей
     private Dictionary<GameObject, float> planeCreationTimes = new Dictionary<GameObject, float>();
+    private Dictionary<GameObject, float> planeLastVisitedTime = new Dictionary<GameObject, float>();
 
     [Tooltip("Материал для вертикальных плоскостей")]
     [SerializeField] private Material verticalPlaneMaterial; // Должно быть private
@@ -1154,6 +1155,8 @@ public class ARManagerInitializer2 : MonoBehaviour
     {
         // Clear persistent plane tracking
         persistentGeneratedPlanes.Clear();
+        planeCreationTimes.Clear(); 
+        planeLastVisitedTime.Clear();
 
         foreach (GameObject plane in generatedPlanes)
         {
@@ -1379,6 +1382,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         // Также сохраняем время создания плоскости для защиты от раннего удаления
         planeCreationTimes[planeObject] = Time.time;
+        if (this.planeLastVisitedTime != null) this.planeLastVisitedTime[planeObject] = Time.time;
 
         // Debug.Log("[ARManagerInitializer2] ✅ Создана стабильная базовая плоскость перед пользователем");
 
@@ -1387,6 +1391,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         generatedPlanes.Add(planeObject);
         planeCreationTimes[planeObject] = Time.time;
+        if (this.planeLastVisitedTime != null) this.planeLastVisitedTime[planeObject] = Time.time;
 
         if (xrOrigin.TrackablesParent != null)
         {
@@ -2034,6 +2039,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
 
             if (visitedPlanes != null) visitedPlanes[planeToUpdate] = true;
+            if (this.planeLastVisitedTime != null) this.planeLastVisitedTime[planeToUpdate] = Time.time;
             // Debug.Log($"[ARManagerInitializer2-UOCP] ✅ Обновлена плоскость '{planeToUpdate.name}' финальными параметрами: Pos={finalPlanePosition:F2}, Rot={finalPlaneRotation.eulerAngles:F1}");
             return true;
         }
@@ -2112,6 +2118,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         this.generatedPlanes.Add(planeObj);
         if (this.planeCreationTimes != null) this.planeCreationTimes[planeObj] = Time.time;
+        if (this.planeLastVisitedTime != null) this.planeLastVisitedTime[planeObj] = Time.time;
 
         // Попытка привязать к TrackablesParent, если он есть и не был равен null при старте
         if (this.xrOrigin != null && this.xrOrigin.TrackablesParent != null)
@@ -2138,46 +2145,64 @@ public class ARManagerInitializer2 : MonoBehaviour
     }
 
     // Удаляем устаревшие плоскости, если их слишком много
-    private void CleanupOldPlanes(Dictionary<GameObject, bool> visitedPlanes)
+    private void CleanupOldPlanes(Dictionary<GameObject, bool> visitedPlanesInCurrentMask) // New name for clarity
     {
         List<GameObject> planesToRemove = new List<GameObject>();
-        float currentTime = Time.time;
 
         foreach (GameObject plane in generatedPlanes)
         {
             if (plane == null) continue;
 
-            // Skip persistent planes - they shouldn't be removed when not visible
-            if (persistentGeneratedPlanes.TryGetValue(plane, out bool isPersistent) && isPersistent)
+            if (IsPlanePersistent(plane))
             {
-                // Still mark it as visited so it's not considered "missing" in this frame
-                if (!visitedPlanes.ContainsKey(plane))
-                {
-                    visitedPlanes[plane] = true;
-                }
                 continue;
             }
 
-            if (!visitedPlanes.ContainsKey(plane)) // If plane wasn't visited in this frame, remove it
+            // If plane was not re-confirmed by the current segmentation mask processing
+            if (!visitedPlanesInCurrentMask.ContainsKey(plane))
             {
-                if (enableDetailedRaycastLogging)
-                    Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] Plane {plane.name} not visited and will be removed.");
-                planesToRemove.Add(plane);
+                float lastVisitTime = 0f;
+                bool hasVisitRecord = planeLastVisitedTime.TryGetValue(plane, out lastVisitTime);
+
+                if (hasVisitRecord)
+                {
+                    if (Time.time - lastVisitTime > unvisitedPlaneRemovalDelay)
+                    {
+                        if (enableDetailedRaycastLogging)
+                            Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] Plane {plane.name} not visited in current mask. Last visit was {Time.time - lastVisitTime:F2}s ago (threshold: {unvisitedPlaneRemovalDelay}s). Adding to removal list.");
+                        planesToRemove.Add(plane);
+                    }
+                    // else: Still within delay, do nothing this frame
+                }
+                else
+                {
+                    // Not visited in current mask AND no history in planeLastVisitedTime.
+                    // This implies it's an old plane or an anomaly. Remove immediately.
+                    if (enableDetailedRaycastLogging)
+                        Debug.LogWarning($"[ARManagerInitializer2-CleanupOldPlanes] Plane {plane.name} not visited in current mask and no entry in planeLastVisitedTime. Adding to removal list immediately.");
+                    planesToRemove.Add(plane);
+                }
             }
+            // If plane IS in visitedPlanesInCurrentMask, its planeLastVisitedTime was updated by UpdateOrCreatePlaneForWallArea this frame.
         }
 
-        foreach (GameObject plane in planesToRemove)
+        foreach (GameObject planeToRemove in planesToRemove)
         {
-            generatedPlanes.Remove(plane);
-            if (planeCreationTimes.ContainsKey(plane))
+            generatedPlanes.Remove(planeToRemove);
+            // Ensure removal from all tracking dictionaries
+            if (planeCreationTimes.ContainsKey(planeToRemove))
             {
-                planeCreationTimes.Remove(plane);
+                planeCreationTimes.Remove(planeToRemove);
             }
-
-            // Also remove from persistent planes tracking if it was there
-            persistentGeneratedPlanes.Remove(plane);
-
-            Destroy(plane);
+            if (planeLastVisitedTime.ContainsKey(planeToRemove))
+            {
+                planeLastVisitedTime.Remove(planeToRemove);
+            }
+            if (persistentGeneratedPlanes.ContainsKey(planeToRemove))
+            {
+                persistentGeneratedPlanes.Remove(planeToRemove);
+            }
+            Destroy(planeToRemove);
         }
     }
 
@@ -2367,7 +2392,9 @@ public class ARManagerInitializer2 : MonoBehaviour
 
     [Header("Настройки стабилизации плоскостей")]
     [Tooltip("Время в секундах, в течение которого плоскость должна существовать, чтобы считаться стабильной")]
-    [SerializeField] private float stableTimeThreshold = 0.5f; // Уменьшено с 2.0 до 0.5 сек
+    [SerializeField] private float stableTimeThreshold = 1.5f; // Увеличено до 1.5f
+    [Tooltip("Задержка перед удалением 'потерянной' плоскости (в секундах)")]
+    [SerializeField] private float unvisitedPlaneRemovalDelay = 0.5f;
 
     // Метод для автоматического превращения стабильных плоскостей в персистентные
     private void MakeStablePlanesPersistent()
@@ -2538,6 +2565,8 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             RemovePlanePersistence(plane);
             generatedPlanes.Remove(plane);
+            planeCreationTimes.Remove(plane);
+            planeLastVisitedTime.Remove(plane);
             Destroy(plane);
         }
 
@@ -2556,6 +2585,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             // Удаляем из всех списков
             persistentGeneratedPlanes.Remove(plane);
             planeCreationTimes.Remove(plane);
+            planeLastVisitedTime.Remove(plane);
             generatedPlanes.Remove(plane);
 
             // Удаляем объект
@@ -2600,6 +2630,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             persistentGeneratedPlanes.Remove(plane);
             planeCreationTimes.Remove(plane);
+            planeLastVisitedTime.Remove(plane);
             generatedPlanes.Remove(plane);
             Destroy(plane);
         }
