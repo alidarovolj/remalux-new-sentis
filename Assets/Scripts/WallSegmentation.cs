@@ -46,14 +46,14 @@ public class WallSegmentation : MonoBehaviour
     public bool forceXRSimulationCapture = true;
 
     [Header("Настройки сегментации")]
-    [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 0;     // Стена
-    [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = -1; // Пол (если есть, иначе -1)
+    [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
+    [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
     [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.5f; // Изменено минимальное значение с 0.01f на 0.0001f
     [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.5f;
     [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = false;
 
     [Tooltip("Разрешение входного изображения")]
-    public Vector2Int inputResolution = new Vector2Int(320, 320);
+    public Vector2Int inputResolution = new Vector2Int(512, 512); // ИЗМЕНЕНО для segformer-b4-wall
 
     [Tooltip("Использовать симуляцию, если не удаётся получить изображение с камеры")]
     public bool useSimulationIfNoCamera = true;
