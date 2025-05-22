@@ -2333,39 +2333,39 @@ public class WallSegmentation : MonoBehaviour
         int floorDataIndexErrors = 0;
 
         // ОТЛАДКА: Проверим первые несколько значений из dataArray
-        if (shouldLogTensorProc && dataArray.Length > 0)
-        {
-            System.Text.StringBuilder sb = new System.Text.StringBuilder();
-            sb.Append("[WallSegmentation-ProcessSegmentationResult] Первые ~10 значений dataArray: ");
-            for (int i = 0; i < Mathf.Min(dataArray.Length, 10 * numClasses); i += numClasses) // Шаг numClasses, чтобы посмотреть на разные пиксели
-            {
-                int currentPixelIndex = i / numClasses;
-                float currentWallScore = 0f;
-                float currentFloorScore = 0f;
-                bool wallScoreAvailable = false;
-                bool floorScoreAvailable = false;
+        // if (shouldLogTensorProc && dataArray.Length > 0)
+        // {
+        //     System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        //     sb.Append("[WallSegmentation-ProcessSegmentationResult] Первые ~10 значений dataArray: ");
+        //     for (int i = 0; i < Mathf.Min(dataArray.Length, 10 * numClasses); i += numClasses) // Шаг numClasses, чтобы посмотреть на разные пиксели
+        //     {
+        //         int currentPixelIndex = i / numClasses;
+        //         float currentWallScore = 0f;
+        //         float currentFloorScore = 0f;
+        //         bool wallScoreAvailable = false;
+        //         bool floorScoreAvailable = false;
 
-                if (wallClassIndex >=0 && wallClassIndex < numClasses && (i+wallClassIndex) < dataArray.Length)
-                {
-                   currentWallScore = dataArray[i+wallClassIndex];
-                   wallScoreAvailable = true;
-                   sb.Append($"px{currentPixelIndex}_wall({wallClassIndex}):{currentWallScore:F3} ");
-                }
-                if (detectFloor && floorClassIndex >=0 && floorClassIndex < numClasses && (i+floorClassIndex) < dataArray.Length)
-                {
-                   currentFloorScore = dataArray[i+floorClassIndex];
-                   floorScoreAvailable = true;
-                   sb.Append($"px{currentPixelIndex}_floor({floorClassIndex}):{currentFloorScore:F3} ");
-                }
+        //         if (wallClassIndex >=0 && wallClassIndex < numClasses && (i+wallClassIndex) < dataArray.Length)
+        //         {
+        //            currentWallScore = dataArray[i+wallClassIndex];
+        //            wallScoreAvailable = true;
+        //            sb.Append($"px{currentPixelIndex}_wall({wallClassIndex}):{currentWallScore:F3} ");
+        //         }
+        //         if (detectFloor && floorClassIndex >=0 && floorClassIndex < numClasses && (i+floorClassIndex) < dataArray.Length)
+        //         {
+        //            currentFloorScore = dataArray[i+floorClassIndex];
+        //            floorScoreAvailable = true;
+        //            sb.Append($"px{currentPixelIndex}_floor({floorClassIndex}):{currentFloorScore:F3} ");
+        //         }
 
-                float wallProbability = wallScoreAvailable ? Sigmoid(currentWallScore) : 0f;
-                float floorProbability = detectFloor && floorScoreAvailable ? Sigmoid(currentFloorScore) : 0f;
+        //         float wallProbability = wallScoreAvailable ? Sigmoid(currentWallScore) : 0f;
+        //         float floorProbability = detectFloor && floorScoreAvailable ? Sigmoid(currentFloorScore) : 0f;
                 
-                // Добавляем вероятности в ту же строку лога
-                sb.Append($"wallProb:{wallProbability:F4} floorProb:{floorProbability:F4} ");
-            }
-            Debug.Log(sb.ToString());
-        }
+        //         // Добавляем вероятности в ту же строку лога
+        //         sb.Append($"wallProb:{wallProbability:F4} floorProb:{floorProbability:F4} ");
+        //     }
+        //     Debug.Log(sb.ToString());
+        // }
 
 
         for (int y = 0; y < height; y++)
@@ -2391,10 +2391,11 @@ public class WallSegmentation : MonoBehaviour
                         float wallProbability = Sigmoid(wallLogit);
                         // float wallProbability = wallLogit; // Если уже вероятность
 
-                        if (shouldLogTensorProc && y < 2 && x < 5) // Логируем только для нескольких первых пикселей для примера
-                        {
-                            Debug.Log($"[ProcessSegmentationResult] Pixel({x},{y}) wallProb: {wallProbability:F4}");
-                        }
+                        // Удаляем старый блок Debug.Log для wallProbability, который был здесь
+                        // if (y == 0 && x < 5) // Логируем только для первых 5 пикселей первой строки
+                        // {
+                        //     Debug.Log($"[WallSeg-Detail] P({x},{y}) wallScore:{wallLogit:F4}, wallProb:{wallProbability:F4}, floorScore:{floorClassIndex} (conf: {floorConfidence}), detectFloor: {detectFloor}");
+                        // }
 
                         if (wallProbability > wallConfidence)
                         {
@@ -2420,9 +2421,11 @@ public class WallSegmentation : MonoBehaviour
                         // float floorProbability = 1.0f / (1.0f + Mathf.Exp(-floorLogit)); // Sigmoid
                         float floorProbability = Sigmoid(floorLogit); // Sigmoid
 
-                        if (shouldLogTensorProc && y < 2 && x < 5) // Логируем только для нескольких первых пикселей для примера
+                        // НОВЫЙ ОБЪЕДИНЕННЫЙ ЛОГ для первых нескольких пикселей
+                        // Должен быть здесь, чтобы иметь доступ ко всем переменным: wallLogit, wallProbability, floorLogit, floorProbability
+                        if (y == 0 && x < 5 && shouldLogTensorProc) 
                         {
-                             Debug.Log($"[ProcessSegmentationResult] Pixel({x},{y}) floorProb: {floorProbability:F4}");
+                            Debug.Log($"[WallSeg-PixelDetail] P({x},{y}) wallScore:{dataArray[(wallClassIndex * height * width) + (y * width) + x]:F4}, wallProb:{Sigmoid(dataArray[(wallClassIndex * height * width) + (y * width) + x]):F4} | floorScore:{floorLogit:F4}, floorProb:{floorProbability:F4}");
                         }
 
                         if (floorProbability > floorConfidence)

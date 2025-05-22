@@ -75,22 +75,42 @@ public class CameraCullingMaskFixer : MonoBehaviour
         bool anyChanges = false;
         int fixedCount = 0;
         
+        int arPlanesLayer = LayerMask.NameToLayer("ARPlanes");
+
         foreach (Camera camera in allCameras)
         {
+            int targetMask;
+            string targetMaskDescription;
+
+            if (camera.CompareTag("MainCamera") || camera.name == "Main Camera")
+            {
+                targetMask = -1; // Everything
+                if (arPlanesLayer != -1)
+                {
+                    targetMask &= ~(1 << arPlanesLayer); // Exclude ARPlanes layer
+                }
+                targetMaskDescription = $"Everything except ARPlanes ({FormatCullingMask(targetMask)})";
+            }
+            else
+            {
+                targetMask = -1; // Everything
+                targetMaskDescription = "Everything (-1)";
+            }
+
             // Если эта камера еще не обработана
             if (!processedCameraIds.Contains(camera.GetInstanceID()))
             {
-                // Если cullingMask не установлен в Everything
-                if (camera.cullingMask != -1)
+                // Если cullingMask не установлен в целевую маску
+                if (camera.cullingMask != targetMask)
                 {
                     string oldMask = FormatCullingMask(camera.cullingMask);
                     string oldName = camera.name;
                     
-                    camera.cullingMask = -1; // Устанавливаем Everything
+                    camera.cullingMask = targetMask;
                     anyChanges = true;
                     fixedCount++;
                     
-                    Debug.LogWarning($"[CameraCullingMaskFixer] 🔧 Исправлен cullingMask для камеры '{oldName}': {oldMask} → Everything (-1)");
+                    Debug.LogWarning($"[CameraCullingMaskFixer] 🔧 Исправлен cullingMask для камеры '{oldName}': {oldMask} → {targetMaskDescription}");
                 }
                 
                 // Помечаем камеру как обработанную
@@ -98,16 +118,16 @@ public class CameraCullingMaskFixer : MonoBehaviour
             }
             else
             {
-                // Для уже обработанных камер проверяем, не изменился ли cullingMask
-                if (camera.cullingMask != -1)
+                // Для уже обработанных камер проверяем, не изменился ли cullingMask на нецелевой
+                if (camera.cullingMask != targetMask)
                 {
                     string oldMask = FormatCullingMask(camera.cullingMask);
                     
-                    camera.cullingMask = -1; // Устанавливаем Everything
+                    camera.cullingMask = targetMask;
                     anyChanges = true;
                     fixedCount++;
                     
-                    Debug.LogWarning($"[CameraCullingMaskFixer] 🔁 Повторно исправлен cullingMask для камеры '{camera.name}': {oldMask} → Everything (-1)");
+                    Debug.LogWarning($"[CameraCullingMaskFixer] 🔁 Повторно исправлен cullingMask для камеры '{camera.name}': {oldMask} → {targetMaskDescription}");
                 }
             }
         }
@@ -151,15 +171,16 @@ public class CameraCullingMaskFixer : MonoBehaviour
         yield return new WaitForSeconds(2f); // увеличиваем задержку
         
         Debug.Log("[CameraCullingMaskFixer] 🔍 Начат поиск камер по именам...");
+        int arPlanesLayer = LayerMask.NameToLayer("ARPlanes");
         
         for (int i = 0; i < 3; i++) // уменьшаем количество попыток
         {
             bool foundAny = false;
             bool shouldLog = i == 0; // логируем только при первой попытке
             
-            foreach (string cameraName in cameraNames)
+            foreach (string cameraNameInList in cameraNames)
             {
-                GameObject cameraObj = GameObject.Find(cameraName);
+                GameObject cameraObj = GameObject.Find(cameraNameInList);
                 if (cameraObj != null)
                 {
                     Camera camera = cameraObj.GetComponent<Camera>();
@@ -167,23 +188,38 @@ public class CameraCullingMaskFixer : MonoBehaviour
                     {
                         foundAny = true;
                         
+                        int targetMask;
+                        string targetMaskDescription;
+
+                        if (camera.CompareTag("MainCamera") || camera.name == "Main Camera")
+                        {
+                            targetMask = -1; // Everything
+                            if (arPlanesLayer != -1)
+                            {
+                                targetMask &= ~(1 << arPlanesLayer); // Exclude ARPlanes layer
+                            }
+                            targetMaskDescription = $"Everything except ARPlanes ({FormatCullingMask(targetMask)})";
+                        }
+                        else
+                        {
+                            targetMask = -1; // Everything
+                            targetMaskDescription = "Everything (-1)";
+                        }
+
                         // Фиксируем cullingMask, если нужно
-                        if (camera.cullingMask != -1)
+                        if (camera.cullingMask != targetMask)
                         {
                             string oldMask = FormatCullingMask(camera.cullingMask);
-                            camera.cullingMask = -1;
+                            camera.cullingMask = targetMask;
                             
-                            Debug.LogWarning($"[CameraCullingMaskFixer] 🔧 Найдена и исправлена камера по имени '{cameraName}': {oldMask} → Everything (-1)");
+                            Debug.LogWarning($"[CameraCullingMaskFixer] 🔧 Найдена и исправлена камера по имени '{cameraNameInList}': {oldMask} → {targetMaskDescription}");
                         }
                         else if (shouldLog)
                         {
-                            Debug.Log($"[CameraCullingMaskFixer] ✓ Найдена камера '{cameraName}', cullingMask уже установлен в Everything");
+                            Debug.Log($"[CameraCullingMaskFixer] ✓ Найдена камера '{cameraNameInList}', cullingMask уже установлен в {targetMaskDescription}");
                         }
-
                     }
-
                 }
-
             }
             
             if (!foundAny && shouldLog)

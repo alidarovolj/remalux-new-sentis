@@ -644,10 +644,11 @@ public class ARManagerInitializer2 : MonoBehaviour
     // Метод для поиска связной области начиная с заданного пикселя
     private Rect FindConnectedArea(Color32[] pixels, int width, int height, int startX, int startY, bool[,] visited, byte threshold)
     {
-        // Debug.Log($"[ARManagerInitializer2-FindConnectedArea] Запуск для ({startX},{startY}) с порогом {threshold}");
+        Debug.Log($"[ARManagerInitializer2-FindConnectedArea] IN START: StartX={startX}, StartY={startY}, Threshold={threshold}, PixelValue.R={pixels[startY * width + startX].r}, Visited={visited[startX, startY]}");
+
         if (startX < 0 || startX >= width || startY < 0 || startY >= height || visited[startX, startY] || pixels[startY * width + startX].r < threshold)
         {
-            // Debug.LogWarning($"[ARManagerInitializer2-FindConnectedArea] Неверные стартовые параметры или пиксель ниже порога/уже посещен. startX={startX}, startY={startY}, visited={visited[startX, startY]}, pixel.r={pixels[startY * width + startX].r}, threshold={threshold}");
+            // Debug.LogWarning($"[ARManagerInitializer2-FindConnectedArea] INVALID START PARAMS or ALREADY VISITED/BELOW THRESHOLD. Returning Rect.zero. Visited={visited[startX, startY]}, Pixel.R={pixels[startY * width + startX].r}");
             return Rect.zero;
         }
 
@@ -660,8 +661,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         Queue<Vector2Int> queue = new Queue<Vector2Int>();
         queue.Enqueue(new Vector2Int(startX, startY));
         visited[startX, startY] = true;
-        // ОТЛАДКА: Выводим начальную точку
-        // Debug.Log($"[FindConnectedArea] Start: ({startX},{startY}), Pixel R: {pixels[startY * width + startX].r}");
+        // Debug.Log($"[ARManagerInitializer2-FindConnectedArea] Enqueued initial: ({startX},{startY}), visited set to true. Queue count: {queue.Count}");
 
         // Возможные направления для обхода (4 соседа)
         Vector2Int[] directions = new Vector2Int[]
@@ -676,14 +676,19 @@ public class ARManagerInitializer2 : MonoBehaviour
         while (queue.Count > 0)
         {
             Vector2Int current = queue.Dequeue();
-            // ОТЛАДКА: Выводим текущую обрабатываемую точку и значение ее красного канала
-            // Debug.Log($"[FindConnectedArea] Processing: ({current.x},{current.y}), Pixel R: {pixels[current.y * width + current.x].r}, Current Bounds: minX={minX}, maxX={maxX}, minY={minY}, maxY={maxY}");
+            // Debug.Log($"[ARManagerInitializer2-FindConnectedArea] Dequeued: ({current.x},{current.y}). Pixel.R={pixels[current.y * width + current.x].r}. Queue count: {queue.Count}");
 
             // Обновляем границы области
-            minX = Mathf.Min(minX, current.x);
-            maxX = Mathf.Max(maxX, current.x);
-            minY = Mathf.Min(minY, current.y);
-            maxY = Mathf.Max(maxY, current.y);
+            bool boundsChanged = false;
+            if (current.x < minX) { minX = current.x; boundsChanged = true; }
+            if (current.x > maxX) { maxX = current.x; boundsChanged = true; }
+            if (current.y < minY) { minY = current.y; boundsChanged = true; }
+            if (current.y > maxY) { maxY = current.y; boundsChanged = true; }
+
+            if (boundsChanged)
+            {
+                // Debug.Log($"[ARManagerInitializer2-FindConnectedArea] Bounds updated: minX={minX}, maxX={maxX}, minY={minY}, maxY={maxY}");
+            }
 
             // Проверяем соседей
             foreach (Vector2Int dir in directions)
@@ -695,56 +700,70 @@ public class ARManagerInitializer2 : MonoBehaviour
                 if (newX >= 0 && newX < width && newY >= 0 && newY < height)
                 {
                     // Если пиксель не посещен и это часть стены
-                    if (!visited[newX, newY] && pixels[newY * width + newX].r > threshold)
+                    if (!visited[newX, newY] && pixels[newY * width + newX].r >= threshold) // ИЗМЕНЕНО: > на >=
                     {
                         visited[newX, newY] = true;
                         queue.Enqueue(new Vector2Int(newX, newY));
+                        // Debug.Log($"[ARManagerInitializer2-FindConnectedArea] Enqueued neighbor: ({newX},{newY}). Pixel.R={pixels[newY * width + newX].r}. Visited set to true. Queue count: {queue.Count}");
                     }
                 }
             }
         }
 
-        // ОТЛАДКА: Выводим итоговые границы найденной области
-        // Debug.Log($"[FindConnectedArea] Finished Area. Initial: ({startX},{startY}). Final Bounds: minX={minX}, maxX={maxX}, minY={minY}, maxY={maxY}. Resulting Rect: x={minX}, y={minY}, w={maxX - minX + 1}, h={maxY - minY + 1}");
-        return new Rect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        Rect resultRect = new Rect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        Debug.Log($"[ARManagerInitializer2-FindConnectedArea] IN END: Returning Rect: X={resultRect.x}, Y={resultRect.y}, W={resultRect.width}, H={resultRect.height} for start ({startX},{startY})");
+        return resultRect;
     }
 
     private List<Rect> FindWallAreas(Color32[] pixels, int width, int height, byte threshold)
     {
-        // Debug.Log($"[ARManagerInitializer2-FindWallAreas] Поиск областей в текстуре {width}x{height} с порогом {threshold}");
-        List<Rect> wallAreas = new List<Rect>();
+        Debug.Log($"[ARManagerInitializer2-FindWallAreas] IN START: Texture {width}x{height}, Threshold={threshold}");
+        List<Rect> areas = new List<Rect>();
         bool[,] visited = new bool[width, height];
         int areasFoundBeforeFiltering = 0;
+        int pixelsChecked = 0;
+        int activeUnvisitedPixelsFound = 0;
+
 
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
+                pixelsChecked++;
                 // Debug.Log($"[ARManagerInitializer2-FindWallAreas] Проверка пикселя ({x},{y}). visited={visited[x,y]}, pixel.r = {pixels[y * width + x].r}");
                 if (!visited[x, y] && pixels[y * width + x].r >= threshold)
                 {
-                    // Debug.Log($"[ARManagerInitializer2-FindWallAreas] Найден активный непосещенный пиксель ({x},{y}). Запуск FindConnectedArea.");
+                    activeUnvisitedPixelsFound++;
+                    Debug.Log($"[ARManagerInitializer2-FindWallAreas] Found ACTIVE UNVISITED pixel at ({x},{y}). Pixel.R={pixels[y * width + x].r}. Calling FindConnectedArea...");
                     Rect area = FindConnectedArea(pixels, width, height, x, y, visited, threshold);
                     areasFoundBeforeFiltering++;
+                    Debug.Log($"[ARManagerInitializer2-FindWallAreas] FindConnectedArea for ({x},{y}) returned: {areaToString(area)}. Area.width={area.width}, Area.height={area.height}, Area.width*Area.height={area.width * area.height}");
+
                     if (area.width >= minPixelsDimensionForArea && area.height >= minPixelsDimensionForArea && area.width * area.height >= minAreaSizeInPixels)
                     {
-                        // Debug.Log($"[ARManagerInitializer2-FindWallAreas] Добавлена область: {area} (Площадь: {area.width * area.height})");
-                        wallAreas.Add(area);
+                        Debug.Log($"[ARManagerInitializer2-FindWallAreas] ADDED Area: {areaToString(area)} (Pixel Area: {area.width * area.height}). Meets MinDimension={minPixelsDimensionForArea} AND MinPixelArea={minAreaSizeInPixels}. Total areas: {areas.Count + 1}");
+                        areas.Add(area);
                     }
-                    // else
-                    // {
-                    // if (area.width > 0 && area.height > 0) // Если это не Rect.zero
-                    // {
-                    //      Debug.Log($"[ARManagerInitializer2-FindWallAreas] Область {area} (пикс.размеры: {area.width}x{area.height}, площадь: {area.width*area.height}) отфильтрована по размеру. minPixelsDimensionForArea={minPixelsDimensionForArea}, minAreaSizeInPixels={minAreaSizeInPixels}");
-                    // } else {
-                    //      Debug.Log($"[ARManagerInitializer2-FindWallAreas] FindConnectedArea вернул пустую область для ({x},{y}).");
-                    // }
-                    // }
+                    else
+                    {
+                     if (area.width > 0 && area.height > 0) // Если это не Rect.zero
+                     {
+                          Debug.Log($"[ARManagerInitializer2-FindWallAreas] FILTERED Area: {areaToString(area)} (Pixel Dims: {area.width}x{area.height}, Pixel Area: {area.width*area.height}). MinDimensionForArea={minPixelsDimensionForArea}, MinAreaSizeInPixels={minAreaSizeInPixels}. NOT ADDED.");
+                     } else {
+                          Debug.Log($"[ARManagerInitializer2-FindWallAreas] FindConnectedArea returned ZERO area for ({x},{y}). NOT ADDED.");
+                     }
+                    }
                 }
             }
         }
-        // Debug.Log($"[ARManagerInitializer2-FindWallAreas] Завершено. Найдено валидных областей: {wallAreas.Count} (из {areasFoundBeforeFiltering} до фильтрации).");
-        return wallAreas;
+        Debug.Log($"[ARManagerInitializer2-FindWallAreas] IN END: PixelsChecked={pixelsChecked}. ActiveUnvisitedPixelsFound (triggers for FindConnectedArea)={activeUnvisitedPixelsFound}. AreasFoundBeforeFiltering={areasFoundBeforeFiltering}. Final ValidAreasCount={areas.Count}");
+        return areas;
+    }
+
+    // Вспомогательная функция для красивого вывода Rect в лог
+    private string areaToString(Rect area)
+    {
+        return $"Rect(x:{area.xMin:F0}, y:{area.yMin:F0}, w:{area.width:F0}, h:{area.height:F0})";
     }
 
     // Создание плоскости для области стены
@@ -780,10 +799,12 @@ public class ARManagerInitializer2 : MonoBehaviour
         // Устанавливаем маску слоев для рейкаста (например, только "Default" или специальный слой для геометрии сцены)
         // int layerMask = LayerMask.GetMask("Default", "SimulatedEnvironment"); // Пример
         // int layerMask = ~LayerMask.GetMask("ARCustomPlane", "Ignore Raycast"); // Игнорируем собственные плоскости и слой Ignore Raycast
-        LayerMask دیوارИлиПолДляРейкаста = LayerMask.GetMask("SimulatedEnvironment", "Default", "Wall"); // Добавляем слой "Wall"
+        LayerMask raycastLayerMask = LayerMask.GetMask("SimulatedEnvironment", "Default", "Wall"); // Добавляем слой "Wall"
 
+        // Визуализация луча для отладки
+        Debug.DrawRay(ray.origin, ray.direction * maxRayDistance, Color.yellow, 1.0f); // Добавляем на 1 секунду желтый луч
 
-        if (Physics.Raycast(ray, out hit, maxDistance: 20.0f, layerMask: دیوارИлиПолДляРейкаста)) // Ограничиваем дистанцию рейкаста
+        if (Physics.Raycast(ray, out hit, maxDistance: maxRayDistance, layerMask: raycastLayerMask)) // Ограничиваем дистанцию рейкаста
         {
             distanceFromCamera = hit.distance;
             // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast hit! Distance: {distanceFromCamera:F2}m, Normal: {hit.normal:F2}, Point: {hit.point:F2}, Hit Object: {hit.collider.name}");
@@ -829,12 +850,23 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
         }
 
+                // ... (код до создания planeObject) ...
         string planeName = $"MyARPlane_Debug_{planeInstanceCounter++}";
         GameObject planeObject = new GameObject(planeName);
-        planeObject.transform.SetParent(null);
+        planeObject.transform.SetParent(null); // Вы устанавливаете родителя позже, это ОК
         planeObject.transform.position = planePosition;
-        // Ориентируем плоскость так, чтобы ее нормаль была planeNormal (полученная из рейкаста или направленная от камеры)
         planeObject.transform.rotation = planeRotation;
+
+        // Отключаем MeshRenderer для теста (ЭТОТ БЛОК У ВАС УЖЕ ЕСТЬ И ОН ПРАВИЛЬНЫЙ)
+        MeshRenderer renderer = planeObject.GetComponent<MeshRenderer>();
+        if (renderer == null) 
+        {
+            renderer = planeObject.AddComponent<MeshRenderer>();
+        }
+        renderer.enabled = false;
+        Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] MeshRenderer для {planeObject.name} был принудительно ОТКЛЮЧЕН для теста."); // Изменил тег на CreatePlaneForWallArea для ясности
+
+        // ... (дальнейший код метода: создание меша, коллайдера и т.д.) ...
         // Меш создается в XY, поэтому его нужно повернуть, если LookRotation использовал Z как "вперед"
         // Стандартный Quad Unity ориентирован вдоль локальной оси Z. LookRotation выравнивает Z объекта с направлением.
         // Если planeNormal - это нормаль поверхности, то LookRotation(planeNormal) выровняет +Z объекта с этой нормалью.
@@ -1446,6 +1478,23 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
 
         Ray centerRay = mainCamera.ViewportPointToRay(new Vector3(normalizedCenterX, normalizedCenterY, 0));
+
+            if (enableDetailedRaycastLogging)
+            {
+                Debug.Log($"[ARManagerInitializer2-UOCP] РАССЧЕТ UV ДЛЯ РЕЙКАСТА: " +
+                          $"area.xMin={area.xMin}, area.yMin={area.yMin}, area.width={area.width}, area.height={area.height}, " +
+                          $"textureWidth={textureWidth}, textureHeight={textureHeight}");
+                Debug.Log($"[ARManagerInitializer2-UOCP] Нормализованный центр области (UV): X={normalizedCenterX:F2}, Y={normalizedCenterY:F2}");
+                if (mainCamera != null)
+                {
+                    Debug.Log($"[ARManagerInitializer2-UOCP] КАМЕРА ПЕРЕД ViewportPointToRay: Name='{mainCamera.name}', Pos={mainCamera.transform.position}, Forward={mainCamera.transform.forward}");
+                }
+                else
+                {
+                    Debug.LogWarning("[ARManagerInitializer2-UOCP] _mainCamera IS NULL перед ViewportPointToRay!");
+                }
+            }
+
         Vector3 initialRayDirection = centerRay.direction;
         if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Исходное направление луча (из ViewportPointToRay({normalizedCenterX:F2},{normalizedCenterY:F2})): {initialRayDirection.ToString("F3")}");
 
@@ -1567,6 +1616,9 @@ public class ARManagerInitializer2 : MonoBehaviour
                 // ... (код для LineRenderer, если вы его используете, убедитесь, что он использует currentRayOrigin и currentRayDirection)
             }
 
+            // Визуализация луча для отладки
+            Debug.DrawRay(currentRayOrigin, currentRayDirection * maxRayDistance, Color.yellow, 1.0f); // Добавляем на 1 секунду желтый луч
+
             if (Physics.Raycast(currentRayOrigin, currentRayDirection, out hitInfo, maxRayDistance, layerMask, QueryTriggerInteraction.Ignore))
             {
                 raysHitSomething++;
@@ -1604,21 +1656,21 @@ public class ARManagerInitializer2 : MonoBehaviour
                 }
 
                 // Для плоскостей: допускаем попадания только в персистентные плоскости
-                if (hitInfo.collider.gameObject.name.StartsWith("MyARPlane_Debug_"))
-                {
-                    // Проверяем, является ли эта плоскость персистентной
-                    bool isPersistent = IsPlanePersistent(hitInfo.collider.gameObject);
+                // if (hitInfo.collider.gameObject.name.StartsWith("MyARPlane_Debug_"))
+                // {
+                //     // Проверяем, является ли эта плоскость персистентной
+                //     bool isPersistent = IsPlanePersistent(hitInfo.collider.gameObject);
 
-                    if (!isPersistent)
-                    {
-                        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i + 1} ({hitInfo.collider.name}) ОТФИЛЬТРОВАН - не персистентная плоскость");
-                        continue; // Пропускаем попадания в не-персистентные плоскости
-                    }
-                    else
-                    {
-                        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i + 1} ПОПАЛ в персистентную плоскость: {hitInfo.collider.gameObject.name}");
-                    }
-                }
+                //     if (!isPersistent)
+                //     {
+                //         if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i + 1} ({hitInfo.collider.name}) ОТФИЛЬТРОВАН - не персистентная плоскость");
+                //         continue; // Пропускаем попадания в не-персистентные плоскости
+                //     }
+                //     else
+                //     {
+                //         if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i + 1} ПОПАЛ в персистентную плоскость: {hitInfo.collider.gameObject.name}");
+                //     }
+                // }
 
                 // Проверяем, не слишком ли близко к камере (например, внутренняя часть симуляции)
                 // Это может потребовать более сложной логики, если камера внутри объекта
@@ -1665,7 +1717,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                         bestConfidence = currentWeight; // И его вес (уверенность)
 
                         didHit = true;
-                        // if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ОБНОВИЛ ЛУЧШИЙ РЕЗУЛЬТАТ (одиночный): Метрика={currentHitMetric:F2} (Расст={hitInfo.distance:F2}/Вес={currentWeight:F1}), Нормаль={hitInfo.normal:F2}");
+                        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ОБНОВИЛ ЛУЧШИЙ РЕЗУЛЬТАТ (одиночный): Метрика={currentHitMetric:F2} (Расст={hitInfo.distance:F2}/Вес={currentWeight:F1}), Нормаль={hitInfo.normal:F2}");
                     }
                 }
                 else
@@ -1811,7 +1863,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
 
             actualDistanceFromCameraForPlane = determinedDistance + 0.02f; // Небольшой отступ
-            actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.0f, 6.0f);
+            actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, minHitDistanceThreshold, 6.0f);
             if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 РЕЗУЛЬТАТ РЕЙКАСТА: Финальное расстояние до плоскости = {actualDistanceFromCameraForPlane:F2}м (на основе хита/кластера, с отступом и clamp). Исходная нормаль = {bestNormal:F2}");
 
             finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
@@ -2141,6 +2193,16 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         if (visitedPlanes != null) visitedPlanes[planeObj] = true;
         // Debug.Log($"[ARManagerInitializer2-UOCP] ✅ Создана новая плоскость '{planeObj.name}': WorldPos={planeObj.transform.position:F2}, WorldRot(Эйлер)={planeObj.transform.rotation.eulerAngles:F1}, Parent={(planeObj.transform.parent ? planeObj.transform.parent.name : "null")}");
+
+        // --> НАЧАЛО ДОБАВЛЕННОГО КОДА
+        ARWallPaintingSystem paintingSystem = FindObjectOfType<ARWallPaintingSystem>();
+        if (paintingSystem != null)
+        {
+            paintingSystem.RegisterWallObject(planeObj);
+        }
+        // <-- КОНЕЦ ДОБАВЛЕННОГО КОДА
+
+        generatedPlanes.Add(planeObj);
         return true;
     }
 
@@ -2391,8 +2453,8 @@ public class ARManagerInitializer2 : MonoBehaviour
     }
 
     [Header("Настройки стабилизации плоскостей")]
-    [Tooltip("Время в секундах, в течение которого плоскость должна существовать, чтобы считаться стабильной")]
-    [SerializeField] private float stableTimeThreshold = 1.5f; // Увеличено до 1.5f
+    [Tooltip("Минимальное время (в секундах), в течение которого плоскость должна последовательно обнаруживаться, чтобы считаться 'стабильной' и стать персистентной.")]
+    [SerializeField] private float planeStableTimeThreshold = 0.1f; // Время для становления стабильной
     [Tooltip("Задержка перед удалением 'потерянной' плоскости (в секундах)")]
     [SerializeField] private float unvisitedPlaneRemovalDelay = 0.5f;
 
@@ -2416,7 +2478,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             if (planeCreationTimes.TryGetValue(plane, out float creationTime))
             {
                 float planeAge = currentTime - creationTime;
-                if (planeAge >= stableTimeThreshold)
+                if (planeAge >= planeStableTimeThreshold)
                 {
                     // Эта плоскость стабильна - делаем ее персистентной
                     if (MakePlanePersistent(plane))
