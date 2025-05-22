@@ -206,6 +206,11 @@ PrefabInstance:
       propertyPath: far clip plane
       value: 1000
       objectReference: {fileID: 0}
+    - target: {fileID: 2512387469002778331, guid: 48cb3fb68c91eb94999fd99957eb0cae,
+        type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 1073742647
+      objectReference: {fileID: 0}
     - target: {fileID: 2512387470319625105, guid: 48cb3fb68c91eb94999fd99957eb0cae,
         type: 3}
       propertyPath: m_OccludeARHitsWith2DObjects
@@ -338,7 +343,7 @@ MonoBehaviour:
   horizontalPlaneMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
     type: 2}
   debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
-  stableTimeThreshold: 1.5
+  planeStableTimeThreshold: 0.1
   unvisitedPlaneRemovalDelay: 0.5
   enableDoubleTapSave: 1
   doubleTapTimeThreshold: 0.3
@@ -454,8 +459,8 @@ MonoBehaviour:
   forceXRSimulationCapture: 1
   wallClassIndex: 1
   floorClassIndex: 2
-  wallConfidence: 0.05
-  floorConfidence: 0.05
+  wallConfidence: 0.07
+  floorConfidence: 0.07
   detectFloor: 1
   inputResolution: {x: 512, y: 512}
   useSimulationIfNoCamera: 1
