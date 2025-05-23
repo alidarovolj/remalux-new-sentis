@@ -891,8 +891,8 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             renderer = planeObject.AddComponent<MeshRenderer>();
         }
-        renderer.enabled = false;
-        Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] MeshRenderer для {planeObject.name} был принудительно ОТКЛЮЧЕН для теста."); // Изменил тег на CreatePlaneForWallArea для ясности
+        renderer.enabled = true; // ИЗМЕНЕНО: было false
+        Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] MeshRenderer для {planeObject.name} теперь ВКЛЮЧЕН по умолчанию.");
 
         // ... (дальнейший код метода: создание меша, коллайдера и т.д.) ...
         // Меш создается в XY, поэтому его нужно повернуть, если LookRotation использовал Z как "вперед"
@@ -1918,7 +1918,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         }
 
         float bestClusterWeight = 0f; // Инициализация bestClusterWeight
-        if (successfulHits.Count > 3)
+        if (successfulHits.Count > 1) // ИЗМЕНЕНО: было > 3
         {
             if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Запуск кластеризации попаданий (Найдено {successfulHits.Count} валидных хитов).");
             // Группируем попадания по расстоянию и нормали
@@ -1995,7 +1995,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             // либо реальное расстояние от лучшего кластера. bestNormal и bestConfidence также установлены.
 
             float determinedDistance;
-            if (successfulHits.Count > 3 && bestClusterWeight > 0) // Если кластеризация была успешна и дала результат
+            if (successfulHits.Count > 1 && bestClusterWeight > 0) // Если кластеризация была успешна и дала результат
             {
                 determinedDistance = bestDistance; // bestDistance уже хранит реальное расстояние кластера
                 if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Используется расстояние от КЛАСТЕРИЗАЦИИ: {determinedDistance:F2}м");
@@ -2701,7 +2701,7 @@ public class ARManagerInitializer2 : MonoBehaviour
     [Tooltip("Минимальное время (в секундах), в течение которого плоскость должна последовательно обнаруживаться, чтобы считаться 'стабильной' и стать персистентной.")]
     [SerializeField] private float planeStableTimeThreshold = 0.1f; // Время для становления стабильной
     [Tooltip("Задержка перед удалением 'потерянной' плоскости (в секундах)")]
-    [SerializeField] private float unvisitedPlaneRemovalDelay = 0.5f;
+    [SerializeField] private float unvisitedPlaneRemovalDelay = 1.5f; // ИЗМЕНЕНО: было 0.5f
 
     // Метод для автоматического превращения стабильных плоскостей в персистентные
     private void MakeStablePlanesPersistent()
