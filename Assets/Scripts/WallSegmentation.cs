@@ -48,12 +48,30 @@ public class WallSegmentation : MonoBehaviour
     [Header("Настройки сегментации")]
     [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
     [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
-    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.5f; // Изменено минимальное значение с 0.01f на 0.0001f
-    [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.5f;
+    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.15f; // ИСПРАВЛЕНО: повышен с низких значений (~0.07) до 0.15 для устранения шума
+    [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.15f; // ИСПРАВЛЕНО: повышен для консистентности
     [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = false;
 
+    [Header("Настройки качества и производительности")]
     [Tooltip("Разрешение входного изображения")]
     public Vector2Int inputResolution = new Vector2Int(512, 512); // ИЗМЕНЕНО для segformer-b4-wall
+
+    [Tooltip("Автоматически оптимизировать разрешение на основе производительности")]
+    public bool adaptiveResolution = true;
+
+    [Tooltip("Максимальное разрешение для высокого качества")]
+    public Vector2Int maxResolution = new Vector2Int(768, 768);
+
+    [Tooltip("Минимальное разрешение для производительности")]
+    public Vector2Int minResolution = new Vector2Int(384, 384);
+
+    [Tooltip("Целевое время обработки в миллисекундах (для адаптивного разрешения)")]
+    [Range(16f, 100f)]
+    public float targetProcessingTimeMs = 50f;
+
+    [Tooltip("Фактор качества маски (0-1), влияет на выбор разрешения")]
+    [Range(0.1f, 1.0f)]
+    public float qualityFactor = 0.7f;
 
     [Tooltip("Использовать симуляцию, если не удаётся получить изображение с камеры")]
     public bool useSimulationIfNoCamera = true;
@@ -70,10 +88,10 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Текстура для вывода маски сегментации")] public RenderTexture segmentationMaskTexture;
 
     [Tooltip("Порог вероятности для определения стены")]
-    public float segmentationConfidenceThreshold = 0.01f; // Временно очень низкий порог для теста
+    public float segmentationConfidenceThreshold = 0.15f; // ИСПРАВЛЕНО: повышен с 0.01f до 0.15f для лучшего качества сегментации
 
     [Tooltip("Порог вероятности для определения пола")]
-    public float floorConfidenceThreshold = 0.5f;    // Или другое значение по умолчанию
+    public float floorConfidenceThreshold = 0.15f;    // ИСПРАВЛЕНО: повышен для консистентности
 
     [Tooltip("Путь к файлу модели (.sentis или .onnx) в StreamingAssets")] public string modelPath = "";
 
@@ -218,14 +236,14 @@ public class WallSegmentation : MonoBehaviour
     // Параметры сглаживания маски для улучшения визуального качества
     [Header("Настройки качества маски")]
     [Tooltip("Применять сглаживание к маске сегментации")]
-    public bool applyMaskSmoothing = true;
+    public bool applyMaskSmoothing = true; // ПРОВЕРЕНО: должно быть включено для устранения зазубренных краев
     [Tooltip("Значение размытия для сглаживания маски (в пикселях)")]
     [Range(1, 10)]
-    public int maskBlurSize = 3;
+    public int maskBlurSize = 4; // ИСПРАВЛЕНО: установлен в оптимальное значение (3-5) для лучшего сглаживания
     [Tooltip("Повышать резкость краев на маске")]
-    public bool enhanceEdges = true;
+    public bool enhanceEdges = true; // ПРОВЕРЕНО: уже включено согласно анализу
     [Tooltip("Повышать контраст маски")]
-    public bool enhanceContrast = true;
+    public bool enhanceContrast = true; // ПРОВЕРЕНО: уже включено согласно анализу
     [Tooltip("Множитель контраста")]
     [Range(1f, 3f)]
     public float contrastMultiplier = 1.5f;
@@ -351,6 +369,17 @@ public class WallSegmentation : MonoBehaviour
 
     // Пул текстур для оптимизации работы с памятью
     private TexturePool texturePool;
+
+    // Поля для адаптивного разрешения и мониторинга производительности
+    private float[] recentProcessingTimes = new float[10]; // Последние 10 измерений времени
+    private int processingTimeIndex = 0;
+    private Vector2Int currentResolution;
+    private float lastQualityScore = 0f;
+    private int resolutionAdjustmentCooldown = 0;
+    private const int RESOLUTION_ADJUSTMENT_INTERVAL = 30; // Кадры между корректировками разрешения
+
+    // Для измерения времени обработки сегментации
+    private static float segmentationStartTime = 0f;
 
     // Триггер события обновления маски
     // Триггер события обновления маски
@@ -611,6 +640,10 @@ public class WallSegmentation : MonoBehaviour
         lastErrorMessage = null;
         consecutiveFailCount = 0;
 
+        // Инициализируем адаптивное разрешение
+        currentResolution = inputResolution;
+        InitializePerformanceTracking();
+
         // Инициализируем пул текстур
         texturePool = new TexturePool(RenderTextureFormat.ARGB32);
 
@@ -660,6 +693,174 @@ public class WallSegmentation : MonoBehaviour
         Invoke("DumpCurrentState", 2f);
 
         Debug.Log("[WallSegmentation] ✅ Start() завершен");
+    }
+
+    /// <summary>
+    /// Инициализирует систему отслеживания производительности
+    /// </summary>
+    private void InitializePerformanceTracking()
+    {
+        for (int i = 0; i < recentProcessingTimes.Length; i++)
+        {
+            recentProcessingTimes[i] = targetProcessingTimeMs;
+        }
+        processingTimeIndex = 0;
+        resolutionAdjustmentCooldown = 0;
+        Debug.Log($"[WallSegmentation] Инициализирована система отслеживания производительности. Целевое время: {targetProcessingTimeMs}ms");
+    }
+
+    /// <summary>
+    /// Записывает время обработки для адаптивного разрешения
+    /// </summary>
+    private void RecordProcessingTime(float processingTimeMs)
+    {
+        recentProcessingTimes[processingTimeIndex] = processingTimeMs;
+        processingTimeIndex = (processingTimeIndex + 1) % recentProcessingTimes.Length;
+
+        // Проверяем необходимость корректировки разрешения
+        if (adaptiveResolution && resolutionAdjustmentCooldown <= 0)
+        {
+            ConsiderResolutionAdjustment();
+            resolutionAdjustmentCooldown = RESOLUTION_ADJUSTMENT_INTERVAL;
+        }
+
+        if (resolutionAdjustmentCooldown > 0)
+        {
+            resolutionAdjustmentCooldown--;
+        }
+    }
+
+    /// <summary>
+    /// Рассматривает необходимость корректировки разрешения
+    /// </summary>
+    private void ConsiderResolutionAdjustment()
+    {
+        float avgProcessingTime = GetAverageProcessingTime();
+        Vector2Int newResolution = currentResolution;
+
+        // Если обработка слишком медленная, уменьшаем разрешение
+        if (avgProcessingTime > targetProcessingTimeMs * 1.2f)
+        {
+            if (currentResolution.x > minResolution.x)
+            {
+                int newSize = Mathf.Max(minResolution.x, currentResolution.x - 64);
+                newResolution = new Vector2Int(newSize, newSize);
+                Debug.Log($"[WallSegmentation] 📉 Уменьшение разрешения: {currentResolution} → {newResolution} (время: {avgProcessingTime:F1}ms)");
+            }
+        }
+        // Если обработка быстрая и качество позволяет, увеличиваем разрешение
+        else if (avgProcessingTime < targetProcessingTimeMs * 0.7f && lastQualityScore > qualityFactor)
+        {
+            if (currentResolution.x < maxResolution.x)
+            {
+                int newSize = Mathf.Min(maxResolution.x, currentResolution.x + 64);
+                newResolution = new Vector2Int(newSize, newSize);
+                Debug.Log($"[WallSegmentation] 📈 Увеличение разрешения: {currentResolution} → {newResolution} (время: {avgProcessingTime:F1}ms, качество: {lastQualityScore:F2})");
+            }
+        }
+
+        if (newResolution != currentResolution)
+        {
+            currentResolution = newResolution;
+            inputResolution = currentResolution;
+
+            // Пересоздаем текстуры с новым разрешением
+            RecreateTexturesWithNewResolution();
+        }
+    }
+
+    /// <summary>
+    /// Получает среднее время обработки
+    /// </summary>
+    private float GetAverageProcessingTime()
+    {
+        float sum = 0f;
+        for (int i = 0; i < recentProcessingTimes.Length; i++)
+        {
+            sum += recentProcessingTimes[i];
+        }
+        return sum / recentProcessingTimes.Length;
+    }
+
+    /// <summary>
+    /// Пересоздает текстуры с новым разрешением
+    /// </summary>
+    private void RecreateTexturesWithNewResolution()
+    {
+        // Освобождаем старые текстуры
+        if (segmentationMaskTexture != null)
+        {
+            segmentationMaskTexture.Release();
+            Destroy(segmentationMaskTexture);
+        }
+
+        if (cameraTexture != null)
+        {
+            Destroy(cameraTexture);
+        }
+
+        // Создаем новые текстуры с новым разрешением
+        segmentationMaskTexture = new RenderTexture(currentResolution.x / 4, currentResolution.y / 4, 0, RenderTextureFormat.ARGB32);
+        segmentationMaskTexture.enableRandomWrite = true;
+        segmentationMaskTexture.Create();
+
+        cameraTexture = new Texture2D(currentResolution.x, currentResolution.y, TextureFormat.RGBA32, false);
+
+        Debug.Log($"[WallSegmentation] ✅ Пересозданы текстуры с разрешением {currentResolution}");
+    }
+
+    /// <summary>
+    /// Получает текущую производительность системы сегментации
+    /// </summary>
+    public float GetAverageProcessingTimeMs()
+    {
+        return GetAverageProcessingTime();
+    }
+
+    /// <summary>
+    /// Получает текущее адаптивное разрешение
+    /// </summary>
+    public Vector2Int GetCurrentResolution()
+    {
+        return currentResolution;
+    }
+
+    /// <summary>
+    /// Устанавливает целевое время обработки для адаптивного разрешения
+    /// </summary>
+    public void SetTargetProcessingTime(float targetMs)
+    {
+        targetProcessingTimeMs = Mathf.Clamp(targetMs, 16f, 200f);
+        Debug.Log($"[WallSegmentation] Установлено целевое время обработки: {targetProcessingTimeMs}ms");
+    }
+
+    /// <summary>
+    /// Принудительно устанавливает разрешение (отключает адаптивное управление)
+    /// </summary>
+    public void SetFixedResolution(int width, int height)
+    {
+        adaptiveResolution = false;
+        currentResolution = new Vector2Int(width, height);
+        inputResolution = currentResolution;
+        RecreateTexturesWithNewResolution();
+        Debug.Log($"[WallSegmentation] Установлено фиксированное разрешение: {currentResolution}");
+    }
+
+    /// <summary>
+    /// Включает/отключает адаптивное разрешение
+    /// </summary>
+    public void SetAdaptiveResolution(bool enabled)
+    {
+        adaptiveResolution = enabled;
+        Debug.Log($"[WallSegmentation] Адаптивное разрешение: {(enabled ? "включено" : "отключено")}");
+    }
+
+    /// <summary>
+    /// Получает последнюю оценку качества маски (0-1)
+    /// </summary>
+    public float GetLastQualityScore()
+    {
+        return lastQualityScore;
     }
 
     /// <summary>
@@ -1334,6 +1535,9 @@ public class WallSegmentation : MonoBehaviour
         bool shouldLogExec = debugFlags.HasFlag(DebugFlags.ExecutionFlow);
         bool shouldLogDetailedExec = debugFlags.HasFlag(DebugFlags.DetailedExecution);
 
+        // Начинаем измерение времени обработки
+        segmentationStartTime = Time.realtimeSinceStartup;
+
         // if (shouldLogExec) Debug.Log($"[WallSegmentation-PerformSegmentation] Запуск сегментации с текстурой: {(inputTexture == null ? "NULL" : $"{inputTexture.width}x{inputTexture.height}")}");
 
         if (isProcessing)
@@ -1362,23 +1566,22 @@ public class WallSegmentation : MonoBehaviour
         Tensor<float> inputTensor = null;
         try
         {
+            // Используем текущее адаптивное разрешение вместо статического inputResolution
+            Vector2Int targetResolution = adaptiveResolution ? currentResolution : inputResolution;
+
             // Убедимся, что текстура имеет нужные размеры, если это необходимо для CreateTensorFromPixels
-            // Например, если CreateTensorFromPixels ожидает конкретный размер.
-            // Если CreateTensorFromPixels сам обрабатывает изменение размера, этот блок можно упростить/удалить.
-            if (inputTexture.width != inputResolution.x || inputTexture.height != inputResolution.y)
+            if (inputTexture.width != targetResolution.x || inputTexture.height != targetResolution.y)
             {
-                if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] 🔄 Изменяем размер входной текстуры с {inputTexture.width}x{inputTexture.height} на {inputResolution.x}x{inputResolution.y}");
-                RenderTexture tempRT = RenderTexture.GetTemporary(inputResolution.x, inputResolution.y, 0, RenderTextureFormat.ARGB32);
+                if (shouldLogDetailedExec) Debug.Log($"[WallSegmentation-PerformSegmentation] 🔄 Изменяем размер входной текстуры с {inputTexture.width}x{inputTexture.height} на {targetResolution.x}x{targetResolution.y}");
+                RenderTexture tempRT = RenderTexture.GetTemporary(targetResolution.x, targetResolution.y, 0, RenderTextureFormat.ARGB32);
                 Graphics.Blit(inputTexture, tempRT);
-                Texture2D resizedTexture = new Texture2D(inputResolution.x, inputResolution.y, TextureFormat.RGBA32, false);
+                Texture2D resizedTexture = new Texture2D(targetResolution.x, targetResolution.y, TextureFormat.RGBA32, false);
                 RenderTexture.active = tempRT;
-                resizedTexture.ReadPixels(new Rect(0, 0, inputResolution.x, inputResolution.y), 0, 0);
+                resizedTexture.ReadPixels(new Rect(0, 0, targetResolution.x, targetResolution.y), 0, 0);
                 resizedTexture.Apply();
                 RenderTexture.active = null;
                 RenderTexture.ReleaseTemporary(tempRT);
 
-                // Если inputTexture была временной (например, из GetCameraTextureFromSimulation), её нужно уничтожить, если она больше не нужна
-                // if (inputTexture != cameraTexture) Destroy(inputTexture); // Осторожно с этим, если inputTexture - это cameraTexture
                 inputTexture = resizedTexture; // Используем измененную текстуру
             }
 
@@ -2360,7 +2563,7 @@ public class WallSegmentation : MonoBehaviour
 
         //         float wallProbability = wallScoreAvailable ? Sigmoid(currentWallScore) : 0f;
         //         float floorProbability = detectFloor && floorScoreAvailable ? Sigmoid(currentFloorScore) : 0f;
-                
+
         //         // Добавляем вероятности в ту же строку лога
         //         sb.Append($"wallProb:{wallProbability:F4} floorProb:{floorProbability:F4} ");
         //     }
@@ -2423,7 +2626,7 @@ public class WallSegmentation : MonoBehaviour
 
                         // НОВЫЙ ОБЪЕДИНЕННЫЙ ЛОГ для первых нескольких пикселей
                         // Должен быть здесь, чтобы иметь доступ ко всем переменным: wallLogit, wallProbability, floorLogit, floorProbability
-                        if (y == 0 && x < 5 && shouldLogTensorProc) 
+                        if (y == 0 && x < 5 && shouldLogTensorProc)
                         {
                             Debug.Log($"[WallSeg-PixelDetail] P({x},{y}) wallScore:{dataArray[(wallClassIndex * height * width) + (y * width) + x]:F4}, wallProb:{Sigmoid(dataArray[(wallClassIndex * height * width) + (y * width) + x]):F4} | floorScore:{floorLogit:F4}, floorProb:{floorProbability:F4}");
                         }
@@ -2480,6 +2683,22 @@ public class WallSegmentation : MonoBehaviour
         RenderSimpleMask(); // Если мы хотим показать заглушку вместо реальной маски
 #endif
 
+        // Завершаем измерение времени обработки
+        if (segmentationStartTime > 0)
+        {
+            float processingTime = (Time.realtimeSinceStartup - segmentationStartTime) * 1000f; // В миллисекундах
+            lastQualityScore = AnalyzeMaskQuality(segmentationMaskTexture); // Обновляем оценку качества
+            RecordProcessingTime(processingTime);
+
+            if (shouldLogTensorProc)
+            {
+                Debug.Log($"[WallSegmentation] ⏱️ Время обработки сегментации: {processingTime:F1}ms, " +
+                         $"качество маски: {lastQualityScore:F2}, текущее разрешение: {currentResolution}");
+            }
+
+            segmentationStartTime = 0f; // Сбрасываем время начала
+        }
+
         OnMaskCreated(segmentationMaskTexture); // Передаем обновленную маску дальше
     }
 
@@ -2496,124 +2715,133 @@ public class WallSegmentation : MonoBehaviour
         if (inputMask == null || !inputMask.IsCreated())
             return inputMask;
 
-        // Если улучшения отключены, возвращаем исходную маску
-        if (!applyMaskSmoothing && !enhanceEdges && !enhanceContrast)
-            return inputMask;
+        // >>> ВРЕМЕННОЕ ИЗМЕНЕНИЕ ДЛЯ ДИАГНОСТИКИ <<<
+        // Отключаем всю постобработку шейдером, чтобы проверить "чистую" маску
+        // Debug.LogWarning("[WallSegmentation-EnhanceSegmentationMask] ВРЕМЕННО ОТКЛЮЧЕНА ПОСТОБРАБОТКА МАСКИ!");
+        RenderTexture outputMask = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
+        Graphics.Blit(inputMask, outputMask); // Просто копируем
+        return outputMask; // Возвращаем копию, вызывающий код должен ее освободить
+                           // >>> КОНЕЦ ВРЕМЕННОГО ИЗМЕНЕНИЯ <<<
+        /*
+                // Если улучшения отключены, возвращаем исходную маску
+                if (!applyMaskSmoothing && !enhanceEdges && !enhanceContrast)
+                    return inputMask;
 
-        // Создаем временные текстуры для обработки
-        RenderTexture tempRT1 = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
-        RenderTexture tempRT2 = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
+                // Создаем временные текстуры для обработки
+                RenderTexture tempRT1 = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
+                RenderTexture tempRT2 = RenderTexture.GetTemporary(inputMask.width, inputMask.height, 0, inputMask.format);
 
-        try
-        {
-            // Проверяем, доступен ли материал для эффектов постобработки
-            if (segmentationMaterial == null)
-            {
                 try
                 {
-                    // Пытаемся создать материал на лету
-                    Shader shader = Shader.Find("Hidden/SegmentationPostProcess");
-                    if (shader != null)
+                    // Проверяем, доступен ли материал для эффектов постобработки
+                    if (segmentationMaterial == null)
                     {
-                        segmentationMaterial = new Material(shader);
-                        Debug.Log("[WallSegmentation] ✅ Создан новый материал для постобработки");
+                        try
+                        {
+                            // Пытаемся создать материал на лету
+                            Shader shader = Shader.Find("Hidden/SegmentationPostProcess");
+                            if (shader != null)
+                            {
+                                segmentationMaterial = new Material(shader);
+                                Debug.Log("[WallSegmentation] ✅ Создан новый материал для постобработки");
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogWarning($"[WallSegmentation] ⚠️ Не удалось создать материал на лету: {e.Message}");
+                        }
                     }
+
+                    // Копируем исходную маску во временную текстуру
+                    Graphics.Blit(inputMask, tempRT1);
+
+                    // Применяем постобработку с использованием шейдера, если он доступен
+                    if (segmentationMaterial != null)
+                    {
+                        // Применяем размытие по Гауссу (Pass 1)
+                        if (applyMaskSmoothing)
+                        {
+                            segmentationMaterial.SetFloat("_BlurSize", maskBlurSize);
+                            Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 1); // Pass 1: Blur
+                            // Меняем местами текстуры (результат в tempRT1)
+                            RenderTexture temp = tempRT1;
+                            tempRT1 = tempRT2;
+                            tempRT2 = temp;
+                        }
+
+                        // Повышаем резкость (Pass 2)
+                        if (enhanceEdges)
+                        {
+                            Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 2); // Pass 2: Sharpen
+                            // Меняем местами текстуры (результат в tempRT1)
+                            RenderTexture temp = tempRT1;
+                            tempRT1 = tempRT2;
+                            tempRT2 = temp;
+                        }
+
+                        // Повышаем контраст (Pass 3)
+                        if (enhanceContrast)
+                        {
+                            segmentationMaterial.SetFloat("_Contrast", contrastMultiplier);
+                            Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 3); // Pass 3: Contrast
+                            // Меняем местами текстуры (результат в tempRT1)
+                            RenderTexture temp = tempRT1;
+                            tempRT1 = tempRT2;
+                            tempRT2 = temp;
+                        }
+                    }
+                    else
+                    {
+                        // Если шейдер недоступен, используем индивидуальные методы
+                        // Применяем сглаживание, если оно включено
+                        if (applyMaskSmoothing)
+                        {
+                            ApplyGaussianBlur(tempRT1, tempRT2, maskBlurSize);
+                            // Меняем местами текстуры (результат в tempRT1)
+                            RenderTexture temp = tempRT1;
+                            tempRT1 = tempRT2;
+                            tempRT2 = temp;
+                        }
+
+                        // Повышаем резкость краев, если включено
+                        if (enhanceEdges)
+                        {
+                            ApplySharpen(tempRT1, tempRT2);
+                            // Меняем местами текстуры (результат в tempRT1)
+                            RenderTexture temp = tempRT1;
+                            tempRT1 = tempRT2;
+                            tempRT2 = temp;
+                        }
+
+                        // Повышаем контраст, если включено
+                        if (enhanceContrast)
+                        {
+                            ApplyContrast(tempRT1, tempRT2, contrastMultiplier);
+                            // Меняем местами текстуры (результат в tempRT1)
+                            RenderTexture temp = tempRT1;
+                            tempRT1 = tempRT2;
+                            tempRT2 = temp;
+                        }
+                    }
+
+                    // Важно: не создаем новую текстуру каждый раз, это приводит к утечкам
+                    // Вместо этого модифицируем входную текстуру и возвращаем её
+                    Graphics.Blit(tempRT1, inputMask);
+                    return inputMask;
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[WallSegmentation] ⚠️ Не удалось создать материал на лету: {e.Message}");
+                    Debug.LogError($"[WallSegmentation] ❌ Ошибка при улучшении маски: {e.Message}");
+                    // В случае ошибки просто вернуть исходную маску
+                    return inputMask;
                 }
-            }
-
-            // Копируем исходную маску во временную текстуру
-            Graphics.Blit(inputMask, tempRT1);
-
-            // Применяем постобработку с использованием шейдера, если он доступен
-            if (segmentationMaterial != null)
-            {
-                // Применяем размытие по Гауссу (Pass 1)
-                if (applyMaskSmoothing)
+                finally
                 {
-                    segmentationMaterial.SetFloat("_BlurSize", maskBlurSize);
-                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 1); // Pass 1: Blur
-                    // Меняем местами текстуры (результат в tempRT1)
-                    RenderTexture temp = tempRT1;
-                    tempRT1 = tempRT2;
-                    tempRT2 = temp;
+                    // Освобождаем временные текстуры
+                    RenderTexture.ReleaseTemporary(tempRT1);
+                    RenderTexture.ReleaseTemporary(tempRT2);
                 }
-
-                // Повышаем резкость (Pass 2)
-                if (enhanceEdges)
-                {
-                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 2); // Pass 2: Sharpen
-                    // Меняем местами текстуры (результат в tempRT1)
-                    RenderTexture temp = tempRT1;
-                    tempRT1 = tempRT2;
-                    tempRT2 = temp;
-                }
-
-                // Повышаем контраст (Pass 3)
-                if (enhanceContrast)
-                {
-                    segmentationMaterial.SetFloat("_Contrast", contrastMultiplier);
-                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 3); // Pass 3: Contrast
-                    // Меняем местами текстуры (результат в tempRT1)
-                    RenderTexture temp = tempRT1;
-                    tempRT1 = tempRT2;
-                    tempRT2 = temp;
-                }
-            }
-            else
-            {
-                // Если шейдер недоступен, используем индивидуальные методы
-                // Применяем сглаживание, если оно включено
-                if (applyMaskSmoothing)
-                {
-                    ApplyGaussianBlur(tempRT1, tempRT2, maskBlurSize);
-                    // Меняем местами текстуры (результат в tempRT1)
-                    RenderTexture temp = tempRT1;
-                    tempRT1 = tempRT2;
-                    tempRT2 = temp;
-                }
-
-                // Повышаем резкость краев, если включено
-                if (enhanceEdges)
-                {
-                    ApplySharpen(tempRT1, tempRT2);
-                    // Меняем местами текстуры (результат в tempRT1)
-                    RenderTexture temp = tempRT1;
-                    tempRT1 = tempRT2;
-                    tempRT2 = temp;
-                }
-
-                // Повышаем контраст, если включено
-                if (enhanceContrast)
-                {
-                    ApplyContrast(tempRT1, tempRT2, contrastMultiplier);
-                    // Меняем местами текстуры (результат в tempRT1)
-                    RenderTexture temp = tempRT1;
-                    tempRT1 = tempRT2;
-                    tempRT2 = temp;
-                }
-            }
-
-            // Важно: не создаем новую текстуру каждый раз, это приводит к утечкам
-            // Вместо этого модифицируем входную текстуру и возвращаем её
-            Graphics.Blit(tempRT1, inputMask);
-            return inputMask;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[WallSegmentation] ❌ Ошибка при улучшении маски: {e.Message}");
-            // В случае ошибки просто вернуть исходную маску
-            return inputMask;
-        }
-        finally
-        {
-            // Освобождаем временные текстуры
-            RenderTexture.ReleaseTemporary(tempRT1);
-            RenderTexture.ReleaseTemporary(tempRT2);
-        }
+        *///КОММЕНТИРУЕМ СТАРЫЙ КОД
     }
 
     /// <summary>

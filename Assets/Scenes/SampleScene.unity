@@ -324,7 +324,7 @@ MonoBehaviour:
   minPlaneSizeInMeters: 0.1
   minPixelsDimensionForArea: 2
   minAreaSizeInPixels: 10
-  wallAreaRedChannelThreshold: 30
+  wallAreaRedChannelThreshold: 5
   enableDetailedRaycastLogging: 1
   maxRayDistance: 10
   hitLayerMask:
@@ -332,8 +332,8 @@ MonoBehaviour:
     m_Bits: 4294967295
   minHitDistanceThreshold: 0.1
   maxWallNormalAngleDeviation: 20
-  minFloorNormalAngleWithVertical: 75
-  planesLayerName: ARPlanes
+  maxFloorCeilingAngleDeviation: 15
+  planesLayer: 10
   ignoreObjectNames: 
   usePersistentPlanes: 1
   highlightPersistentPlanes: 1
@@ -459,17 +459,22 @@ MonoBehaviour:
   forceXRSimulationCapture: 1
   wallClassIndex: 1
   floorClassIndex: 2
-  wallConfidence: 0.07
-  floorConfidence: 0.07
+  wallConfidence: 0.15
+  floorConfidence: 0.1
   detectFloor: 1
   inputResolution: {x: 512, y: 512}
+  adaptiveResolution: 1
+  maxResolution: {x: 768, y: 768}
+  minResolution: {x: 384, y: 384}
+  targetProcessingTimeMs: 50
+  qualityFactor: 0.7
   useSimulationIfNoCamera: 1
   failureThresholdForSimulation: 10
   arSessionManager: {fileID: 1288005832}
   xrOrigin: {fileID: 1004066121}
   segmentationMaskTexture: {fileID: 0}
-  segmentationConfidenceThreshold: 0.05
-  floorConfidenceThreshold: 0.05
+  segmentationConfidenceThreshold: 0.15
+  floorConfidenceThreshold: 0.15
   modelPath: segformer-model.sentis
   selectedBackend: 0
   segmentationMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,
@@ -481,8 +486,8 @@ MonoBehaviour:
   debugSavePath: SegmentationMasks
   useSimulationIfCameraFails: 1
   maxConsecutiveFailsBeforeSimulation: 5
-  applyMaskSmoothing: 0
-  maskBlurSize: 3
+  applyMaskSmoothing: 1
+  maskBlurSize: 4
   enhanceEdges: 1
   enhanceContrast: 1
   contrastMultiplier: 1.5

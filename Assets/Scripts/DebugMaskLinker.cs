@@ -20,6 +20,10 @@ public class DebugMaskLinker : MonoBehaviour
             return;
         }
 
+        // ИСПРАВЛЕНО: Отключаем Raycast Target для предотвращения блокировки касаний по экрану
+        rawImage.raycastTarget = false;
+        Debug.Log("[DebugMaskLinker] Raycast Target отключен для предотвращения блокировки AR-взаимодействия.", gameObject);
+
         wallSegmentation = FindObjectOfType<WallSegmentation>();
         if (wallSegmentation == null)
         {
@@ -100,7 +104,7 @@ public class DebugMaskLinker : MonoBehaviour
 
         byte[] bytes = tex2D.EncodeToPNG();
         string filePath = System.IO.Path.Combine(Application.persistentDataPath, fileName); // Используем Path.Combine для корректного пути
-        
+
         Debug.Log($"[DebugMaskLinker] Попытка сохранить текстуру в: {filePath}", gameObject);
         try
         {

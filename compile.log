@@ -1,0 +1,50 @@
+Unity Editor version:    2022.3.61f1 (6c53ebaf375d)
+Branch:                  2022.3/release
+Build type:              Release
+Batch mode:              YES
+macOS version:           Version 15.5 (Build 24F74)
+Darwin version:          24.5.0
+Architecture:            arm64
+Running under Rosetta:   NO
+Available memory:        8192 MB
+[Licensing::Module] Trying to connect to existing licensing client channel...
+[Licensing::IpcConnector] Successfully connected to: "LicenseClient-olzhasalidarov" at "2025-05-23T11:15:33.141009Z"
+[Licensing::Client] Code 10 while verifying Licensing Client signature (process Id: 5744, path: "/Applications/Unity Hub.app/Contents/Frameworks/UnityLicensingClient_V1.app/Contents/MacOS/Unity.Licensing.Client")
+[Licensing::Module] LicensingClient has failed validation; ignoring
+[Licensing::Client] Handshaking with LicensingClient:
+  Version:                 1.17.0+aa6cfba
+  Session Id:              9f71aea0b4ac475f97aa8481178fc68d
+  Correlation Id:          a32cde37fc6fe8d14ba840f7f46c4a9a
+  External correlation Id: 8069897716091544302
+  Machine Id:              utteOcMTRmNw1/Zmu5FcvrJi2cE=
+[Licensing::Module] Successfully connected to LicensingClient on channel: "LicenseClient-olzhasalidarov" (connect: 0.00s, validation: 0.02s, handshake: 0.22s)
+[Licensing::IpcConnector] Successfully connected to: "LicenseClient-olzhasalidarov-notifications" at "2025-05-23T11:15:33.376891Z"
+[Licensing::Module] Error: Access token is unavailable; failed to update
+[Licensing::Client] Successfully updated license
+[Licensing::Client] Successfully resolved entitlement details
+[Licensing::Module] Serial number assigned to: "18968244100307-UnityPersXXXX"
+Pro License: NO
+[Licensing::Client] Successfully resolved entitlement details
+Launching external process: /Applications/Unity/Hub/Editor/2022.3.61f1/Unity.app/Contents/Resources/PackageManager/Server/UnityPackageManager
+
+COMMAND LINE ARGUMENTS:
+/Applications/Unity/Hub/Editor/2022.3.61f1/Unity.app/Contents/MacOS/Unity
+-batchmode
+-quit
+-projectPath
+.
+-logFile
+compile.log
+Successfully changed project path to: /Users/olzhasalidarov/Desktop/remalux-new-sentis
+/Users/olzhasalidarov/Desktop/remalux-new-sentis
+It looks like another Unity instance is running with this project open.
+
+Multiple Unity instances cannot open the same project.
+
+Project: /Users/olzhasalidarov/Desktop/remalux-new-sentis
+Fatal Error! It looks like another Unity instance is running with this project open.
+
+Multiple Unity instances cannot open the same project.
+
+Project: /Users/olzhasalidarov/Desktop/remalux-new-sentis
+[Package Manager] Server::Kill -- Server was shutdown

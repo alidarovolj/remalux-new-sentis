@@ -48,23 +48,23 @@ public class ARManagerInitializer2 : MonoBehaviour
     [Tooltip("Включить подробное логирование процесса рейкастинга и фильтрации попаданий.")]
     public bool enableDetailedRaycastLogging = true;
     [Tooltip("Максимальное расстояние для рейкастов при поиске поверхностей")]
-    [SerializeField] private float maxRayDistance = 10.0f; // Новый параметр
+    public float maxRayDistance = 15.0f;
     [Tooltip("Маска слоев для рейкастинга (например, Default, SimulatedEnvironment, Wall)")]
-    [SerializeField] private LayerMask hitLayerMask = ~0; // По умолчанию все слои
+    public LayerMask hitLayerMask = -1; // Everything by default - будет включать и созданные SceneSetupHelper объекты
     [Tooltip("Минимальное расстояние до объекта, чтобы считать попадание валидным (м). Помогает отфильтровать попадания 'внутрь' объектов или слишком близкие поверхности.")]
-    [SerializeField] private float minHitDistanceThreshold = 0.1f;
+    public float minHitDistanceThreshold = 0.1f;
     [Tooltip("Максимальное допустимое отклонение нормали стены от идеальной вертикали (в градусах). Используется для определения, является ли поверхность стеной.")]
-    [SerializeField] private float maxWallNormalAngleDeviation = 15f;
+    public float maxWallNormalAngleDeviation = 30f;
     [Tooltip("Минимальный допустимый угол нормали пола/потолка к вертикали (в градусах), чтобы считать поверхность горизонтальной. Например, 15 градусов означает, что поверхности с наклоном до 15 градусов от горизонтали считаются полом/потолком.")]
-    [SerializeField] private float minFloorNormalAngleWithVertical = 75f; // 90° минус допустимый наклон пола
+    public float maxFloorCeilingAngleDeviation = 15f;
     [Tooltip("Слой, в который будут переключены созданные плоскости")]
-    [SerializeField] private string planesLayerName = "ARPlanes"; // Слой для плоскостей
+    public int planesLayer = 10; // ARPlanes layer by default
     [Tooltip("Имена объектов, которые должны игнорироваться при рейкастинге (разделены запятыми)")]
-    [SerializeField] private string ignoreObjectNames = ""; // Объекты для игнорирования
+    public string ignoreObjectNames = "Player,UI,Hand"; // Список игнорируемых объектов
 
     [Header("Настройки сохранения плоскостей")]
     [SerializeField] private bool usePersistentPlanes = true; // Whether to use the persistent plane system
-    [SerializeField] private bool highlightPersistentPlanes = true; // Whether to highlight persistent planes with different color
+    [SerializeField] private bool highlightPersistentPlanes = false; // Whether to highlight persistent planes with different color
     [SerializeField] private Color persistentPlaneColor = new Color(0.0f, 0.8f, 0.2f, 0.7f); // Default color for persistent planes
 
     // Dictionary to track which of our generated planes are persistent
@@ -159,6 +159,8 @@ public class ARManagerInitializer2 : MonoBehaviour
     {
         // Debug.Log("[ARManagerInitializer2] Start() called.");
 
+        DeleteAllPlanes(); // ДОБАВЛЕНО ДЛЯ ТЕСТИРОВАНИЯ
+
         FindARComponents();
 
         // Ensure we have reference to ARPlaneConfigurator
@@ -215,6 +217,11 @@ public class ARManagerInitializer2 : MonoBehaviour
         if (rawImageДляУстановки != null)
         {
             отображениеМаскиUI = rawImageДляУстановки;
+
+            // ИСПРАВЛЕНО: Отключаем Raycast Target для предотвращения блокировки касаний по экрану
+            отображениеМаскиUI.raycastTarget = false;
+            Debug.Log("[ARManagerInitializer2] Raycast Target отключен для RawImage маски сегментации.", отображениеМаскиUI.gameObject);
+
             // Debug.Log("[ARManagerInitializer2] Успешно установлен RawImage для отображения маски через УстановитьОтображениеМаскиUI.");
             if (currentSegmentationMask != null && отображениеМаскиUI.texture == null)
             {
@@ -724,6 +731,25 @@ public class ARManagerInitializer2 : MonoBehaviour
         int pixelsChecked = 0;
         int activeUnvisitedPixelsFound = 0;
 
+        // >>> DEBUG: Логирование первых нескольких пикселей и их R-канала
+        if (pixels != null && pixels.Length > 0)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[ARManagerInitializer2-FindWallAreas-PixelDebug] Первые 20 пикселей (из {pixels.Length}) и их R-канал (threshold={threshold}):");
+            for (int i = 0; i < Mathf.Min(20, pixels.Length); i++)
+            {
+                int y = i / width;
+                int x = i % width;
+                sb.Append($"P({x},{y}) R={pixels[i].r} G={pixels[i].g} B={pixels[i].b} A={pixels[i].a} | ");
+                if ((i + 1) % 5 == 0) sb.AppendLine(); // Перенос строки каждые 5 пикселей
+            }
+            Debug.Log(sb.ToString());
+        }
+        else
+        {
+            Debug.LogWarning("[ARManagerInitializer2-FindWallAreas-PixelDebug] Массив пикселей пуст или null!");
+        }
+        // <<< END DEBUG
 
         for (int y = 0; y < height; y++)
         {
@@ -746,12 +772,14 @@ public class ARManagerInitializer2 : MonoBehaviour
                     }
                     else
                     {
-                     if (area.width > 0 && area.height > 0) // Если это не Rect.zero
-                     {
-                          Debug.Log($"[ARManagerInitializer2-FindWallAreas] FILTERED Area: {areaToString(area)} (Pixel Dims: {area.width}x{area.height}, Pixel Area: {area.width*area.height}). MinDimensionForArea={minPixelsDimensionForArea}, MinAreaSizeInPixels={minAreaSizeInPixels}. NOT ADDED.");
-                     } else {
-                          Debug.Log($"[ARManagerInitializer2-FindWallAreas] FindConnectedArea returned ZERO area for ({x},{y}). NOT ADDED.");
-                     }
+                        if (area.width > 0 && area.height > 0) // Если это не Rect.zero
+                        {
+                            Debug.Log($"[ARManagerInitializer2-FindWallAreas] FILTERED Area: {areaToString(area)} (Pixel Dims: {area.width}x{area.height}, Pixel Area: {area.width * area.height}). MinDimensionForArea={minPixelsDimensionForArea}, MinAreaSizeInPixels={minAreaSizeInPixels}. NOT ADDED.");
+                        }
+                        else
+                        {
+                            Debug.Log($"[ARManagerInitializer2-FindWallAreas] FindConnectedArea returned ZERO area for ({x},{y}). NOT ADDED.");
+                        }
                     }
                 }
             }
@@ -850,7 +878,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
         }
 
-                // ... (код до создания planeObject) ...
+        // ... (код до создания planeObject) ...
         string planeName = $"MyARPlane_Debug_{planeInstanceCounter++}";
         GameObject planeObject = new GameObject(planeName);
         planeObject.transform.SetParent(null); // Вы устанавливаете родителя позже, это ОК
@@ -859,7 +887,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         // Отключаем MeshRenderer для теста (ЭТОТ БЛОК У ВАС УЖЕ ЕСТЬ И ОН ПРАВИЛЬНЫЙ)
         MeshRenderer renderer = planeObject.GetComponent<MeshRenderer>();
-        if (renderer == null) 
+        if (renderer == null)
         {
             renderer = planeObject.AddComponent<MeshRenderer>();
         }
@@ -882,18 +910,92 @@ public class ARManagerInitializer2 : MonoBehaviour
         MeshRenderer meshRenderer = planeObject.AddComponent<MeshRenderer>();
         if (this.verticalPlaneMaterial != null)
         {
-            meshRenderer.material = new Material(this.verticalPlaneMaterial);
-            // Можно сделать полупрозрачным для отладки
-            // Color color = meshRenderer.material.color;
-            // color.a = 0.7f; 
-            // meshRenderer.material.color = color;
+            // Создаем уникальный экземпляр материала для каждой плоскости
+            Material instanceMaterial = new Material(this.verticalPlaneMaterial);
+
+            // ПРИОРИТЕТ 2: Реалистичное нанесение краски
+            // Настраиваем прозрачное смешивание вместо сплошного зеленого
+            if (instanceMaterial.shader.name == "Custom/WallPaint")
+            {
+                // Включаем ключевые слова шейдера для правильной работы
+                instanceMaterial.EnableKeyword("USE_MASK");
+                instanceMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+
+                // Настраиваем цвет краски (можно сделать настраиваемым через UI)
+                Color paintColor = new Color(0.8f, 0.4f, 0.2f, 0.6f); // Приятный коричневатый цвет краски
+                instanceMaterial.SetColor("_PaintColor", paintColor);
+
+                // Настраиваем фактор смешивания для естественного вида
+                instanceMaterial.SetFloat("_BlendFactor", 0.7f); // 70% прозрачность для реализма
+
+                // Интегрируем маску сегментации для точного наложения краски
+                if (currentSegmentationMask != null)
+                {
+                    instanceMaterial.SetTexture("_SegmentationMask", currentSegmentationMask);
+                    if (enableDetailedRaycastLogging)
+                        Debug.Log($"[ARManagerInitializer2-PRIORITY2] 🎨 Маска сегментации применена к плоскости {planeObject.name}");
+                }
+
+                // Настраиваем AR пространственные параметры для корректной привязки
+                instanceMaterial.SetMatrix("_PlaneToWorldMatrix", planeObject.transform.localToWorldMatrix);
+                instanceMaterial.SetVector("_PlaneNormal", planeObject.transform.forward.normalized);
+                instanceMaterial.SetVector("_PlaneCenter", planeObject.transform.position);
+                instanceMaterial.SetFloat("_PlaneID", planeInstanceCounter % 1000 / 1000.0f);
+
+                // Обновляем матрицы камеры для правильного проецирования
+                Camera arMainCamera = Camera.main;
+                if (arMainCamera != null)
+                {
+                    instanceMaterial.SetMatrix("_WorldToCameraMatrix", arMainCamera.worldToCameraMatrix);
+                    instanceMaterial.SetMatrix("_CameraToWorldMatrix", arMainCamera.cameraToWorldMatrix);
+                }
+
+                if (enableDetailedRaycastLogging)
+                    Debug.Log($"[ARManagerInitializer2-PRIORITY2] 🎨 Реалистичный материал краски настроен для {planeObject.name}: цвет={paintColor}, прозрачность={0.7f}");
+            }
+            else
+            {
+                // Fallback для других шейдеров - делаем полупрозрачным
+                Color fallbackColor = instanceMaterial.color;
+                fallbackColor.a = 0.6f; // Полупрозрачность
+                instanceMaterial.color = fallbackColor;
+
+                if (enableDetailedRaycastLogging)
+                    Debug.LogWarning($"[ARManagerInitializer2-PRIORITY2] Шейдер {instanceMaterial.shader.name} не Custom/WallPaint, используем fallback прозрачность");
+            }
+
+            meshRenderer.material = instanceMaterial;
         }
         else
         {
-            Debug.LogError("[ARManagerInitializer2-CreatePlaneForWallArea] wallMaterialVertical is not set! Assigning default magenta.");
-            Material simpleMaterial = new Material(Shader.Find("Unlit/Color"));
-            simpleMaterial.color = Color.magenta;
-            meshRenderer.material = simpleMaterial;
+            Debug.LogError("[ARManagerInitializer2-UOCP] verticalPlaneMaterial is not set! Creating realistic paint material from scratch.");
+
+            // Создаем материал с нуля если не назначен
+            Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+            if (wallPaintShader != null)
+            {
+                Material realisticMaterial = new Material(wallPaintShader);
+                realisticMaterial.EnableKeyword("USE_MASK");
+                realisticMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+                realisticMaterial.SetColor("_PaintColor", new Color(0.7f, 0.3f, 0.2f, 0.65f)); // Реалистичный коричнево-красный
+                realisticMaterial.SetFloat("_BlendFactor", 0.7f);
+
+                if (currentSegmentationMask != null)
+                {
+                    realisticMaterial.SetTexture("_SegmentationMask", currentSegmentationMask);
+                }
+
+                meshRenderer.material = realisticMaterial;
+                Debug.Log("[ARManagerInitializer2-PRIORITY2] 🎨 Создан реалистичный материал краски с нуля");
+            }
+            else
+            {
+                // Последний fallback
+                Material simpleMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                simpleMaterial.color = new Color(0.8f, 0.4f, 0.2f, 0.6f); // Полупрозрачный коричневый
+                meshRenderer.material = simpleMaterial;
+                Debug.LogWarning("[ARManagerInitializer2-PRIORITY2] Шейдер Custom/WallPaint не найден, используем URP/Lit с прозрачностью");
+            }
         }
         // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Applied material to {planeName}. Mesh bounds: {meshFilter.mesh.bounds.size}");
 
@@ -1046,8 +1148,8 @@ public class ARManagerInitializer2 : MonoBehaviour
             bool isRecentlyCreated = planeCreationTimes.ContainsKey(plane) &&
                                       Time.time - planeCreationTimes[plane] < protectionTime;
 
-            // НОВАЯ ПРОВЕРКА: Экстремально близкие плоскости
-            if (distanceToCamera < 0.2f) // Порог для "экстремально близко", например, 20 см
+            // ИСПРАВЛЕНО: Увеличен порог для экстремально близких плоскостей с 0.2м до 0.4м
+            if (distanceToCamera < 0.4f) // ИСПРАВЛЕНО: был 0.2f, увеличено для лучшего устранения дублей
             {
                 if (!isRecentlyCreated)
                 {
@@ -1061,14 +1163,45 @@ public class ARManagerInitializer2 : MonoBehaviour
                 continue; // Пропускаем остальные проверки для этой плоскости, если она экстремально близка
             }
 
+            // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Удаление дублей по совпадению нормалей и позиций
+            // Проверяем на наличие других плоскостей с очень похожими параметрами
+            foreach (GameObject otherPlane in generatedPlanes)
+            {
+                if (otherPlane == null || otherPlane == plane) continue;
+
+                float distanceBetweenPlanes = Vector3.Distance(plane.transform.position, otherPlane.transform.position);
+                float normalAngleDifference = Vector3.Angle(plane.transform.forward, otherPlane.transform.forward);
+
+                // ИСПРАВЛЕНО: Если две плоскости очень близко друг к другу и имеют похожие нормали - удаляем более новую
+                if (distanceBetweenPlanes < 0.35f && normalAngleDifference < 20f) // ИСПРАВЛЕНО: увеличен порог с потенциального 0.2м до 0.35м
+                {
+                    bool otherIsRecentlyCreated = planeCreationTimes.ContainsKey(otherPlane) &&
+                                                  Time.time - planeCreationTimes[otherPlane] < protectionTime;
+
+                    // Удаляем более новую плоскость (у которой больше время создания)
+                    if (!isRecentlyCreated && !otherIsRecentlyCreated)
+                    {
+                        float planeCreationTime = planeCreationTimes.ContainsKey(plane) ? planeCreationTimes[plane] : 0f;
+                        float otherCreationTime = planeCreationTimes.ContainsKey(otherPlane) ? planeCreationTimes[otherPlane] : 0f;
+
+                        if (planeCreationTime > otherCreationTime && !planesToRemove.Contains(plane))
+                        {
+                            planesToRemove.Add(plane);
+                            // Debug.LogWarning($"[ARManagerInitializer2] 🚨 Удаление дубля плоскости: {plane.name}, близко к {otherPlane.name} (dist={distanceBetweenPlanes:F2}м, angle={normalAngleDifference:F1}°)");
+                            break; // Прерываем проверку для этой плоскости
+                        }
+                    }
+                }
+            }
+
             // Проверяем несколько условий для определения плоскости поверх камеры:
 
-            // 1. Расстояние до камеры (остается актуальным для плоскостей > 0.2м)
+            // 1. Расстояние до камеры (остается актуальным для плоскостей > 0.4м)
             // float distanceToCamera = directionToPlane.magnitude; // Уже вычислено
 
             // 2. Угол между направлением камеры и направлением к плоскости
             // (насколько плоскость находится прямо перед камерой)
-            // Нормализация безопасна, так как distanceToCamera >= 0.2f
+            // Нормализация безопасна, так как distanceToCamera >= 0.4f
             float alignmentWithCamera = Vector3.Dot(cameraForward.normalized, directionToPlane.normalized);
 
             // 3. Угол между нормалью плоскости и направлением камеры
@@ -1114,7 +1247,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         if (planesToRemove.Count > 0)
         {
-            Debug.LogWarning($"[ARManagerInitializer2] ⚠️ Удалено {planesToRemove.Count} плоскостей-наложений");
+            Debug.LogWarning($"[ARManagerInitializer2] ⚠️ Удалено {planesToRemove.Count} дублирующихся/перекрывающихся плоскостей");
         }
     }
 
@@ -1187,7 +1320,7 @@ public class ARManagerInitializer2 : MonoBehaviour
     {
         // Clear persistent plane tracking
         persistentGeneratedPlanes.Clear();
-        planeCreationTimes.Clear(); 
+        planeCreationTimes.Clear();
         planeLastVisitedTime.Clear();
 
         foreach (GameObject plane in generatedPlanes)
@@ -1479,23 +1612,56 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         Ray centerRay = mainCamera.ViewportPointToRay(new Vector3(normalizedCenterX, normalizedCenterY, 0));
 
-            if (enableDetailedRaycastLogging)
+        if (enableDetailedRaycastLogging)
+        {
+            Debug.Log($"[ARManagerInitializer2-UOCP] РАССЧЕТ UV ДЛЯ РЕЙКАСТА: " +
+                      $"area.xMin={area.xMin}, area.yMin={area.yMin}, area.width={area.width}, area.height={area.height}, " +
+                      $"textureWidth={textureWidth}, textureHeight={textureHeight}");
+            Debug.Log($"[ARManagerInitializer2-UOCP] Нормализованный центр области (UV): X={normalizedCenterX:F2}, Y={normalizedCenterY:F2}");
+            if (mainCamera != null)
             {
-                Debug.Log($"[ARManagerInitializer2-UOCP] РАССЧЕТ UV ДЛЯ РЕЙКАСТА: " +
-                          $"area.xMin={area.xMin}, area.yMin={area.yMin}, area.width={area.width}, area.height={area.height}, " +
-                          $"textureWidth={textureWidth}, textureHeight={textureHeight}");
-                Debug.Log($"[ARManagerInitializer2-UOCP] Нормализованный центр области (UV): X={normalizedCenterX:F2}, Y={normalizedCenterY:F2}");
-                if (mainCamera != null)
-                {
-                    Debug.Log($"[ARManagerInitializer2-UOCP] КАМЕРА ПЕРЕД ViewportPointToRay: Name='{mainCamera.name}', Pos={mainCamera.transform.position}, Forward={mainCamera.transform.forward}");
-                }
-                else
-                {
-                    Debug.LogWarning("[ARManagerInitializer2-UOCP] _mainCamera IS NULL перед ViewportPointToRay!");
-                }
+                Debug.Log($"[ARManagerInitializer2-UOCP] КАМЕРА ПЕРЕД ViewportPointToRay: Name='{mainCamera.name}', Pos={mainCamera.transform.position}, Forward={mainCamera.transform.forward}");
             }
+            else
+            {
+                Debug.LogWarning("[ARManagerInitializer2-UOCP] _mainCamera IS NULL перед ViewportPointToRay!");
+            }
+        }
 
         Vector3 initialRayDirection = centerRay.direction;
+
+        // >>> ПРЕДЛОЖЕННОЕ ИЗМЕНЕНЕНИЕ: Добавляем небольшой наклон вверх для низко расположенных сегментов
+        float lowSegmentThresholdY = 0.25f; // Порог для определения "низкого" сегмента
+        float upwardBiasAngle = 15.0f; // Угол наклона вверх в градусах // ИЗМЕНЕНО с 5.0f
+
+        if (mainCamera == null)
+        {
+            Debug.LogError($"[ARManagerInitializer2-UOCP] !!!CRITICAL DEBUG!!! mainCamera is NULL before biasing block at line ~1615. Area: {areaToString(area)}");
+        }
+        Debug.Log($"[ARManagerInitializer2-UOCP] !!!DEBUG CHECKPOINT ALPHA!!! Before IF. normalizedCenterY={normalizedCenterY:F2}, lowSegmentThresholdY={lowSegmentThresholdY:F2}. Condition (normalizedCenterY < lowSegmentThresholdY) is {(normalizedCenterY < lowSegmentThresholdY)}");
+
+        if (normalizedCenterY < lowSegmentThresholdY)
+        {
+            Debug.Log($"[ARManagerInitializer2-UOCP] !!!DEBUG CHECKPOINT BRAVO!!! Condition MET. normalizedCenterY={normalizedCenterY:F2}");
+            if (mainCamera == null)
+            {
+                Debug.LogError("[ARManagerInitializer2-UOCP] !!!CRITICAL ERROR!!! mainCamera is NULL inside biasing IF-block!");
+            }
+            else
+            {
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Сегмент низкий (Ynorm={normalizedCenterY:F2} < {lowSegmentThresholdY:F2}). Применяем наклон луча вверх на {upwardBiasAngle}°.");
+                Quaternion upwardRotation = Quaternion.AngleAxis(-upwardBiasAngle, mainCamera.transform.right); // Минус, так как AngleAxis вращает вокруг оси
+                initialRayDirection = upwardRotation * initialRayDirection;
+                if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Скорректированное направление луча: {initialRayDirection.ToString("F3")}");
+            }
+        }
+        else
+        {
+            Debug.Log($"[ARManagerInitializer2-UOCP] !!!DEBUG CHECKPOINT CHARLIE!!! Condition NOT MET. normalizedCenterY={normalizedCenterY:F2}");
+        }
+        Debug.Log($"[ARManagerInitializer2-UOCP] !!!DEBUG CHECKPOINT DELTA!!! After IF/ELSE. initialRayDirection={initialRayDirection.ToString("F3")}");
+        // <<< КОНЕЦ ПРЕДЛОЖЕННОГО ИЗМЕНЕНИЯ
+
         if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Исходное направление луча (из ViewportPointToRay({normalizedCenterX:F2},{normalizedCenterY:F2})): {initialRayDirection.ToString("F3")}");
 
         // Новый, более надежный способ создания и логирования LayerMask
@@ -1717,7 +1883,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                         bestConfidence = currentWeight; // И его вес (уверенность)
 
                         didHit = true;
-                        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i+1} ОБНОВИЛ ЛУЧШИЙ РЕЗУЛЬТАТ (одиночный): Метрика={currentHitMetric:F2} (Расст={hitInfo.distance:F2}/Вес={currentWeight:F1}), Нормаль={hitInfo.normal:F2}");
+                        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Рейкаст #{i + 1} ОБНОВИЛ ЛУЧШИЙ РЕЗУЛЬТАТ (одиночный): Метрика={currentHitMetric:F2} (Расст={hitInfo.distance:F2}/Вес={currentWeight:F1}), Нормаль={hitInfo.normal:F2}");
                     }
                 }
                 else
@@ -1997,18 +2163,27 @@ public class ARManagerInitializer2 : MonoBehaviour
 
                 actualDistanceFromCameraForPlane = adaptiveBaseDistance + sizeAdjustment + positionAdjustment;
                 actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.4f, 4.5f);
-                // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Эвристика: Адаптивное расстояние = {actualDistanceFromCameraForPlane:F2}м (est.Width={estimatedPlaneWidthInMetersBasedOnArea:F2})");
-                bestNormal = -initialRayDirection; // ИЗМЕНЕНО: rayDirection -> initialRayDirection // Ориентируем перпендикулярно лучу, если нет лучшей информации
+
+                // --- ИЗМЕНЕННАЯ ЛОГИКА ДЛЯ bestNormal ПРИ ЭВРИСТИКЕ ---
+                Vector3 camForwardXZ = Vector3.ProjectOnPlane(mainCamera.transform.forward, Vector3.up).normalized;
+                if (camForwardXZ == Vector3.zero) // В случае если камера смотрит строго вверх или вниз
+                {
+                    camForwardXZ = Vector3.ProjectOnPlane(mainCamera.transform.up, Vector3.forward).normalized; // Берем проекцию на другую плоскость
+                }
+                bestNormal = -camForwardXZ; // Плоскость должна быть обращена к камере
+                                            // --- КОНЕЦ ИЗМЕНЕННОЙ ЛОГИКИ ---
+
+                if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Эвристика: Адаптивное расстояние = {actualDistanceFromCameraForPlane:F2}м (est.Width={estimatedPlaneWidthInMetersBasedOnArea:F2}), Эвристическая нормаль={bestNormal}");
             }
 
             finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
             // Логика определения ориентации для эвристического случая
-            Vector3 upDirectionForHeuristic = mainCamera.transform.up; // ИЗМЕНЕНО: arCamera -> mainCamera
-            if (Mathf.Abs(Vector3.Dot(bestNormal, mainCamera.transform.up)) > 0.95f)
-            { // ИЗМЕНЕНО: arCamera -> mainCamera // Если нормаль почти вертикальна (пол/потолок по эвристике)
-                upDirectionForHeuristic = -cameraForward;
-                if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Эвристика: Нормаль ({bestNormal}) почти параллельна camera.up. Используем -cameraForward как второй аргумент LookRotation.");
-            }
+            Vector3 upDirectionForHeuristic = Vector3.up; // Используем мировой Vector3.up для вертикальных плоскостей
+            // if (Mathf.Abs(Vector3.Dot(bestNormal, mainCamera.transform.up)) > 0.95f) // Эта проверка теперь менее релевантна, так как bestNormal будет горизонтальной
+            // { 
+            //     upDirectionForHeuristic = -cameraForward;
+            //     if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Эвристика: Нормаль ({bestNormal}) почти параллельна camera.up. Используем -cameraForward как второй аргумент LookRotation.");
+            // }
             finalPlaneRotation = Quaternion.LookRotation(bestNormal, upDirectionForHeuristic);
             if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🧭 Параметры для плоскости ПО ЭВРИСТИКЕ: Pos={finalPlanePosition:F2}, Rot(Эйлер)={finalPlaneRotation.eulerAngles:F1}, Нормаль={bestNormal:F2}");
         }
@@ -2131,17 +2306,13 @@ public class ARManagerInitializer2 : MonoBehaviour
         planeObj.transform.rotation = finalPlaneRotation;
 
         // Установим слой для плоскости, если он задан
-        if (!string.IsNullOrEmpty(planesLayerName))
+        if (planesLayer >= 0 && planesLayer < 32)
         {
-            int layerID = LayerMask.NameToLayer(planesLayerName);
-            if (layerID != -1)
-            {
-                planeObj.layer = layerID;
-            }
-            else if (enableDetailedRaycastLogging)
-            {
-                Debug.LogWarning($"[ARManagerInitializer2] Layer '{planesLayerName}' not found, using default layer for plane.");
-            }
+            planeObj.layer = planesLayer;
+        }
+        else if (enableDetailedRaycastLogging)
+        {
+            Debug.LogWarning($"[ARManagerInitializer2] Layer ID {planesLayer} invalid, using default layer for plane.");
         }
 
         MeshFilter meshFilter = planeObj.AddComponent<MeshFilter>();
@@ -2150,18 +2321,92 @@ public class ARManagerInitializer2 : MonoBehaviour
         MeshRenderer meshRenderer = planeObj.AddComponent<MeshRenderer>();
         if (this.verticalPlaneMaterial != null)
         {
-            meshRenderer.material = new Material(this.verticalPlaneMaterial);
-            // Можно сделать полупрозрачным для отладки
-            // Color color = meshRenderer.material.color;
-            // color.a = 0.7f; 
-            // meshRenderer.material.color = color;
+            // Создаем уникальный экземпляр материала для каждой плоскости
+            Material instanceMaterial = new Material(this.verticalPlaneMaterial);
+
+            // ПРИОРИТЕТ 2: Реалистичное нанесение краски
+            // Настраиваем прозрачное смешивание вместо сплошного зеленого
+            if (instanceMaterial.shader.name == "Custom/WallPaint")
+            {
+                // Включаем ключевые слова шейдера для правильной работы
+                instanceMaterial.EnableKeyword("USE_MASK");
+                instanceMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+
+                // Настраиваем цвет краски (можно сделать настраиваемым через UI)
+                Color paintColor = new Color(0.8f, 0.4f, 0.2f, 0.6f); // Приятный коричневатый цвет краски
+                instanceMaterial.SetColor("_PaintColor", paintColor);
+
+                // Настраиваем фактор смешивания для естественного вида
+                instanceMaterial.SetFloat("_BlendFactor", 0.7f); // 70% прозрачность для реализма
+
+                // Интегрируем маску сегментации для точного наложения краски
+                if (currentSegmentationMask != null)
+                {
+                    instanceMaterial.SetTexture("_SegmentationMask", currentSegmentationMask);
+                    if (enableDetailedRaycastLogging)
+                        Debug.Log($"[ARManagerInitializer2-PRIORITY2] 🎨 Маска сегментации применена к плоскости {planeObj.name}");
+                }
+
+                // Настраиваем AR пространственные параметры для корректной привязки
+                instanceMaterial.SetMatrix("_PlaneToWorldMatrix", planeObj.transform.localToWorldMatrix);
+                instanceMaterial.SetVector("_PlaneNormal", planeObj.transform.forward.normalized);
+                instanceMaterial.SetVector("_PlaneCenter", planeObj.transform.position);
+                instanceMaterial.SetFloat("_PlaneID", planeInstanceCounter % 1000 / 1000.0f);
+
+                // Обновляем матрицы камеры для правильного проецирования
+                Camera arMainCamera = Camera.main;
+                if (arMainCamera != null)
+                {
+                    instanceMaterial.SetMatrix("_WorldToCameraMatrix", arMainCamera.worldToCameraMatrix);
+                    instanceMaterial.SetMatrix("_CameraToWorldMatrix", arMainCamera.cameraToWorldMatrix);
+                }
+
+                if (enableDetailedRaycastLogging)
+                    Debug.Log($"[ARManagerInitializer2-PRIORITY2] 🎨 Реалистичный материал краски настроен для {planeObj.name}: цвет={paintColor}, прозрачность={0.7f}");
+            }
+            else
+            {
+                // Fallback для других шейдеров - делаем полупрозрачным
+                Color fallbackColor = instanceMaterial.color;
+                fallbackColor.a = 0.6f; // Полупрозрачность
+                instanceMaterial.color = fallbackColor;
+
+                if (enableDetailedRaycastLogging)
+                    Debug.LogWarning($"[ARManagerInitializer2-PRIORITY2] Шейдер {instanceMaterial.shader.name} не Custom/WallPaint, используем fallback прозрачность");
+            }
+
+            meshRenderer.material = instanceMaterial;
         }
         else
         {
-            Debug.LogError("[ARManagerInitializer2-UOCP] wallMaterialVertical is not set! Assigning default magenta.");
-            Material simpleMaterial = new Material(Shader.Find("Unlit/Color"));
-            simpleMaterial.color = Color.magenta;
-            meshRenderer.material = simpleMaterial;
+            Debug.LogError("[ARManagerInitializer2-UOCP] verticalPlaneMaterial is not set! Creating realistic paint material from scratch.");
+
+            // Создаем материал с нуля если не назначен
+            Shader wallPaintShader = Shader.Find("Custom/WallPaint");
+            if (wallPaintShader != null)
+            {
+                Material realisticMaterial = new Material(wallPaintShader);
+                realisticMaterial.EnableKeyword("USE_MASK");
+                realisticMaterial.EnableKeyword("USE_AR_WORLD_SPACE");
+                realisticMaterial.SetColor("_PaintColor", new Color(0.7f, 0.3f, 0.2f, 0.65f)); // Реалистичный коричнево-красный
+                realisticMaterial.SetFloat("_BlendFactor", 0.7f);
+
+                if (currentSegmentationMask != null)
+                {
+                    realisticMaterial.SetTexture("_SegmentationMask", currentSegmentationMask);
+                }
+
+                meshRenderer.material = realisticMaterial;
+                Debug.Log("[ARManagerInitializer2-PRIORITY2] 🎨 Создан реалистичный материал краски с нуля");
+            }
+            else
+            {
+                // Последний fallback
+                Material simpleMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                simpleMaterial.color = new Color(0.8f, 0.4f, 0.2f, 0.6f); // Полупрозрачный коричневый
+                meshRenderer.material = simpleMaterial;
+                Debug.LogWarning("[ARManagerInitializer2-PRIORITY2] Шейдер Custom/WallPaint не найден, используем URP/Lit с прозрачностью");
+            }
         }
         // Debug.Log($"[ARManagerInitializer2-UOCP] Applied material to {planeObj.name}. Mesh bounds: {meshFilter.mesh.bounds.size}");
 
@@ -2528,21 +2773,22 @@ public class ARManagerInitializer2 : MonoBehaviour
         int layerID = LayerMask.NameToLayer(layerName);
         if (layerID == -1)
         {
-            Debug.LogError($"[ARManagerInitializer2] Layer '{layerName}' not found in project settings!");
+            Debug.LogError($"[ARManagerInitializer2] Layer '{layerName}' not found! Planes will use default layer.");
             return;
         }
 
         int count = 0;
         foreach (GameObject plane in generatedPlanes)
         {
-            if (plane == null) continue;
-
-            plane.layer = layerID;
-            count++;
+            if (plane != null)
+            {
+                plane.layer = layerID;
+                count++;
+            }
         }
 
-        // Update the stored layer name
-        planesLayerName = layerName;
+        // Update the stored layer ID
+        planesLayer = layerID;
 
         Debug.Log($"[ARManagerInitializer2] Set layer '{layerName}' (ID: {layerID}) for {count} planes");
     }
@@ -2556,18 +2802,22 @@ public class ARManagerInitializer2 : MonoBehaviour
             return;
         }
 
-        // Проверка существования слоя для плоскостей
-        if (!string.IsNullOrEmpty(planesLayerName))
+        // Проверка валидности слоя для плоскостей
+        if (planesLayer >= 0 && planesLayer < 32)
         {
-            int layerID = LayerMask.NameToLayer(planesLayerName);
-            if (layerID == -1)
+            string layerName = LayerMask.LayerToName(planesLayer);
+            if (string.IsNullOrEmpty(layerName))
             {
-                Debug.LogWarning($"[ARManagerInitializer2] Layer '{planesLayerName}' not found in project settings! Planes will use default layer.");
+                Debug.LogWarning($"[ARManagerInitializer2] Layer ID {planesLayer} doesn't have a name in project settings! Planes will use this layer anyway.");
             }
             else
             {
-                Debug.Log($"[ARManagerInitializer2] Planes will use layer '{planesLayerName}' (ID: {layerID})");
+                Debug.Log($"[ARManagerInitializer2] Planes will use layer '{layerName}' (ID: {planesLayer})");
             }
+        }
+        else
+        {
+            Debug.LogWarning($"[ARManagerInitializer2] Invalid layer ID {planesLayer}! Planes will use default layer.");
         }
 
         Debug.Log("[ARManagerInitializer2] Persistent planes system initialized.");
