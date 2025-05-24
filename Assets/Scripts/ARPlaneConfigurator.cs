@@ -56,17 +56,17 @@ public class ARPlaneConfigurator : MonoBehaviour
                 return;
             }
         }
-
-        // Находим ARAnchorManager для создания якорей
-        anchorManager = FindObjectOfType<ARAnchorManager>();
-        if (anchorManager == null && improveVerticalPlaneStability)
-        {
-            Debug.LogWarning("ARPlaneConfigurator: ARAnchorManager не найден. Улучшение стабильности вертикальных плоскостей будет ограничено.");
-        }
     }
 
     private void Start()
     {
+        // Находим ARAnchorManager для создания якорей
+        anchorManager = FindObjectOfType<ARAnchorManager>();
+        if (anchorManager == null && improveVerticalPlaneStability)
+        {
+            Debug.LogWarning("ARPlaneConfigurator: ARAnchorManager не найден в Start(). Улучшение стабильности вертикальных плоскостей будет ограничено.");
+        }
+
         ConfigurePlaneManager();
         // Запускаем корутину для стабилизации плоскостей после начального сканирования
         StartCoroutine(StabilizePlanesAfterDelay());
@@ -847,5 +847,216 @@ public class ARPlaneConfigurator : MonoBehaviour
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Configures a newly detected AR plane with appropriate settings
+    /// Called by ARManagerInitializer2 when a new plane is detected
+    /// </summary>
+    /// <param name="plane">The AR plane to configure</param>
+    /// <param name="wallSegmentation">Reference to wall segmentation for mask data</param>
+    /// <param name="manager">Reference to the AR manager that called this method</param>
+    public void ConfigurePlane(ARPlane plane, WallSegmentation wallSegmentation, ARManagerInitializer2 manager)
+    {
+        if (plane == null)
+        {
+            Debug.LogWarning("ARPlaneConfigurator.ConfigurePlane: plane is null");
+            return;
+        }
+
+        // Get or add MeshRenderer component
+        MeshRenderer planeRenderer = plane.GetComponent<MeshRenderer>();
+        if (planeRenderer == null)
+        {
+            planeRenderer = plane.gameObject.AddComponent<MeshRenderer>();
+        }
+
+        // Disable AR Foundation's default visualizer to use our custom rendering
+        var visualizer = plane.GetComponent<ARPlaneMeshVisualizer>();
+        if (visualizer != null)
+        {
+            visualizer.enabled = false;
+        }
+
+        // Apply appropriate material based on plane type
+        Material materialToUse = null;
+        if (IsVerticalPlane(plane) && verticalPlaneMaterial != null)
+        {
+            materialToUse = verticalPlaneMaterial;
+        }
+        else if (!IsVerticalPlane(plane) && manager.HorizontalPlaneMaterial != null)
+        {
+            materialToUse = manager.HorizontalPlaneMaterial;
+        }
+        else if (manager.VerticalPlaneMaterial != null)
+        {
+            materialToUse = manager.VerticalPlaneMaterial; // Fallback
+        }
+
+        if (materialToUse != null)
+        {
+            planeRenderer.material = materialToUse;
+        }
+
+        // Configure rendering settings
+        planeRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        planeRenderer.receiveShadows = false;
+
+        // AR planes should not be static as they can move/update
+        plane.gameObject.isStatic = false;
+
+        // Set appropriate layer if specified in manager
+        if (!string.IsNullOrEmpty(manager.PlaneLayerName))
+        {
+            int layerId = LayerMask.NameToLayer(manager.PlaneLayerName);
+            if (layerId != -1)
+            {
+                plane.gameObject.layer = layerId;
+            }
+            else
+            {
+                Debug.LogError($"ARPlaneConfigurator: Layer '{manager.PlaneLayerName}' not found in Tags and Layers.");
+            }
+        }
+
+        // Apply segmentation mask if available and plane is vertical (wall)
+        if (wallSegmentation != null && IsVerticalPlane(plane))
+        {
+            ApplySegmentationMaskToPlane(plane, wallSegmentation);
+        }
+
+        // Track this plane for stability management
+        if (IsVerticalPlane(plane) && !trackedVerticalPlanes.ContainsKey(plane.trackableId))
+        {
+            trackedVerticalPlanes[plane.trackableId] = plane;
+            planeDetectionTimes[plane.trackableId] = Time.time;
+
+            if (showDebugInfo)
+            {
+                Debug.Log($"ARPlaneConfigurator: New vertical plane tracked: {plane.trackableId}");
+            }
+        }
+
+        if (showDebugInfo)
+        {
+            Debug.Log($"ARPlaneConfigurator: Configured plane {plane.trackableId}, Type: {(IsVerticalPlane(plane) ? "Vertical" : "Horizontal")}, Size: {plane.size}");
+        }
+    }
+
+    /// <summary>
+    /// Updates an existing AR plane with new data
+    /// Called by ARManagerInitializer2 when a plane is updated
+    /// </summary>
+    /// <param name="plane">The AR plane to update</param>
+    /// <param name="wallSegmentation">Reference to wall segmentation for mask data</param>
+    /// <param name="manager">Reference to the AR manager that called this method</param>
+    public void UpdatePlane(ARPlane plane, WallSegmentation wallSegmentation, ARManagerInitializer2 manager)
+    {
+        if (plane == null)
+        {
+            Debug.LogWarning("ARPlaneConfigurator.UpdatePlane: plane is null");
+            return;
+        }
+
+        // Don't update persistent planes if they're marked as stable
+        if (persistentPlaneIds.Contains(plane.trackableId) && disablePlaneUpdatesAfterStabilization)
+        {
+            return; // Skip updating this plane as it's been stabilized
+        }
+
+        // Update renderer settings
+        MeshRenderer planeRenderer = plane.GetComponent<MeshRenderer>();
+        if (planeRenderer != null)
+        {
+            // Reapply material in case it was lost or changed
+            Material materialToUse = null;
+            if (IsVerticalPlane(plane) && verticalPlaneMaterial != null)
+            {
+                materialToUse = verticalPlaneMaterial;
+            }
+            else if (!IsVerticalPlane(plane) && manager.HorizontalPlaneMaterial != null)
+            {
+                materialToUse = manager.HorizontalPlaneMaterial;
+            }
+            else if (manager.VerticalPlaneMaterial != null)
+            {
+                materialToUse = manager.VerticalPlaneMaterial; // Fallback
+            }
+
+            if (materialToUse != null)
+            {
+                planeRenderer.material = materialToUse;
+            }
+
+            // Ensure rendering settings are maintained
+            planeRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            planeRenderer.receiveShadows = false;
+        }
+
+        // Update layer assignment
+        if (!string.IsNullOrEmpty(manager.PlaneLayerName))
+        {
+            int layerId = LayerMask.NameToLayer(manager.PlaneLayerName);
+            if (layerId != -1)
+            {
+                plane.gameObject.layer = layerId;
+            }
+        }
+
+        // Update segmentation mask for vertical planes
+        if (wallSegmentation != null && IsVerticalPlane(plane))
+        {
+            ApplySegmentationMaskToPlane(plane, wallSegmentation);
+        }
+
+        // Update tracking information
+        if (IsVerticalPlane(plane))
+        {
+            if (!trackedVerticalPlanes.ContainsKey(plane.trackableId))
+            {
+                trackedVerticalPlanes[plane.trackableId] = plane;
+                planeDetectionTimes[plane.trackableId] = Time.time;
+            }
+            else
+            {
+                trackedVerticalPlanes[plane.trackableId] = plane; // Update reference
+            }
+        }
+
+        if (showDebugInfo)
+        {
+            Debug.Log($"ARPlaneConfigurator: Updated plane {plane.trackableId}, Size: {plane.size}");
+        }
+    }
+
+    /// <summary>
+    /// Applies segmentation mask data to a plane for more accurate wall detection
+    /// </summary>
+    /// <param name="plane">The plane to apply the mask to</param>
+    /// <param name="wallSegmentation">The wall segmentation component providing mask data</param>
+    private void ApplySegmentationMaskToPlane(ARPlane plane, WallSegmentation wallSegmentation)
+    {
+        if (plane == null || wallSegmentation == null) return;
+
+        // Get the current segmentation mask
+        var segmentationMask = wallSegmentation.segmentationMaskTexture;
+        if (segmentationMask == null) return;
+
+        // Apply the mask to the plane's material if it supports it
+        MeshRenderer renderer = plane.GetComponent<MeshRenderer>();
+        if (renderer != null && renderer.material != null)
+        {
+            // Check if the material has a property for segmentation mask
+            if (renderer.material.HasProperty("_SegmentationMask"))
+            {
+                renderer.material.SetTexture("_SegmentationMask", segmentationMask);
+            }
+
+            // Update other mask-related properties if they exist
+            if (renderer.material.HasProperty("_WallConfidence"))
+            {
+                renderer.material.SetFloat("_WallConfidence", wallSegmentation.WallConfidence);
+            }
+        }
     }
 }

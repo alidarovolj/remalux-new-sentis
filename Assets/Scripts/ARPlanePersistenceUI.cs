@@ -26,7 +26,7 @@ public class ARPlanePersistenceUI : MonoBehaviour
       public TextMeshProUGUI statusText { get { return _statusText; } set { _statusText = value; } }
 
       [Header("Settings")]
-      [SerializeField] private float minDistanceBetweenPlanes = 0.5f;
+      // [SerializeField] private float minDistanceBetweenPlanes = 0.5f; // Закомментировано из-за CS0414 (не используется в текущей логике)
       [SerializeField] private float maxPlanesInScene = 20; // Limit to prevent performance issues
 
       private int savedPlanesCount = 0;
@@ -184,13 +184,13 @@ public class ARPlanePersistenceUI : MonoBehaviour
       /// </summary>
       public void ResetSavedPlanes()
       {
-            if (_arManagerInitializer == null)
+            if (_planeConfigurator == null)
             {
-                  Debug.LogError("ARPlanePersistenceUI: Missing reference to ARManagerInitializer2");
+                  Debug.LogError("ARPlanePersistenceUI: Missing reference to ARPlaneConfigurator");
                   return;
             }
 
-            _arManagerInitializer.ResetAllPlanes();
+            _planeConfigurator.ResetAllPlanes();
             savedPlanesCount = 0;
             UpdateStatusText();
             Debug.Log("Reset all persistent planes");

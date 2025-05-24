@@ -13,6 +13,7 @@ public class SceneSetupHelper : MonoBehaviour
       [SerializeField] private bool logEnvironmentSetup = true;
 
       private static bool environmentCreated = false;
+      private GameObject simulatedEnvironmentInstance;
 
       [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
       private static void AutoSetupScene()
@@ -31,20 +32,38 @@ public class SceneSetupHelper : MonoBehaviour
             if (logEnvironmentSetup)
                   Debug.Log("[SceneSetupHelper] Настройка симулированной среды...");
 
-            // Ищем существующую среду по типичным именам и проверяем наличие коллайдеров
-            GameObject existingEnvironment = FindExistingSimulationEnvironment();
-            if (existingEnvironment != null && HasValidColliders(existingEnvironment))
+            // Если запущено на устройстве, не создаем/не активируем симуляционную среду
+            if (!Application.isEditor)
             {
                   if (logEnvironmentSetup)
-                        Debug.Log($"[SceneSetupHelper] Симулированная среда с коллайдерами уже существует: {existingEnvironment.name}");
+                        Debug.Log("[SceneSetupHelper] Запущено на устройстве. Симуляционная среда НЕ будет создана/активирована.");
+
+                  // Попытка найти и деактивировать, если вдруг уже существует
+                  simulatedEnvironmentInstance = FindExistingSimulationEnvironment();
+                  if (simulatedEnvironmentInstance != null)
+                  {
+                        simulatedEnvironmentInstance.SetActive(false);
+                        if (logEnvironmentSetup)
+                              Debug.Log($"[SceneSetupHelper] Существующая симуляционная среда '{simulatedEnvironmentInstance.name}' деактивирована на устройстве.");
+                  }
+                  environmentCreated = true; // Помечаем, чтобы не пытаться создать снова
+                  return;
+            }
+
+            // Ищем существующую среду по типичным именам и проверяем наличие коллайдеров
+            simulatedEnvironmentInstance = FindExistingSimulationEnvironment();
+            if (simulatedEnvironmentInstance != null && HasValidColliders(simulatedEnvironmentInstance))
+            {
+                  if (logEnvironmentSetup)
+                        Debug.Log($"[SceneSetupHelper] Симулированная среда с коллайдерами уже существует: {simulatedEnvironmentInstance.name}");
                   environmentCreated = true;
                   return;
             }
 
-            if (existingEnvironment != null && !HasValidColliders(existingEnvironment))
+            if (simulatedEnvironmentInstance != null && !HasValidColliders(simulatedEnvironmentInstance))
             {
                   if (logEnvironmentSetup)
-                        Debug.LogWarning($"[SceneSetupHelper] Найден объект {existingEnvironment.name}, но у него нет коллайдеров. Создаю дополнительную симулированную среду.");
+                        Debug.LogWarning($"[SceneSetupHelper] Найден объект {simulatedEnvironmentInstance.name}, но у него нет коллайдеров. Создаю дополнительную симулированную среду.");
             }
 
             // Загружаем префаб симулированной среды
@@ -69,6 +88,7 @@ public class SceneSetupHelper : MonoBehaviour
                   // Создаем из префаба
                   var environmentInstance = Instantiate(simulationEnvironmentPrefab);
                   environmentInstance.name = "Simulation Environment (Auto-Created)";
+                  simulatedEnvironmentInstance = environmentInstance;
 
                   if (logEnvironmentSetup)
                         Debug.Log($"[SceneSetupHelper] ✅ Создана симулированная среда из префаба: {simulationEnvironmentPrefab.name}");

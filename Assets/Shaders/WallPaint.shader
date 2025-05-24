@@ -19,9 +19,9 @@ Shader "Custom/WallPaint"
         
         // Transparent blending setup
         Blend SrcAlpha OneMinusSrcAlpha
-        Cull Off
+        Cull Back
         ZWrite Off
-        ZTest Always
+        ZTest LEqual
 
         Pass
         {

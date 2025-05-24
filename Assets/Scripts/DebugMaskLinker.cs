@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using System.IO;
 
 // [RequireComponent(typeof(RawImage))] // Оставляем, но можно и убрать, если RawImage всегда есть
 public class DebugMaskLinker : MonoBehaviour
@@ -10,38 +11,70 @@ public class DebugMaskLinker : MonoBehaviour
     private bool hasSavedOnce = false;
     private const int SAVE_AFTER_N_UPDATES = 5; // Уменьшено для быстрой проверки
 
+    [SerializeField] private Material unlitDisplayMaterial; // Поле для назначения материала в инспекторе
+
     void Start()
     {
         rawImage = GetComponent<RawImage>();
         if (rawImage == null)
         {
-            Debug.LogError("[DebugMaskLinker] Компонент RawImage не найден на этом GameObject!", gameObject);
-            enabled = false; // Отключаем компонент, если нет RawImage
+            Debug.LogError("[DebugMaskLinker] RawImage компонент не найден на этом GameObject.", gameObject);
+            enabled = false; // Отключаем скрипт, если нет RawImage
             return;
         }
 
-        // ИСПРАВЛЕНО: Отключаем Raycast Target для предотвращения блокировки касаний по экрану
-        rawImage.raycastTarget = false;
-        Debug.Log("[DebugMaskLinker] Raycast Target отключен для предотвращения блокировки AR-взаимодействия.", gameObject);
+        // Проверяем, назначен ли материал через инспектор
+        if (unlitDisplayMaterial == null)
+        {
+            Debug.LogError("[DebugMaskLinker] Материал 'Unlit Display Material' не назначен в инспекторе!", gameObject);
+            // Можно попытаться загрузить стандартный, если основной не назначен, или оставить как есть
+            // Например, можно попробовать найти стандартный UI шейдер или просто использовать то, что есть по умолчанию
+        }
+        else
+        {
+            // Применяем назначенный материал, если он отличается от текущего или если текущий - стандартный
+            if (rawImage.material == null || rawImage.material.name.Contains("Default") || rawImage.material == GetDefaultUIMaterial())
+            {
+                rawImage.material = unlitDisplayMaterial;
+                Debug.Log($"[DebugMaskLinker] Назначен кастомный материал '{unlitDisplayMaterial.name}' для RawImage.", gameObject);
+            }
+        }
+
+        // Загружаем наш специальный материал, если текущий - стандартный UI материал
+        // Это условие должно быть более точным, чтобы не перезаписывать уже кастомно назначенный материал
+        if (unlitDisplayMaterial != null && (rawImage.material == null || rawImage.material.name.Contains("Default") || rawImage.material == GetDefaultUIMaterial()))
+        {
+            rawImage.material = unlitDisplayMaterial;
+            Debug.Log($"[DebugMaskLinker] Назначен кастомный материал '{unlitDisplayMaterial.name}' для RawImage в Start().", gameObject);
+        }
+        else if (unlitDisplayMaterial == null)
+        {
+            Debug.LogWarning("[DebugMaskLinker] 'Unlit Display Material' не назначен в инспекторе. RawImage будет использовать свой текущий или стандартный материал.", gameObject);
+        }
+
+        // Отключаем Raycast Target, чтобы UI элемент не блокировал взаимодействие с AR объектами
+        if (rawImage.raycastTarget)
+        {
+            rawImage.raycastTarget = false;
+            Debug.Log("[DebugMaskLinker] Raycast Target отключен для предотвращения блокировки AR-взаимодействия.", gameObject);
+        }
 
         wallSegmentation = FindObjectOfType<WallSegmentation>();
         if (wallSegmentation == null)
         {
-            Debug.LogError("[DebugMaskLinker] Компонент WallSegmentation не найден в сцене!", gameObject);
-            enabled = false; // Отключаем компонент, если нет WallSegmentation
+            Debug.LogError("[DebugMaskLinker] WallSegmentation компонент не найден в сцене.", gameObject);
+            enabled = false;
             return;
         }
 
-        // Подписываемся на событие обновления маски
         wallSegmentation.OnSegmentationMaskUpdated += UpdateMaskTexture;
         Debug.Log("[DebugMaskLinker] Успешно подписался на OnSegmentationMaskUpdated от WallSegmentation.", gameObject);
 
-        // Попытка установить начальную маску, если она уже есть и модель инициализирована
-        // Это полезно, если WallSegmentation инициализируется раньше, чем DebugMaskLinker
+        // Попытка получить начальную маску, если она уже доступна
         if (wallSegmentation.IsModelInitialized && wallSegmentation.segmentationMaskTexture != null && wallSegmentation.segmentationMaskTexture.IsCreated())
         {
-            Debug.Log("[DebugMaskLinker] Попытка установить начальную маску.", gameObject);
             UpdateMaskTexture(wallSegmentation.segmentationMaskTexture);
+            Debug.Log("[DebugMaskLinker] Получена начальная маска от WallSegmentation.", gameObject);
         }
         else
         {
@@ -57,38 +90,76 @@ public class DebugMaskLinker : MonoBehaviour
             return;
         }
 
-        if (mask == null)
+        // Проверяем и при необходимости назначаем кастомный материал еще раз здесь, если он слетел
+        if (unlitDisplayMaterial != null && (rawImage.material == null || rawImage.material.name.Contains("Default") || rawImage.material == GetDefaultUIMaterial()))
         {
-            Debug.LogWarning("[DebugMaskLinker] Получена null маска в UpdateMaskTexture. Текстура RawImage не будет обновлена.", gameObject);
-            // Можно сделать RawImage черным или скрыть его, если маска null
-            // rawImage.texture = null;
-            // rawImage.color = Color.clear; // или new Color(0,0,0,0) для полной прозрачности
+            rawImage.material = unlitDisplayMaterial;
+            Debug.Log($"[DebugMaskLinker] (UpdateMaskTexture) Назначен кастомный материал '{unlitDisplayMaterial.name}' для RawImage.", gameObject);
+        }
+
+        Debug.Log($"[DebugMaskLinker] Получена маска в UpdateMaskTexture. IsNull: {mask == null}. Если не null, IsCreated: {(mask != null ? mask.IsCreated().ToString() : "N/A")}", gameObject);
+
+        if (mask == null || !mask.IsCreated())
+        {
+            if (rawImage.texture != null)
+            {
+                rawImage.texture = null; // Очищаем текстуру
+                Debug.LogWarning("[DebugMaskLinker] Получена невалидная/null маска, RawImage текстура очищена.", gameObject);
+            }
+            // Можно также деактивировать RawImage, если маска недействительна
+            // if (rawImage.gameObject.activeSelf) rawImage.gameObject.SetActive(false);
+            // if (rawImage.enabled) rawImage.enabled = false;
             return;
         }
 
-        if (mask.IsCreated())
+        rawImage.texture = mask;
+        rawImage.color = Color.white; // << ПРОВЕРЯЕМ, ЧТО ЦВЕТ НЕ ПРОЗРАЧНЫЙ
+
+        Debug.Log($"[DebugMaskLinker] Texture assigned to RawImage. Current texture: {(rawImage.texture != null ? rawImage.texture.name + " (InstanceID: " + rawImage.texture.GetInstanceID() + ")" : "null")}", gameObject);
+
+        if (rawImage.material != null)
         {
-            Debug.Log($"[DebugMaskLinker] Обновление текстуры RawImage: Маска ({mask.width}x{mask.height}, формат: {mask.format}, isReadable: {mask.isReadable}), RawImage InstanceID: {rawImage.GetInstanceID()}", gameObject);
-            rawImage.texture = mask;
-            rawImage.color = Color.white; // Устанавливаем белый цвет, чтобы убрать влияние альфа-канала самого RawImage
-            Debug.Log($"[DebugMaskLinker] Текстура RawImage назначена. Текущая текстура RawImage: {(rawImage.texture == null ? "null" : rawImage.texture.name + " (" + rawImage.texture.GetInstanceID() + ")")}", gameObject);
-
-            updateCounter++;
-
-            // Отладочный лог перед условием сохранения
-            Debug.Log($"[DebugMaskLinker] Проверка условия сохранения: hasSavedOnce = {hasSavedOnce}, updateCounter = {updateCounter}, SAVE_AFTER_N_UPDATES = {SAVE_AFTER_N_UPDATES}", gameObject);
-
-            // Автоматическое сохранение маски для отладки
-            if (!hasSavedOnce && updateCounter >= SAVE_AFTER_N_UPDATES)
-            {
-                Debug.Log($"[DebugMaskLinker] Достигнуто {SAVE_AFTER_N_UPDATES} обновлений ({updateCounter}). Автоматическое сохранение маски DebugMaskOutput_Auto.png...", gameObject);
-                SaveRenderTextureToFile(mask, "DebugMaskOutput_Auto.png");
-                hasSavedOnce = true; // Предотвращаем повторное сохранение
-            }
+            Debug.Log($"[DebugMaskLinker] RawImage Material: {rawImage.material.name} (Shader: {rawImage.material.shader.name})", gameObject);
         }
         else
         {
-            Debug.LogWarning($"[DebugMaskLinker] Получена маска ({mask.width}x{mask.height}), но она не создана (IsCreated() == false). Текстура RawImage не обновлена.", gameObject);
+            Debug.Log("[DebugMaskLinker] RawImage Material: None (Default UI Material)", gameObject);
+        }
+
+        // Убедимся, что GameObject активен, если есть текстура
+        if (!rawImage.gameObject.activeSelf)
+        {
+            rawImage.gameObject.SetActive(true);
+            Debug.Log("[DebugMaskLinker] GameObject RawImage был неактивен, активирован.", gameObject);
+        }
+        if (!rawImage.enabled)
+        {
+            rawImage.enabled = true;
+            Debug.Log("[DebugMaskLinker] Компонент RawImage был выключен, включен.", gameObject);
+        }
+
+        updateCounter++;
+        if (updateCounter >= SAVE_AFTER_N_UPDATES && !hasSavedOnce)
+        {
+            // SaveRenderTextureToFile(mask, "DebugMaskOutput_Auto.png"); // Пока закомментируем, чтобы не засорять
+            // hasSavedOnce = true; // Раскомментируйте, если хотите сохранять только один раз
+            // updateCounter = 0; // Сброс счетчика, если нужно периодическое сохранение
+            Debug.Log($"[DebugMaskLinker] Достигнуто {SAVE_AFTER_N_UPDATES} обновлений ({updateCounter}). Автоматическое сохранение маски DebugMaskOutput_Auto.png...", gameObject);
+#if UNITY_EDITOR
+            // Автоматическое сохранение PNG работает только в редакторе для отладки
+            SaveRenderTextureToFile(mask, "DebugMaskOutput_Auto.png");
+            hasSavedOnce = true; // Сохраняем только один раз для теста
+#else
+            Debug.Log("[DebugMaskLinker] Автоматическое сохранение PNG отключено в релизной сборке для оптимизации производительности.", gameObject);
+            hasSavedOnce = true; // Помечаем как сохраненное, чтобы избежать повторных попыток
+#endif
+        }
+
+        // Убеждаемся, что стандартный UI материал корректно работает с текстурой (если наш материал не назначен)
+        if (rawImage.material == null || rawImage.material.name.Contains("Default") || rawImage.material == GetDefaultUIMaterial())
+        {
+            // Для стандартного UI материала обычно достаточно просто установить текстуру и цвет.
+            // Если используется специфический UI шейдер, могут потребоваться другие настройки.
         }
     }
 
@@ -119,6 +190,16 @@ public class DebugMaskLinker : MonoBehaviour
         {
             Object.Destroy(tex2D); // Очищаем созданную Texture2D
         }
+    }
+
+    // Вспомогательный метод для получения стандартного UI материала (может отличаться в зависимости от версии Unity)
+    private Material GetDefaultUIMaterial()
+    {
+        // Этот метод может потребовать доработки для точного определения стандартного материала UI в вашей версии Unity
+        // На практике, проверка по имени "Default UI Material" или "Sprites-Default" часто бывает достаточной
+        // В новых версиях Unity это может быть материал с шейдером "UI/Default"
+        var defaultMat = new Material(Shader.Find("UI/Default")); // Это создаст новый экземпляр, используйте для сравнения имени или шейдера
+        return defaultMat; // Возвращаем для примера, лучше сравнивать по имени или шейдеру существующего материала
     }
 
     void OnDestroy()
