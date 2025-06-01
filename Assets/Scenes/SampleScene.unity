@@ -151,7 +151,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7c5e9d42d63576941ab9e51370569565, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  planeManager: {fileID: 0}
+  planeManager: {fileID: 151853166}
   enableVerticalPlanes: 1
   enableHorizontalPlanes: 1
   showDebugInfo: 1
@@ -326,7 +326,7 @@ MonoBehaviour:
   minAreaSizeInPixels: 10
   wallAreaRedChannelThreshold: 30
   enableDetailedRaycastLogging: 1
-  maxRayDistance: 10
+  maxRayDistance: 70
   hitLayerMask:
     serializedVersion: 2
     m_Bits: 4294967295
@@ -343,6 +343,8 @@ MonoBehaviour:
   horizontalPlaneMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
     type: 2}
   debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
+  enableWallAreaDetectionLogging: 1
+  enableSceneObjectsDiagnostics: 1
   planeStableTimeThreshold: 0.1
   unvisitedPlaneRemovalDelay: 0.5
   enableDoubleTapSave: 1

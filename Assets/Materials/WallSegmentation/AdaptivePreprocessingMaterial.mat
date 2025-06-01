@@ -31,7 +31,7 @@ Material:
     m_Floats:
     - _AutoContrast: 0.5
     - _Brightness: 1.2
-    - _Contrast: 1.9980958
+    - _Contrast: 1.998309
     - _Sharpening: 0.8
     m_Colors: []
   m_BuildTextureStacks: []
