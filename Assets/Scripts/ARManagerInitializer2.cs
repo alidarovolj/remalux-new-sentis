@@ -46,11 +46,11 @@ public class ARManagerInitializer2 : MonoBehaviour
 
     [Header("Настройки Рейкастинга для Плоскостей")]
     [Tooltip("Включить подробное логирование процесса рейкастинга и фильтрации попаданий.")]
-    public bool enableDetailedRaycastLogging = true;
+    [SerializeField] private bool enableDetailedRaycastLogging = true; // ВРЕМЕННО ВКЛЮЧЕНО для проверки исправления
     [Tooltip("Максимальное расстояние для рейкастов при поиске поверхностей")]
     [SerializeField] private float maxRayDistance = 10.0f; // Новый параметр
     [Tooltip("Маска слоев для рейкастинга (например, Default, SimulatedEnvironment, Wall)")]
-    [SerializeField] private LayerMask hitLayerMask = ~0; // По умолчанию все слои
+    [SerializeField] private LayerMask hitLayerMask = (1 << 0) | (1 << 8) | (1 << 30) | (1 << 31); // Default + SimulatedEnvironment + XR Simulation + Layer31 (LivingRoom)
     [Tooltip("Минимальное расстояние до объекта, чтобы считать попадание валидным (м). Помогает отфильтровать попадания 'внутрь' объектов или слишком близкие поверхности.")]
     [SerializeField] private float minHitDistanceThreshold = 0.1f;
     [Tooltip("Максимальное допустимое отклонение нормали стены от идеальной вертикали (в градусах). Используется для определения, является ли поверхность стеной.")]
@@ -107,6 +107,10 @@ public class ARManagerInitializer2 : MonoBehaviour
     // Переменная для хранения InstanceID TrackablesParent из Start()
     private int trackablesParentInstanceID_FromStart = 0;
 
+    [Header("🔍 Debug Settings")]
+    [SerializeField] private bool enableWallAreaDetectionLogging = true;
+    [SerializeField] private bool enableSceneObjectsDiagnostics = true; // НОВОЕ: Диагностика объектов сцены и коллайдеров
+
     // [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)] // ЗАКОММЕНТИРОВАТЬ или УДАЛИТЬ
     // private static void Initialize()
     // {
@@ -146,6 +150,16 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             debugRayMaterialPropertyBlock = new MaterialPropertyBlock();
         }
+        
+        // Диагностика объектов сцены и коллайдеров
+        if (enableSceneObjectsDiagnostics)
+        {
+            DiagnoseSceneObjects();
+            
+            // Запускаем повторную проверку через задержку на случай асинхронной загрузки объектов
+            StartCoroutine(DelayedColliderCheck());
+        }
+        
         // Debug.Log($"[ARManagerInitializer2] Awake complete. Instance ID: {this.GetInstanceID()}, Name: {this.gameObject.name}");
 
         // Find ARPlaneConfigurator if not assigned
@@ -863,8 +877,9 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             renderer = planeObject.AddComponent<MeshRenderer>();
         }
-        renderer.enabled = false;
-        Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] MeshRenderer для {planeObject.name} был принудительно ОТКЛЮЧЕН для теста."); // Изменил тег на CreatePlaneForWallArea для ясности
+        // ВРЕМЕННО ВКЛЮЧЕНО ДЛЯ ОТЛАДКИ ПОЗИЦИОНИРОВАНИЯ
+        renderer.enabled = true;
+        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] MeshRenderer для {planeObject.name} ВКЛЮЧЕН для отладки позиционирования."); // Изменил тег на CreatePlaneForWallArea для ясности
 
         // ... (дальнейший код метода: создание меша, коллайдера и т.д.) ...
         // Меш создается в XY, поэтому его нужно повернуть, если LookRotation использовал Z как "вперед"
@@ -1530,9 +1545,15 @@ public class ARManagerInitializer2 : MonoBehaviour
         //     layerMask = 1 << LayerMask.NameToLayer("Default"); // Только Default слой, если другие не найдены // ЗАКОММЕНТИРОВАНО
         // } // ЗАКОММЕНТИРОВАНО
 
-        // ИСПОЛЬЗУЕМ hitLayerMask, НАСТРОЕННУЮ В ИНСПЕКТОРЕ
+        // ИСПОЛЬЗУЕМ hitLayerMask, НАСТРОЕННУЮ В ИНСПЕКТОРЕ, НО ИСКЛЮЧАЕМ СОБСТВЕННЫЕ ПЛОСКОСТИ
         LayerMask layerMask = this.hitLayerMask;
-        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask из инспектора: {LayerMaskToString(layerMask)} (Value: {layerMask.value})");
+        // Исключаем слой ARPlanes (где находятся наши созданные плоскости), чтобы избежать попаданий в собственные плоскости
+        int arPlanesLayer = LayerMask.NameToLayer("ARPlanes");
+        if (arPlanesLayer != -1)
+        {
+            layerMask &= ~(1 << arPlanesLayer); // Убираем ARPlanes из маски
+        }
+        if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask из инспектора (исключен ARPlanes): {LayerMaskToString(layerMask)} (Value: {layerMask.value})");
 
 
         // Параметры для рейкастинга
@@ -1595,7 +1616,8 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             Vector3 offsetDirection = rayOffsets[i]; // Это небольшое смещение направления в мировых координатах
             Vector3 currentRayOrigin = cameraPosition; // Все лучи исходят из позиции камеры
-            Vector3 currentRayDirection = (initialRayDirection + offsetDirection).normalized; // Корректное направление луча
+            // ИСПРАВЛЕНО: Правильное вычисление направления луча со смещением
+            Vector3 currentRayDirection = (initialRayDirection + offsetDirection * 0.1f).normalized; // Добавляем смещение как небольшое отклонение, не нормализуем offsetDirection
 
             // Отладочный вывод
             // Проверяем, что rayWeights имеет достаточно элементов
@@ -1829,9 +1851,11 @@ public class ARManagerInitializer2 : MonoBehaviour
             // либо реальное расстояние от лучшего кластера. bestNormal и bestConfidence также установлены.
 
             float determinedDistance;
+            Vector3 determinedHitPoint; // ДОБАВЛЕНО: Для хранения точки попадания
             if (successfulHits.Count > 3 && bestClusterWeight > 0) // Если кластеризация была успешна и дала результат
             {
                 determinedDistance = bestDistance; // bestDistance уже хранит реальное расстояние кластера
+                determinedHitPoint = cameraPosition + initialRayDirection * determinedDistance; // ДОБАВЛЕНО: Приблизительная точка попадания
                 if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Используется расстояние от КЛАСТЕРИЗАЦИИ: {determinedDistance:F2}м");
             }
             else // Используем лучший одиночный хит (если был)
@@ -1839,12 +1863,14 @@ public class ARManagerInitializer2 : MonoBehaviour
                 // Нужно найти RaycastHit, соответствующий bestConfidence и bestDistance (метрике)
                 float targetMetric = bestDistance;
                 determinedDistance = 2.2f; // Фоллбэк, если не найдем
+                determinedHitPoint = cameraPosition + initialRayDirection * determinedDistance; // ДОБАВЛЕНО: Фоллбэк точка
                 bool foundOriginalHit = false;
                 for (int k = 0; k < successfulHits.Count; ++k)
                 {
                     if (Mathf.Approximately(successfulHits[k].distance / hitWeights[k], targetMetric) && Mathf.Approximately(hitWeights[k], bestConfidence))
                     {
                         determinedDistance = successfulHits[k].distance;
+                        determinedHitPoint = successfulHits[k].point; // ДОБАВЛЕНО: Используем реальную точку попадания
                         foundOriginalHit = true;
                         if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Используется расстояние от ЛУЧШЕГО ОДИНОЧНОГО ХИТА #{k}: {determinedDistance:F2}м (Нормаль: {successfulHits[k].normal})");
                         break;
@@ -1853,6 +1879,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                 if (!foundOriginalHit && successfulHits.Count > 0)
                 { // Если не нашли точное совпадение по метрике, но хиты были
                     determinedDistance = successfulHits[0].distance; // Берем первый попавший, как крайний случай
+                    determinedHitPoint = successfulHits[0].point; // ДОБАВЛЕНО: Используем реальную точку попадания
                     bestNormal = successfulHits[0].normal; // И его нормаль
                                                            // Debug.LogWarning($"[ARManagerInitializer2-UOCP] Не удалось точно восстановить лучший одиночный хит по метрике. Используется первый хит: Дистанция={determinedDistance:F2}м, Нормаль={bestNormal}");
                 }
@@ -1862,11 +1889,15 @@ public class ARManagerInitializer2 : MonoBehaviour
                 }
             }
 
-            actualDistanceFromCameraForPlane = determinedDistance + 0.02f; // Небольшой отступ
+            // ИСПРАВЛЕНО: Используем реальную точку попадания с небольшим смещением ПО НОРМАЛИ
+            actualDistanceFromCameraForPlane = determinedDistance;
             actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, minHitDistanceThreshold, 6.0f);
-            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 РЕЗУЛЬТАТ РЕЙКАСТА: Финальное расстояние до плоскости = {actualDistanceFromCameraForPlane:F2}м (на основе хита/кластера, с отступом и clamp). Исходная нормаль = {bestNormal:F2}");
+            
+            // ИСПРАВЛЕНО: Позиционируем плоскость на реальной поверхности со смещением по нормали
+            finalPlanePosition = determinedHitPoint + bestNormal * 0.005f; // Небольшое смещение ОТ поверхности по нормали
+            
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 РЕЗУЛЬТАТ РЕЙКАСТА: Финальное расстояние до плоскости = {actualDistanceFromCameraForPlane:F2}м, Позиция = {finalPlanePosition:F2}, Точка попадания = {determinedHitPoint:F2}, Нормаль = {bestNormal:F2}");
 
-            finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
             // Ориентируем Z плоскости ПО нормали к поверхности (чтобы плоскость "лежала" на поверхности)
             // forward плоскости будет смотреть ОТ поверхности.
             finalPlaneRotation = Quaternion.LookRotation(bestNormal, mainCamera.transform.up);  // ИЗМЕНЕНО: arCamera -> mainCamera
@@ -1998,7 +2029,18 @@ public class ARManagerInitializer2 : MonoBehaviour
                 actualDistanceFromCameraForPlane = adaptiveBaseDistance + sizeAdjustment + positionAdjustment;
                 actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.4f, 4.5f);
                 // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Эвристика: Адаптивное расстояние = {actualDistanceFromCameraForPlane:F2}м (est.Width={estimatedPlaneWidthInMetersBasedOnArea:F2})");
-                bestNormal = -initialRayDirection; // ИЗМЕНЕНО: rayDirection -> initialRayDirection // Ориентируем перпендикулярно лучу, если нет лучшей информации
+                
+                // ИСПРАВЛЕНО: Не используем -initialRayDirection для нормали, а пытаемся определить подходящую нормаль для стены
+                // Для вертикальных плоскостей (стен) нормаль должна быть горизонтальной и перпендикулярной к направлению взгляда
+                Vector3 camerForwardHorizontal = new Vector3(initialRayDirection.x, 0, initialRayDirection.z).normalized;
+                bestNormal = Vector3.Cross(camerForwardHorizontal, Vector3.up).normalized; // Нормаль перпендикулярна горизонтальному направлению камеры
+                
+                // Проверяем, в какую сторону должна смотреть нормаль (к камере или от камеры)
+                Vector3 toCameraHorizontal = new Vector3(-initialRayDirection.x, 0, -initialRayDirection.z).normalized;
+                if (Vector3.Dot(bestNormal, toCameraHorizontal) < 0)
+                {
+                    bestNormal = -bestNormal; // Инвертируем нормаль, чтобы она смотрела к камере
+                }
             }
 
             finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
@@ -2801,5 +2843,231 @@ public class ARManagerInitializer2 : MonoBehaviour
             lastTapTime = currentTime;
             lastTapPosition = position;
         }
+    }
+
+    /// <summary>
+    /// Диагностирует объекты сцены и их коллайдеры для понимания проблем с рейкастингом
+    /// </summary>
+    private void DiagnoseSceneObjects()
+    {
+        Debug.Log("=== [ARManagerInitializer2] ДИАГНОСТИКА ОБЪЕКТОВ СЦЕНЫ ===");
+        
+        // Найдем все объекты с коллайдерами
+        Collider[] allColliders = FindObjectsOfType<Collider>(true); // включая неактивные
+        Debug.Log($"[Диагностика] Всего коллайдеров в сцене: {allColliders.Length}");
+        
+        int enabledColliders = 0;
+        int meshColliders = 0;
+        int boxColliders = 0;
+        
+        foreach (var collider in allColliders)
+        {
+            if (collider.enabled) enabledColliders++;
+            
+            string layerName = LayerMask.LayerToName(collider.gameObject.layer);
+            if (string.IsNullOrEmpty(layerName)) layerName = $"Layer{collider.gameObject.layer}";
+            
+            if (collider is MeshCollider) meshColliders++;
+            else if (collider is BoxCollider) boxColliders++;
+            
+            Debug.Log($"[Диагностика] Коллайдер: '{collider.name}' ({collider.GetType().Name}), активен: {collider.enabled}, слой: {layerName}");
+        }
+        
+        Debug.Log($"[Диагностика] Активных коллайдеров: {enabledColliders}, MeshCollider: {meshColliders}, BoxCollider: {boxColliders}");
+        
+        // ЕСЛИ КОЛЛАЙДЕРЫ ОТСУТСТВУЮТ - СРАЗУ ДОБАВЛЯЕМ ИХ
+        if (allColliders.Length == 0)
+        {
+            Debug.LogWarning("[Диагностика] ⚠️ Коллайдеры отсутствуют! Запускаем немедленное добавление...");
+            ForceAddCollidersAggressively();
+        }
+        
+        // Проверим какие симуляционные объекты активны в сцене
+        GameObject[] allGameObjects = FindObjectsOfType<GameObject>(true);
+        
+        foreach (var obj in allGameObjects)
+        {
+            if (obj.name.Contains("Environment") || obj.name.Contains("Simulation"))
+            {
+                Debug.Log($"[Диагностика] Найден объект симуляции: '{obj.name}', активен: {obj.activeInHierarchy}, слой: {obj.layer} ({LayerMask.LayerToName(obj.layer)})");
+                
+                // Проверим коллайдеры в дочерних объектах
+                Collider[] childColliders = obj.GetComponentsInChildren<Collider>(true);
+                Debug.Log($"[Диагностика] У объекта '{obj.name}' найдено {childColliders.Length} коллайдеров в дочерних объектах");
+            }
+        }
+        
+        Debug.Log("=== [ARManagerInitializer2] КОНЕЦ ДИАГНОСТИКИ ===");
+    }
+
+    /// <summary>
+    /// Повторная проверка и добавление коллайдеров через задержку (для асинхронно загружаемых объектов)
+    /// </summary>
+    private IEnumerator DelayedColliderCheck()
+    {
+        for (int attempt = 1; attempt <= 5; attempt++) // 5 попыток с интервалом 3 секунды
+        {
+            yield return new WaitForSeconds(3.0f); // Ждем 3 секунды
+            
+            Debug.Log($"=== [ARManagerInitializer2] ПОВТОРНАЯ ПРОВЕРКА #{attempt}/5 (через {attempt * 3} сек.) ===");
+            
+            Collider[] allColliders = FindObjectsOfType<Collider>(true);
+            MeshRenderer[] allRenderers = FindObjectsOfType<MeshRenderer>(true);
+            GameObject[] allObjects = FindObjectsOfType<GameObject>(true);
+            
+            Debug.Log($"[Повторная проверка #{attempt}] Найдено: Коллайдеров: {allColliders.Length}, MeshRenderer-ов: {allRenderers.Length}, Всего объектов: {allObjects.Length}");
+            
+            if (allColliders.Length == 0 || allRenderers.Length == 0)
+            {
+                Debug.LogWarning($"[Повторная проверка #{attempt}] ⚠️ Проблема обнаружена! Запускаем ультра-диагностику...");
+                ForceAddCollidersAggressively();
+                
+                // Проверяем результат
+                Collider[] afterColliders = FindObjectsOfType<Collider>(true);
+                MeshRenderer[] afterRenderers = FindObjectsOfType<MeshRenderer>(true);
+                Debug.Log($"[Повторная проверка #{attempt}] После диагностики: Коллайдеров: {afterColliders.Length}, MeshRenderer-ов: {afterRenderers.Length}");
+                
+                if (afterColliders.Length > 0 && afterRenderers.Length > 0)
+                {
+                    Debug.Log($"[Повторная проверка #{attempt}] ✅ Проблема решена! Остановка дальнейших попыток.");
+                    break;
+                }
+            }
+            else
+            {
+                Debug.Log($"[Повторная проверка #{attempt}] ✅ Объекты найдены. Остановка дальнейших попыток.");
+                break;
+            }
+        }
+        
+        Debug.Log("=== [ARManagerInitializer2] ЗАВЕРШЕНИЕ ПОВТОРНЫХ ПРОВЕРОК ===");
+    }
+
+    /// <summary>
+    /// Агрессивная функция поиска и добавления коллайдеров
+    /// </summary>
+    private void ForceAddCollidersAggressively()
+    {
+        Debug.Log("=== [ARManagerInitializer2] УЛЬТРА-ДИАГНОСТИКА ВСЕХ ОБЪЕКТОВ ===");
+        
+        // 1. Показываем ВСЕ объекты в сцене
+        GameObject[] allObjects = FindObjectsOfType<GameObject>(true);
+        Debug.Log($"[Ультра-диагностика] Всего GameObject-ов в сцене (включая неактивные): {allObjects.Length}");
+        
+        // 2. Детально анализируем каждый объект
+        int objectsWithMesh = 0;
+        int objectsWithCollider = 0;
+        int addedColliders = 0;
+        
+        foreach (GameObject obj in allObjects)
+        {
+            MeshRenderer meshRenderer = obj.GetComponent<MeshRenderer>();
+            MeshFilter meshFilter = obj.GetComponent<MeshFilter>();
+            Collider existingCollider = obj.GetComponent<Collider>();
+            
+            // Показываем информацию о КАЖДОМ объекте с MeshRenderer или в слоях симуляции
+            if (meshRenderer != null || obj.layer == 8 || obj.layer == 30 || 
+                obj.name.ToLower().Contains("wall") || obj.name.ToLower().Contains("floor") ||
+                obj.name.ToLower().Contains("room") || obj.name.ToLower().Contains("environment"))
+            {
+                string components = "";
+                if (meshRenderer != null) components += "MeshRenderer ";
+                if (meshFilter != null) components += "MeshFilter ";
+                if (existingCollider != null) components += $"Collider({existingCollider.GetType().Name}) ";
+                
+                Debug.Log($"[Ультра-диагностика] Объект: '{obj.name}', активен: {obj.activeInHierarchy}, слой: {obj.layer} ({LayerMask.LayerToName(obj.layer)}), компоненты: [{components}]");
+                
+                // Показываем размер mesh если есть
+                if (meshFilter != null && meshFilter.mesh != null)
+                {
+                    Debug.Log($"  └─ Mesh: '{meshFilter.mesh.name}', vertices: {meshFilter.mesh.vertexCount}, triangles: {meshFilter.mesh.triangles.Length/3}");
+                }
+            }
+            
+            // Считаем статистику
+            if (meshRenderer != null) objectsWithMesh++;
+            if (existingCollider != null) objectsWithCollider++;
+            
+            // Добавляем коллайдер если нужно
+            if (meshRenderer != null && meshFilter != null && meshFilter.mesh != null && existingCollider == null)
+            {
+                // Проверяем размер объекта
+                Bounds bounds = meshRenderer.bounds;
+                if (bounds.size.magnitude > 0.1f) // Только достаточно большие объекты
+                {
+                    MeshCollider meshCollider = obj.AddComponent<MeshCollider>();
+                    meshCollider.sharedMesh = meshFilter.mesh;
+                    addedColliders++;
+                    
+                    Debug.Log($"[Ультра-диагностика] ✅ Добавлен MeshCollider к '{obj.name}' (размер: {bounds.size})");
+                }
+            }
+        }
+        
+        Debug.Log($"[Ультра-диагностика] 📊 СТАТИСТИКА:");
+        Debug.Log($"  ├─ Всего объектов: {allObjects.Length}");
+        Debug.Log($"  ├─ С MeshRenderer: {objectsWithMesh}");
+        Debug.Log($"  ├─ С Collider: {objectsWithCollider}");
+        Debug.Log($"  └─ Добавлено коллайдеров: {addedColliders}");
+        
+        // 3. Ищем объекты по специальным тегам Unity XR
+        Transform[] allTransforms = FindObjectsOfType<Transform>(true);
+        Debug.Log($"[Ультра-диагностика] Ищем XR объекты среди {allTransforms.Length} трансформов...");
+        
+        foreach (Transform t in allTransforms)
+        {
+            string name = t.name.ToLower();
+            if (name.Contains("xr") || name.Contains("ar") || name.Contains("simulation") || 
+                name.Contains("mock") || name.Contains("synthetic") || name.Contains("environment"))
+            {
+                Debug.Log($"[Ультра-диагностика] 🎯 Потенциальный XR объект: '{t.name}', родитель: '{(t.parent ? t.parent.name : "ROOT")}', активен: {t.gameObject.activeInHierarchy}");
+            }
+        }
+        
+        // 4. Финальная проверка
+        Collider[] finalColliders = FindObjectsOfType<Collider>(true);
+        MeshRenderer[] finalRenderers = FindObjectsOfType<MeshRenderer>(true);
+        Debug.Log($"[Ультра-диагностика] 🎯 ФИНАЛЬНЫЙ РЕЗУЛЬТАТ: Коллайдеров: {finalColliders.Length}, MeshRenderer-ов: {finalRenderers.Length}");
+        
+        Debug.Log("=== [ARManagerInitializer2] КОНЕЦ УЛЬТРА-ДИАГНОСТИКИ ===");
+    }
+
+    /// <summary>
+    /// Утилита для поиска объектов симуляционной среды по имени
+    /// </summary>
+    public void DebugFindSimulationObjects()
+    {
+        Debug.Log("=== [ARManagerInitializer2] ПОИСК СИМУЛЯЦИОННЫХ ОБЪЕКТОВ ===");
+        
+        GameObject[] allObjects = FindObjectsOfType<GameObject>(true);
+        int found = 0;
+        
+        foreach (var obj in allObjects)
+        {
+            if (obj.name.ToLower().Contains("environment") || 
+                obj.name.ToLower().Contains("simulation") ||
+                obj.name.ToLower().Contains("room") ||
+                obj.name.ToLower().Contains("wall") ||
+                obj.name.ToLower().Contains("floor"))
+            {
+                found++;
+                
+                MeshRenderer renderer = obj.GetComponent<MeshRenderer>();
+                Collider collider = obj.GetComponent<Collider>();
+                
+                string info = $"[DebugFind] {obj.name} - ";
+                info += $"Активен: {obj.activeInHierarchy}, ";
+                info += $"Слой: {LayerMask.LayerToName(obj.layer)}, ";
+                info += $"MeshRenderer: {(renderer != null ? "✓" : "✗")}, ";
+                info += $"Collider: {(collider != null ? "✓" : "✗")}";
+                
+                if (renderer != null)
+                    info += $", Размер: {renderer.bounds.size}";
+                
+                Debug.Log(info);
+            }
+        }
+        
+        Debug.Log($"[DebugFind] Найдено объектов среды: {found}");
     }
 }

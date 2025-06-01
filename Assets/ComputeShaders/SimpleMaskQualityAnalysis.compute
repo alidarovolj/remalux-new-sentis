@@ -1,0 +1,76 @@
+#pragma kernel CSSimpleMaskQuality
+
+Texture2D<float4> MaskTexture;
+RWStructuredBuffer<uint> QualityResults; // [fillCount, edgeCount, totalPixels, noiseCount]
+
+uint2 TextureSize;
+
+[numthreads(8,8,1)]
+void CSSimpleMaskQuality (uint3 id : SV_DispatchThreadID)
+{
+    // Simple bounds check without early return
+    bool withinBounds = (id.x < TextureSize.x && id.y < TextureSize.y);
+    
+    uint localFillCount = 0;
+    uint localEdgeCount = 0;
+    uint localNoiseCount = 0;
+    uint localPixelCount = withinBounds ? 1 : 0;
+    
+    if (withinBounds)
+    {
+        uint2 coord = id.xy;
+        float intensity = MaskTexture[coord].r;
+        
+        // Simple fill detection
+        if (intensity > 0.5)
+        {
+            localFillCount = 1;
+        }
+        
+        // Simple edge detection (only for interior pixels)
+        if (coord.x > 0 && coord.x < TextureSize.x - 1 && 
+            coord.y > 0 && coord.y < TextureSize.y - 1)
+        {
+            // Check if this is an edge pixel
+            float center = intensity;
+            float left = MaskTexture[coord + uint2(-1, 0)].r;
+            float right = MaskTexture[coord + uint2(1, 0)].r;
+            float up = MaskTexture[coord + uint2(0, -1)].r;
+            float down = MaskTexture[coord + uint2(0, 1)].r;
+            
+            float maxDiff = max(max(abs(center - left), abs(center - right)), 
+                               max(abs(center - up), abs(center - down)));
+            
+            if (maxDiff > 0.3)
+            {
+                localEdgeCount = 1;
+            }
+            
+            // Simple noise detection
+            float neighbors = (left > 0.5 ? 1 : 0) + (right > 0.5 ? 1 : 0) + 
+                             (up > 0.5 ? 1 : 0) + (down > 0.5 ? 1 : 0);
+            
+            if ((intensity > 0.5 && neighbors < 1) || (intensity <= 0.5 && neighbors > 3))
+            {
+                localNoiseCount = 1;
+            }
+        }
+    }
+    
+    // Direct atomic operations without groupshared memory
+    InterlockedAdd(QualityResults[0], localFillCount);
+    InterlockedAdd(QualityResults[1], localEdgeCount);
+    InterlockedAdd(QualityResults[2], localPixelCount);
+    InterlockedAdd(QualityResults[3], localNoiseCount);
+}
+
+#pragma kernel CSSimpleInitialize
+
+[numthreads(1,1,1)]
+void CSSimpleInitialize (uint3 id : SV_DispatchThreadID)
+{
+    QualityResults[0] = 0; // Fill count
+    QualityResults[1] = 0; // Edge count
+    QualityResults[2] = 0; // Total processed pixels
+    QualityResults[3] = 0; // Noise count
+} 

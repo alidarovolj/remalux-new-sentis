@@ -1,0 +1,150 @@
+#pragma kernel CSMaskQualityAnalysis
+
+Texture2D<float4> MaskTexture;
+RWStructuredBuffer<uint> QualityResults; // [fillRatio*1000, connectivity*1000, edgeQuality*1000, noiseLevel*1000]
+
+uint2 TextureSize;
+float MinFillRatio;
+float MaxNoiseLevel;
+
+groupshared uint SharedFillCount;
+groupshared uint SharedConnectivity;
+groupshared uint SharedEdgeStrength;
+groupshared uint SharedNoiseCount;
+
+[numthreads(8,8,1)]
+void CSMaskQualityAnalysis (uint3 id : SV_DispatchThreadID, uint3 groupThreadID : SV_GroupThreadID)
+{
+    // Initialize shared memory for the first thread in group
+    if (groupThreadID.x == 0 && groupThreadID.y == 0)
+    {
+        SharedFillCount = 0;
+        SharedConnectivity = 0;
+        SharedEdgeStrength = 0;
+        SharedNoiseCount = 0;
+    }
+    
+    GroupMemoryBarrierWithGroupSync();
+
+    // Thread-local variables for metrics
+    uint localFillCount = 0;
+    uint localEdgeStrength = 0;
+    uint localNoiseCount = 0;
+    uint localConnectivity = 0;
+    
+    // Only process if within bounds (but don't return early)
+    bool withinBounds = (id.x < TextureSize.x && id.y < TextureSize.y);
+    
+    if (withinBounds)
+    {
+        uint2 coord = id.xy;
+        float4 pixelValue = MaskTexture[coord];
+        float intensity = pixelValue.r;
+        
+        localFillCount = intensity > 0.5 ? 1 : 0;
+        
+        // Edge detection using Sobel operator (only if not on border)
+        bool notOnBorder = (coord.x > 0 && coord.x < TextureSize.x - 1 && 
+                           coord.y > 0 && coord.y < TextureSize.y - 1);
+        
+        if (notOnBorder)
+        {
+            float sobelX = 
+                -1.0 * MaskTexture[coord + uint2(-1, -1)].r + 1.0 * MaskTexture[coord + uint2(1, -1)].r +
+                -2.0 * MaskTexture[coord + uint2(-1,  0)].r + 2.0 * MaskTexture[coord + uint2(1,  0)].r +
+                -1.0 * MaskTexture[coord + uint2(-1,  1)].r + 1.0 * MaskTexture[coord + uint2(1,  1)].r;
+                
+            float sobelY = 
+                -1.0 * MaskTexture[coord + uint2(-1, -1)].r - 2.0 * MaskTexture[coord + uint2(0, -1)].r - 1.0 * MaskTexture[coord + uint2(1, -1)].r +
+                 1.0 * MaskTexture[coord + uint2(-1,  1)].r + 2.0 * MaskTexture[coord + uint2(0,  1)].r + 1.0 * MaskTexture[coord + uint2(1,  1)].r;
+            
+            float edgeStrength = sqrt(sobelX * sobelX + sobelY * sobelY);
+            localEdgeStrength = uint(edgeStrength * 1000.0); // Convert to uint with scaling
+            
+            // Noise detection: check for isolated pixels
+            float neighbors = 0.0;
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    float neighborValue = MaskTexture[coord + uint2(dx, dy)].r;
+                    if (neighborValue > 0.5) neighbors += 1.0;
+                }
+            }
+            
+            // Isolated foreground or background pixels are noise
+            if ((intensity > 0.5 && neighbors < 2.0) || (intensity <= 0.5 && neighbors > 6.0))
+            {
+                localNoiseCount = 1;
+            }
+            
+            // Connectivity: measure local coherence
+            if (intensity > 0.5)
+            {
+                localConnectivity = uint((neighbors / 8.0) * 1000.0); // Convert to uint with scaling
+            }
+        }
+    }
+    
+    // Accumulate in shared memory first (all threads participate)
+    InterlockedAdd(SharedFillCount, localFillCount);
+    InterlockedAdd(SharedConnectivity, localConnectivity);
+    InterlockedAdd(SharedEdgeStrength, localEdgeStrength);
+    InterlockedAdd(SharedNoiseCount, localNoiseCount);
+    
+    GroupMemoryBarrierWithGroupSync();
+    
+    // Only first thread in group writes to global memory
+    if (groupThreadID.x == 0 && groupThreadID.y == 0)
+    {
+        InterlockedAdd(QualityResults[0], SharedFillCount);
+        InterlockedAdd(QualityResults[1], SharedConnectivity);
+        InterlockedAdd(QualityResults[2], SharedEdgeStrength);
+        InterlockedAdd(QualityResults[3], SharedNoiseCount);
+    }
+}
+
+#pragma kernel CSInitializeResults
+
+[numthreads(1,1,1)]
+void CSInitializeResults (uint3 id : SV_DispatchThreadID)
+{
+    // Initialize all results to 0
+    QualityResults[0] = 0; // Fill count
+    QualityResults[1] = 0; // Connectivity sum
+    QualityResults[2] = 0; // Edge strength sum
+    QualityResults[3] = 0; // Noise count
+}
+
+#pragma kernel CSNormalizationKernel
+
+[numthreads(1,1,1)]
+void CSNormalizationKernel (uint3 id : SV_DispatchThreadID)
+{
+    uint totalPixels = TextureSize.x * TextureSize.y;
+    
+    // Convert back to float and normalize
+    if (totalPixels > 0)
+    {
+        // Fill ratio (0-1000)
+        float fillRatio = float(QualityResults[0]) / float(totalPixels);
+        QualityResults[0] = uint(fillRatio * 1000.0);
+        
+        // Average connectivity (0-1000)
+        float avgConnectivity = 0.0;
+        if (QualityResults[0] > 0)
+        {
+            avgConnectivity = float(QualityResults[1]) / float(QualityResults[0]);
+        }
+        QualityResults[1] = uint(avgConnectivity);
+        
+        // Average edge strength (0-1000)
+        float avgEdgeStrength = float(QualityResults[2]) / float(totalPixels * 1000);
+        QualityResults[2] = uint(avgEdgeStrength * 1000.0);
+        
+        // Noise ratio (0-1000)
+        float noiseRatio = float(QualityResults[3]) / float(totalPixels);
+        QualityResults[3] = uint(noiseRatio * 1000.0);
+    }
+} 
