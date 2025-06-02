@@ -3,6 +3,7 @@ using System.Collections;
 using System.IO;
 using Unity.Sentis;
 using UnityEngine.XR.ARFoundation;
+using Unity.XR.CoreUtils;
 
 /// <summary>
 /// Компонент для диагностики проблем на iOS устройствах
@@ -159,12 +160,12 @@ public class iOSDiagnostics : MonoBehaviour
 
             // Проверка AR компонентов
             ARSession arSession = FindObjectOfType<ARSession>();
-            ARSessionOrigin arSessionOrigin = FindObjectOfType<ARSessionOrigin>();
+            XROrigin sessionOrigin = FindObjectOfType<XROrigin>();
             ARCameraManager arCameraManager = FindObjectOfType<ARCameraManager>();
             ARPlaneManager arPlaneManager = FindObjectOfType<ARPlaneManager>();
 
             Debug.Log($"  • ARSession: {(arSession != null ? "✅ Найден" : "❌ НЕ НАЙДЕН")}");
-            Debug.Log($"  • ARSessionOrigin: {(arSessionOrigin != null ? "✅ Найден" : "❌ НЕ НАЙДЕН")}");
+            Debug.Log($"  • ARSessionOrigin: {(sessionOrigin != null ? "✅ Найден" : "❌ НЕ НАЙДЕН")}");
             Debug.Log($"  • ARCameraManager: {(arCameraManager != null ? "✅ Найден" : "❌ НЕ НАЙДЕН")}");
             Debug.Log($"  • ARPlaneManager: {(arPlaneManager != null ? "✅ Найден" : "❌ НЕ НАЙДЕН")}");
 

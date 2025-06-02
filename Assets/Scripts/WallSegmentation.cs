@@ -15,6 +15,7 @@ using UnityEngine.XR.Management;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe; // <--- Убедитесь, что это есть
 using Unity.XR.CoreUtils;           // <--- Убедитесь, что это есть
+using UnityEngine.Networking; // Added for UnityWebRequest
 
 // Если используете другие пакеты рендеринга, их using директивы тоже должны быть здесь
 // using UnityEngine.Rendering;
@@ -66,9 +67,9 @@ public class WallSegmentation : MonoBehaviour
     // [SerializeField, Range(0.1f, 5.0f)] private float contrastFactor = 1.0f; // ЭТА СТРОКА БУДЕТ УДАЛЕНА
 
     [Header("Настройки сегментации")]
-    [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
-    [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
-    [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.15f; // ИСПРАВЛЕНО: повышен для консистентности
+    // [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
+    // [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
+    // [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.15f; // ИСПРАВЛЕНО: повышен для консистентности
     [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = false;
 
     [Header("Настройки качества и производительности")]
@@ -126,7 +127,7 @@ public class WallSegmentation : MonoBehaviour
 
     [Header("Компоненты")]
     [Tooltip("Ссылка на ARSessionManager")]
-    public ARSessionManager arSessionManager;
+    public ARSession arSession;
 
     [Tooltip("Ссылка на XROrigin")] public XROrigin xrOrigin = null;
 
@@ -165,10 +166,10 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Верхний порог вероятности для определения стены (используется как основной или высокий порог для гистерезиса)")]
     [SerializeField] private float wallConfidenceInternal = 0.15f; // Переименовано для создания публичного свойства
     public float WallConfidence { get { return wallConfidenceInternal; } } // Добавлено публичное свойство
-    [Tooltip("Включить гистерезисную пороговую обработку (использует верхний и нижний пороги)")]
-    [SerializeField] private bool enableHysteresisThresholding = false;
-    [Tooltip("Нижний порог вероятности для гистерезисной обработки (должен быть меньше wallConfidence)")]
-    [SerializeField, Range(0.0001f, 1.0f)] private float lowWallConfidence = 0.05f;
+    // [Tooltip("Включить гистерезисную пороговую обработку (использует верхний и нижний пороги)")]
+    // [SerializeField] private bool enableHysteresisThresholding = false;
+    // [Tooltip("Нижний порог вероятности для гистерезисной обработки (должен быть меньше wallConfidence)")]
+    // [SerializeField, Range(0.0001f, 1.0f)] private float lowWallConfidence = 0.05f;
 
     [Header("GPU Optimization (Оптимизация GPU)")]
     [Tooltip("Compute Shader для обработки масок на GPU")]
@@ -229,19 +230,19 @@ public class WallSegmentation : MonoBehaviour
     public DebugFlags debugFlags = DebugFlags.None;
 
     // Свойства для получения AR компонентов
-    public ARSessionManager ARSessionManager
+    public ARSession ARSession // Изменено имя свойства для ясности
     {
         get
         {
-            if (arSessionManager == null)
+            if (arSession == null) // Используем новое поле arSession
             {
-                arSessionManager = FindObjectOfType<ARSessionManager>();
+                arSession = FindObjectOfType<ARSession>(); // Ищем ARSession
             }
-            return arSessionManager;
+            return arSession;
         }
         set
         {
-            arSessionManager = value;
+            arSession = value; // Устанавливаем новое поле arSession
         }
     }
 
@@ -318,7 +319,7 @@ public class WallSegmentation : MonoBehaviour
     private bool isModelInitialized = false; // Флаг, что модель успешно инициализирована
     private bool isInitializing = false;     // Флаг, что идет процесс инициализации модели
     private string lastErrorMessage = null;  // Последнее сообщение об ошибке при инициализации
-    private bool isInitializationFailed = false; // Флаг, что инициализация модели провалилась
+    // private bool isInitializationFailed = false; // Флаг, что инициализация модели провалилась. THIS IS USED. // CS0414 - Value is assigned but never used
     // private int consecutiveFailCount = 0; // Закомментировано из-за CS0414
     // private bool usingSimulatedSegmentation = false; // Закомментировано из-за CS0414
 
@@ -678,20 +679,20 @@ public class WallSegmentation : MonoBehaviour
 
     // Добавляем переменные для управления частотой кадров
     private float lastFrameProcessTime = 0f;
-    private int cameraFrameSkipCounter = 0;
+    // private int cameraFrameSkipCounter = 0; // CS0414
     private const int CAMERA_FRAME_SKIP_COUNT = 2; // Пропускать 2 из 3 кадров для ~20 FPS на 60 FPS камере, если maxSegmentationFPS ~20
 
     private Coroutine processingCoroutine = null;
 
     private void Awake()
     {
-        // Попытка найти ARSessionManager, если он не назначен в инспекторе
-        if (arSessionManager == null)
+        // Попытка найти ARSession, если он не назначен в инспекторе
+        if (arSession == null)
         {
-            arSessionManager = FindObjectOfType<ARSessionManager>();
-            if (arSessionManager == null)
+            arSession = FindObjectOfType<ARSession>();
+            if (arSession == null)
             {
-                Debug.LogError("[WallSegmentation] ARSessionManager не найден на сцене!");
+                Debug.LogError("[WallSegmentation] ARSession не найден на сцене!");
             }
         }
 
@@ -859,7 +860,7 @@ public class WallSegmentation : MonoBehaviour
         }
 
         isInitializing = true;
-        isInitializationFailed = false;
+        // isInitializationFailed = false; // No longer used
         lastErrorMessage = null;
 
         Debug.Log("[WallSegmentation] 🚀 Начинаем инициализацию ML модели...");
@@ -946,7 +947,7 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void HandleInitializationError(string errorMessage)
     {
-        isInitializationFailed = true;
+        // isInitializationFailed = true; // No longer used
         isInitializing = false;
         lastErrorMessage = errorMessage;
         Debug.LogError($"[WallSegmentation] ❌ Ошибка инициализации модели: {errorMessage}");
@@ -1036,32 +1037,111 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private IEnumerator LoadModel(string filePath)
     {
-        try
+        string fileUrl = PathToUrl(filePath);
+        if (string.IsNullOrEmpty(fileUrl))
         {
-            if (filePath.EndsWith(".sentis"))
-            {
-                // Загружаем Sentis модель
-                runtimeModel = ModelLoader.Load(filePath);
-                Debug.Log("[WallSegmentation] ✅ Sentis модель загружена");
-            }
-            else if (filePath.EndsWith(".onnx"))
-            {
-                // Загружаем ONNX модель
-                runtimeModel = ModelLoader.Load(filePath);
-                Debug.Log("[WallSegmentation] ✅ ONNX модель загружена");
-            }
-            else
-            {
-                throw new System.Exception($"Неподдерживаемый формат модели: {Path.GetExtension(filePath)}");
-            }
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[WallSegmentation] ❌ Ошибка загрузки модели: {e.Message}");
+            Debug.LogError($"[WallSegmentation] ❌ Не удалось преобразовать путь к файлу в URL: {filePath}");
             runtimeModel = null;
+            yield break;
         }
 
-        yield return null;
+        Debug.Log($"[WallSegmentation] 🌐 Загрузка модели по URL: {fileUrl}");
+        UnityWebRequest www = UnityWebRequest.Get(fileUrl);
+        yield return www.SendWebRequest();
+
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            byte[] modelData = www.downloadHandler.data;
+            if (modelData == null || modelData.Length == 0)
+            {
+                Debug.LogError($"[WallSegmentation] ❌ Загруженные данные модели пусты для URL: {fileUrl}");
+                runtimeModel = null;
+                www.Dispose();
+                yield break;
+            }
+
+            Debug.Log($"[WallSegmentation] ✅ Данные модели успешно загружены, размер: {modelData.Length} байт из {fileUrl}");
+            try
+            {
+                using (var ms = new MemoryStream(modelData))
+                {
+                    runtimeModel = ModelLoader.Load(ms);
+                }
+
+                if (runtimeModel != null)
+                {
+                    Debug.Log($"[WallSegmentation] ✅ Модель успешно загружена из MemoryStream для {Path.GetFileName(filePath)}");
+                }
+                else
+                {
+                    Debug.LogError($"[WallSegmentation] ❌ ModelLoader.Load(MemoryStream) вернул null для {Path.GetFileName(filePath)}.");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[WallSegmentation] ❌ Исключение при ModelLoader.Load(MemoryStream) для {Path.GetFileName(filePath)}: {e.Message}\nStackTrace: {e.StackTrace}");
+                runtimeModel = null;
+            }
+        }
+        else
+        {
+            Debug.LogError($"[WallSegmentation] ❌ Ошибка UnityWebRequest при загрузке {fileUrl}: {www.error}");
+            runtimeModel = null;
+        }
+        www.Dispose();
+    }
+
+    // Helper to convert file path to URL, especially for StreamingAssets
+    private string PathToUrl(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        // If it's already a URL, return it
+        if (path.StartsWith("http://") || path.StartsWith("https://") || path.StartsWith("file://"))
+        {
+            return path;
+        }
+
+        // For Android StreamingAssets, Application.streamingAssetsPath already includes "jar:file://"
+        // For iOS and others, we might need to add "file://"
+        // Path.Combine with Application.streamingAssetsPath usually handles platform specifics well if path is relative to StreamingAssets.
+        // However, 'filePath' coming into LoadModel is already an absolute path from GetModelPath().
+
+        if (Application.platform == RuntimePlatform.Android)
+        {
+            // On Android, if the path is already absolute to streamingAssets (e.g., from persistentDataPath copy), it might need file://
+            // If it's from raw Application.streamingAssetsPath for a file inside APK, it's already a jar:file:// URL
+            // The GetModelPath() logic results in a direct file system path. For UWR, this needs to be a proper URL.
+            // Let's assume 'path' is a direct file system path.
+            return $"file://{path}"; // This should work for paths from GetModelPath() on Android.
+        }
+        else if (Application.platform == RuntimePlatform.IPhonePlayer)
+        {
+            // On iOS, Application.streamingAssetsPath is Data/Raw. Path.Combine makes it absolute.
+            // Prepending "file://" is necessary for UnityWebRequest.
+            return $"file://{path}";
+        }
+        else // Editor, Windows, Mac, etc.
+        {
+            // For local file paths, ensure it starts with "file://" followed by the absolute path.
+            // Path.GetFullPath will resolve to a standard OS path.
+            // UnityWebRequest on desktop platforms generally expects "file:///C:/path..." for Windows
+            // and "file:///path..." for macOS/Linux.
+            // The key is three slashes after "file:" if the path itself doesn't start with one.
+            // However, if 'path' is already an absolute path like "/Users/...",
+            // then "file://" + path is correct for macOS/Linux.
+            // For Windows, if path is "C:/...", then "file:///" + path.
+            string absolutePath = path.Replace("\\", "/");
+            if (Application.platform == RuntimePlatform.WindowsEditor || Application.platform == RuntimePlatform.WindowsPlayer)
+            {
+                return $"file:///{absolutePath}";
+            }
+            else // macOS Editor, Linux Editor, etc.
+            {
+                return $"file://{absolutePath}";
+            }
+        }
     }
 
     /// <summary>
@@ -1069,49 +1149,40 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void InitializeTextures()
     {
-        // Safely release specific, possibly outdated textures before getting/creating new ones.
+        // Освобождаем существующие текстуры через пул перед созданием/получением новых.
 
-        // Release RenderTextures explicitly
-        RenderTexture[] rtsToRelease = { segmentationMaskTexture, tempMask1, tempMask2, previousMask, interpolatedMask };
-        string[] rtNames = { "segmentationMaskTexture", "tempMask1", "tempMask2", "previousMask", "interpolatedMask" };
-
-        for (int i = 0; i < rtsToRelease.Length; i++)
+        // segmentationMaskTexture
+        if (segmentationMaskTexture != null)
         {
-            if (rtsToRelease[i] != null)
-            {
-                if (rtsToRelease[i].IsCreated())
-                {
-                    rtsToRelease[i].Release();
-                }
-                UnityEngine.Object.DestroyImmediate(rtsToRelease[i], true);
-                TrackResourceRelease(rtNames[i] + "_RenderTexture_Explicit");
-            }
+            texturePool.ReleaseTexture(segmentationMaskTexture);
+            TrackResourceRelease("segmentationMaskTexture_Reinit");
+            segmentationMaskTexture = null;
         }
-        segmentationMaskTexture = null;
-        tempMask1 = null;
-        tempMask2 = null;
-        previousMask = null;
-        interpolatedMask = null;
 
-        // Release Texture2D explicitly
+        // cameraTexture (управляется в ProcessCameraFrameCoroutine через texture2DPool)
         if (cameraTexture != null)
         {
-            texture2DPool.ReleaseTexture(cameraTexture); // Return to pool if it was from there
-            UnityEngine.Object.DestroyImmediate(cameraTexture, true); // Then destroy the Unity object
-            TrackResourceRelease("cameraTexture_Texture2D_Explicit");
+            texture2DPool.ReleaseTexture(cameraTexture); // Возвращаем в пул, если он оттуда
+            UnityEngine.Object.DestroyImmediate(cameraTexture, true); // И уничтожаем объект Unity, если он не из пула или дубликат
+            TrackResourceRelease("cameraTexture_Reinit");
             cameraTexture = null;
         }
 
-
-        // Создаем или получаем из пула cameraTexture. Она будет заполнена в ProcessCameraFrameCoroutine
-        // cameraTexture = texture2DPool.GetTexture(inputResolution.x, inputResolution.y, TextureFormat.RGB24); // Moved to ProcessCameraFrameCoroutine
-        // TrackResourceCreation("cameraTexture_Texture2D");
+        // Остальные текстуры (tempMask1, tempMask2, previousMask, interpolatedMask)
+        // теперь полностью управляются CreateGPUPostProcessingTextures, 
+        // который вызывается ниже. Поэтому здесь их явно освобождать/создавать не нужно.
+        // Просто убедимся, что они null перед вызовом CreateGPUPostProcessingTextures,
+        // чтобы он их корректно получил из пула.
+        if (tempMask1 != null) { texturePool.ReleaseTexture(tempMask1); TrackResourceRelease("tempMask1_Pre_GPU_Reinit"); tempMask1 = null; }
+        if (tempMask2 != null) { texturePool.ReleaseTexture(tempMask2); TrackResourceRelease("tempMask2_Pre_GPU_Reinit"); tempMask2 = null; }
+        if (previousMask != null) { texturePool.ReleaseTexture(previousMask); TrackResourceRelease("previousMask_Pre_GPU_Reinit"); previousMask = null; }
+        if (interpolatedMask != null) { texturePool.ReleaseTexture(interpolatedMask); TrackResourceRelease("interpolatedMask_Pre_GPU_Reinit"); interpolatedMask = null; }
 
 
         int width = currentResolution.x;
         int height = currentResolution.y;
 
-        // segmentationMaskTexture
+        // segmentationMaskTexture - основная текстура для вывода маски
         segmentationMaskTexture = texturePool.GetTexture(width, height);
         segmentationMaskTexture.name = "SegmentationMask_Main";
         segmentationMaskTexture.enableRandomWrite = true; // Устанавливаем ДО Create()
@@ -1120,58 +1191,10 @@ public class WallSegmentation : MonoBehaviour
         TrackResourceCreation("segmentationMaskTexture_RenderTexture");
         Debug.Log($"[WallSegmentation] Создана/получена RenderTexture для маски: {width}x{height}, randomWrite: {segmentationMaskTexture.enableRandomWrite}");
 
+        // Вызываем CreateGPUPostProcessingTextures для инициализации/обновления остальных временных текстур
+        CreateGPUPostProcessingTextures();
 
-        // tempMask1 (для CPU постобработки)
-        if (!useGPUPostProcessing) // Только если используется CPU путь
-        {
-            tempMask1 = texturePool.GetTexture(width, height);
-            tempMask1.name = "SegmentationMask_Temp1";
-            tempMask1.enableRandomWrite = true; // Для CPU путь это может и не нужно, но для консистентности
-            if (!tempMask1.IsCreated()) { tempMask1.Create(); }
-            ClearRenderTexture(tempMask1, Color.clear);
-            TrackResourceCreation("tempMask1_RenderTexture");
-
-            // tempMask2 (для CPU постобработки)
-            tempMask2 = texturePool.GetTexture(width, height);
-            tempMask2.name = "SegmentationMask_Temp2";
-            tempMask2.enableRandomWrite = true;
-            if (!tempMask2.IsCreated()) { tempMask2.Create(); }
-            ClearRenderTexture(tempMask2, Color.clear);
-            TrackResourceCreation("tempMask2_RenderTexture");
-        }
-        else
-        {
-            // Если используем GPU, эти текстуры не нужны, освободим если были
-            if (tempMask1 != null) { texturePool.ReleaseTexture(tempMask1); tempMask1 = null; TrackResourceRelease("tempMask1_RenderTexture"); }
-            if (tempMask2 != null) { texturePool.ReleaseTexture(tempMask2); tempMask2 = null; TrackResourceRelease("tempMask2_RenderTexture"); }
-        }
-
-
-        // Текстуры для временной интерполяции
-        if (enableTemporalInterpolation && temporalBlendMaterial != null)
-        {
-            previousMask = texturePool.GetTexture(width, height);
-            previousMask.name = "SegmentationResult_Previous";
-            if (!previousMask.IsCreated()) { previousMask.Create(); }
-            ClearRenderTexture(previousMask, Color.clear); // Очищаем предыдущую маску
-            TrackResourceCreation("previousMask_RenderTexture");
-
-            interpolatedMask = texturePool.GetTexture(width, height);
-            interpolatedMask.name = "SegmentationResult_Interpolated";
-            interpolatedMask.enableRandomWrite = true; // Нужен для Graphics.Blit в него
-            if (!interpolatedMask.IsCreated()) { interpolatedMask.Create(); }
-            ClearRenderTexture(interpolatedMask, Color.clear);
-            TrackResourceCreation("interpolatedMask_RenderTexture");
-        }
-        else
-        {
-            if (previousMask != null) { texturePool.ReleaseTexture(previousMask); previousMask = null; TrackResourceRelease("previousMask_RenderTexture"); }
-            if (interpolatedMask != null) { texturePool.ReleaseTexture(interpolatedMask); interpolatedMask = null; TrackResourceRelease("interpolatedMask_RenderTexture"); }
-        }
-
-        CreateGPUPostProcessingTextures(); // Создаст или получит из пула текстуры для GPU пост-обработки, если нужно
-
-        Debug.Log($"[WallSegmentation] Пересозданы текстуры с разрешением ({width}, {height})");
+        Debug.Log($"[WallSegmentation] Пересозданы/обновлены текстуры с разрешением ({width}, {height})");
     }
 
     /// <summary>
@@ -1408,22 +1431,46 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void CreateGPUPostProcessingTextures()
     {
-        // Освобождаем старые текстуры
-        if (tempMask1 != null) tempMask1.Release();
-        if (tempMask2 != null) tempMask2.Release();
-        if (previousMask != null) previousMask.Release();
-        if (interpolatedMask != null) interpolatedMask.Release();
+        int width = currentResolution.x;
+        int height = currentResolution.y;
 
-        // Создаем новые
-        tempMask1 = new RenderTexture(currentResolution.x, currentResolution.y, 0, RenderTextureFormat.ARGB32);
-        tempMask2 = new RenderTexture(currentResolution.x, currentResolution.y, 0, RenderTextureFormat.ARGB32);
-        previousMask = new RenderTexture(currentResolution.x, currentResolution.y, 0, RenderTextureFormat.ARGB32);
-        interpolatedMask = new RenderTexture(currentResolution.x, currentResolution.y, 0, RenderTextureFormat.ARGB32);
+        // Освобождаем старые текстуры через пул, если они существуют
+        if (tempMask1 != null) { texturePool.ReleaseTexture(tempMask1); TrackResourceRelease("tempMask1_GPU_Recreate"); tempMask1 = null; }
+        tempMask1 = texturePool.GetTexture(width, height, RenderTextureFormat.ARGB32);
+        tempMask1.name = "PostProcessing_Temp1";
+        if (!tempMask1.IsCreated()) tempMask1.Create();
+        ClearRenderTexture(tempMask1, Color.clear);
+        TrackResourceCreation("tempMask1_GPU_Recreate");
 
-        tempMask1.Create();
-        tempMask2.Create();
-        previousMask.Create();
-        interpolatedMask.Create();
+        if (tempMask2 != null) { texturePool.ReleaseTexture(tempMask2); TrackResourceRelease("tempMask2_GPU_Recreate"); tempMask2 = null; }
+        tempMask2 = texturePool.GetTexture(width, height, RenderTextureFormat.ARGB32);
+        tempMask2.name = "PostProcessing_Temp2";
+        if (!tempMask2.IsCreated()) tempMask2.Create();
+        ClearRenderTexture(tempMask2, Color.clear);
+        TrackResourceCreation("tempMask2_GPU_Recreate");
+
+        if (enableTemporalInterpolation && temporalBlendMaterial != null)
+        {
+            if (previousMask != null) { texturePool.ReleaseTexture(previousMask); TrackResourceRelease("previousMask_GPU_Recreate"); previousMask = null; }
+            previousMask = texturePool.GetTexture(width, height, RenderTextureFormat.ARGB32);
+            previousMask.name = "PostProcessing_PreviousMask";
+            if (!previousMask.IsCreated()) previousMask.Create();
+            ClearRenderTexture(previousMask, Color.clear);
+            TrackResourceCreation("previousMask_GPU_Recreate");
+
+            if (interpolatedMask != null) { texturePool.ReleaseTexture(interpolatedMask); TrackResourceRelease("interpolatedMask_GPU_Recreate"); interpolatedMask = null; }
+            interpolatedMask = texturePool.GetTexture(width, height, RenderTextureFormat.ARGB32);
+            interpolatedMask.name = "PostProcessing_InterpolatedMask";
+            interpolatedMask.enableRandomWrite = true;
+            if (!interpolatedMask.IsCreated()) interpolatedMask.Create();
+            ClearRenderTexture(interpolatedMask, Color.clear);
+            TrackResourceCreation("interpolatedMask_GPU_Recreate");
+        }
+        else // Если временная интерполяция отключена, убедимся, что текстуры освобождены
+        {
+            if (previousMask != null) { texturePool.ReleaseTexture(previousMask); TrackResourceRelease("previousMask_GPU_Disabled"); previousMask = null; }
+            if (interpolatedMask != null) { texturePool.ReleaseTexture(interpolatedMask); TrackResourceRelease("interpolatedMask_GPU_Disabled"); interpolatedMask = null; }
+        }
     }
 
     /// <summary>
@@ -1667,7 +1714,7 @@ public class WallSegmentation : MonoBehaviour
 
         // 1. Подготовка входных данных (TextureToTensor)
         Tensor inputTensor = null;
-        RenderTexture postProcessSource = null; // Текстура, которая пойдет на вход в постобработку
+        // RenderTexture postProcessSource = null; // Текстура, которая пойдет на вход в постобработку // CS0219
 
         if (cameraTexture != null)
         {
@@ -1870,7 +1917,7 @@ public class WallSegmentation : MonoBehaviour
                     {
                         try
                         {
-                            int kernelComprehensive = segmentationProcessor.FindKernel("ComprehensivePostProcessCS");
+                            int kernelComprehensive = segmentationProcessor.FindKernel("ComprehensivePostProcess"); // <--- ИЗМЕНЕНО ЗДЕСЬ
                             // Установка всех необходимых параметров для комплексного ядра
                             segmentationProcessor.SetBool("_EnableGaussianBlurCS", enableGaussianBlur);
                             segmentationProcessor.SetInt("_BlurSizeCS", blurSize);
@@ -1881,8 +1928,8 @@ public class WallSegmentation : MonoBehaviour
                             segmentationProcessor.SetBool("_EnableMorphCloseCS", enableMorphologicalClosing);
                             segmentationProcessor.SetBool("_EnableMorphOpenCS", enableMorphologicalOpening);
 
-                            segmentationProcessor.SetTexture(kernelComprehensive, "_InputTextureCS", source);
-                            segmentationProcessor.SetTexture(kernelComprehensive, "_ResultTextureCS", destination); // Результат в destination
+                            segmentationProcessor.SetTexture(kernelComprehensive, "InputMask", source); // <--- ИЗМЕНЕНО ЗДЕСЬ
+                            segmentationProcessor.SetTexture(kernelComprehensive, "OutputMask", destination); // <--- ПРЕДПОЛАГАЕМОЕ ИЗМЕНЕНИЕ ДЛЯ ВЫХОДА, если ResultTextureCS тоже неверно
 
                             uint threadsX, threadsY, threadsZ;
                             segmentationProcessor.GetKernelThreadGroupSizes(kernelComprehensive, out threadsX, out threadsY, out threadsZ);

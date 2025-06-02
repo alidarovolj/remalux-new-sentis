@@ -17,8 +17,17 @@ public static class SentisCompat
       public static Type WorkerType { get; private set; }
       public static Type TensorType { get; private set; }
       public static Type OpsType { get; private set; }
-      // Добавим для TextureConverterType, так как он тоже используется
       public static Type TextureConverterType { get; private set; }
+      public static Type TextureTransformType { get; private set; } // Добавим для TextureTransform
+
+      // Кэш для MethodInfo
+      private static MethodInfo toTensorSingleArgT2D_Cache; // ToTensor(Texture2D)
+      private static MethodInfo toTensorSingleArgTex_Cache; // ToTensor(Texture)
+      private static MethodInfo toTensor4Arg_Cache;         // ToTensor(Texture, int, int, int)
+
+      // New specific caches for RenderToTexture
+      private static MethodInfo renderToTexture2Arg_Cache;    // RenderToTexture(Tensor, RenderTexture)
+      private static MethodInfo renderToTexture3Arg_Cache;    // RenderToTexture(Tensor, RenderTexture, TextureTransform)
 
       private static bool debugLogging = true; // Можно выключить для релиза
 
@@ -54,7 +63,8 @@ public static class SentisCompat
                   WorkerType = sentisAssembly.GetType("Unity.Sentis.Worker") ?? sentisAssembly.GetType("Unity.Sentis.IWorker");
                   TensorType = sentisAssembly.GetType("Unity.Sentis.Tensor");
                   OpsType = sentisAssembly.GetType("Unity.Sentis.Ops");
-                  TextureConverterType = sentisAssembly.GetType("Unity.Sentis.TextureConverter"); // Инициализируем TextureConverterType
+                  TextureConverterType = sentisAssembly.GetType("Unity.Sentis.TextureConverter");
+                  TextureTransformType = sentisAssembly.GetType("Unity.Sentis.TextureTransform");
 
                   if (debugLogging) Debug.Log($"SentisCompat: ModelLoader Type: {(ModelLoaderType != null ? ModelLoaderType.FullName : "НЕ НАЙДЕН")}");
                   if (debugLogging) Debug.Log($"SentisCompat: Model Type: {(ModelType != null ? ModelType.FullName : "НЕ НАЙДЕН")}");
@@ -62,40 +72,87 @@ public static class SentisCompat
                   if (debugLogging) Debug.Log($"SentisCompat: Tensor Type: {(TensorType != null ? TensorType.FullName : "НЕ НАЙДЕН")}");
                   if (debugLogging) Debug.Log($"SentisCompat: Ops Type: {(OpsType != null ? OpsType.FullName : "НЕ НАЙДЕН")}");
                   if (debugLogging) Debug.Log($"SentisCompat: TextureConverter Type: {(TextureConverterType != null ? TextureConverterType.FullName : "НЕ НАЙДЕН")}");
+                  if (debugLogging) Debug.Log($"SentisCompat: TextureTransform Type: {(TextureTransformType != null ? TextureTransformType.FullName : "НЕ НАЙДЕН")}");
 
-                  // Дополнительная диагностика для TextureTransform
-                  if (TextureConverterType != null) // Предполагаем, что TextureTransform в той же сборке
+                  // Cache ToTensor methods
+                  var allToTensor = TextureConverterType.GetMethods(BindingFlags.Public | BindingFlags.Static).Where(m => m.Name == "ToTensor").ToArray();
+
+                  // Cache ToTensor(Texture2D texture)
+                  toTensorSingleArgT2D_Cache = allToTensor.FirstOrDefault(m =>
                   {
-                        Type textureTransformType = sentisAssembly.GetType("Unity.Sentis.TextureTransform");
-                        if (textureTransformType != null)
-                        {
-                              if (debugLogging) Debug.Log($"SentisCompat: TextureTransform Type: {textureTransformType.FullName} (Найден)");
-                              LogMethods(textureTransformType, BindingFlags.Public | BindingFlags.Static | BindingFlags.GetProperty, "TextureTransform Public Static Properties");
-                              LogMethods(textureTransformType, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly, "TextureTransform Public Constructors"); // Конструкторы - это Instance
-                        }
-                        else
-                        {
-                              if (debugLogging) Debug.LogWarning("SentisCompat: TextureTransform Type: НЕ НАЙДЕН в сборке Unity.Sentis.");
-                        }
+                        var p = m.GetParameters();
+                        return p.Length == 1 && p[0].ParameterType == typeof(Texture2D);
+                  });
+                  if (toTensorSingleArgT2D_Cache != null && debugLogging) Debug.Log($"SentisCompat: Cached ToTensor(Texture2D): {toTensorSingleArgT2D_Cache.Name}");
+
+                  // Cache ToTensor(Texture texture)
+                  toTensorSingleArgTex_Cache = allToTensor.FirstOrDefault(m =>
+                  {
+                        var p = m.GetParameters();
+                        // Ensure it's specifically Texture and not Texture2D if that was already cached by a more specific Texture2D overload.
+                        return p.Length == 1 && p[0].ParameterType == typeof(Texture) && (toTensorSingleArgT2D_Cache == null || m != toTensorSingleArgT2D_Cache);
+                  });
+                  if (toTensorSingleArgTex_Cache != null && debugLogging) Debug.Log($"SentisCompat: Cached ToTensor(Texture): {toTensorSingleArgTex_Cache.Name}");
+
+                  // Cache ToTensor(Texture texture, int width, int height, int channels)
+                  toTensor4Arg_Cache = allToTensor.FirstOrDefault(m =>
+                  {
+                        var p = m.GetParameters();
+                        return p.Length == 4 && typeof(Texture).IsAssignableFrom(p[0].ParameterType) &&
+                               p[1].ParameterType == typeof(int) && p[2].ParameterType == typeof(int) && p[3].ParameterType == typeof(int);
+                  });
+                  if (toTensor4Arg_Cache != null && debugLogging) Debug.Log($"SentisCompat: Cached ToTensor(Texture,int,int,int): {toTensor4Arg_Cache.Name}");
+
+                  if (toTensorSingleArgT2D_Cache == null && toTensorSingleArgTex_Cache == null && toTensor4Arg_Cache == null && debugLogging)
+                  {
+                        Debug.LogWarning("SentisCompat: Не удалось закэшировать ни одну из известных версий ToTensor. TextureToTensor будет использовать fallback.");
                   }
 
-                  if (ModelLoaderType != null && ModelType != null)
+                  // Cache RenderToTexture methods
+                  var allRenderToTexture = TextureConverterType.GetMethods(BindingFlags.Public | BindingFlags.Static).Where(m => m.Name == "RenderToTexture").ToArray();
+
+                  if (TextureTransformType != null)
                   {
-                        if (debugLogging) Debug.Log("SentisCompat: Базовые типы (ModelLoader, Model) найдены. Инициализация считается успешной для загрузки и попытки создания worker.");
-                        isInitialized = true;
-                        if (WorkerType == null) Debug.LogWarning("SentisCompat: Тип Worker/IWorker не найден, Execute/Dispose могут не работать.");
-                        if (TensorType == null) Debug.LogWarning("SentisCompat: Тип Tensor не найден, работа с тензорами может быть нарушена.");
-                        if (OpsType == null) Debug.LogWarning("SentisCompat: Тип Ops не найден, операции с тензорами могут быть нарушены.");
-                        if (TextureConverterType == null) Debug.LogWarning("SentisCompat: Тип TextureConverter не найден, конвертация текстур может быть нарушена.");
+                        renderToTexture3Arg_Cache = allRenderToTexture.FirstOrDefault(m =>
+                        {
+                              var p = m.GetParameters();
+                              return p.Length == 3 && TensorType.IsAssignableFrom(p[0].ParameterType) &&
+                                 p[1].ParameterType == typeof(RenderTexture) && p[2].ParameterType.IsAssignableFrom(TextureTransformType);
+                        });
+                        if (renderToTexture3Arg_Cache != null && debugLogging) Debug.Log($"SentisCompat: Cached RenderToTexture(Tensor,RT,TT): {renderToTexture3Arg_Cache.Name}");
+                        else if (debugLogging) Debug.LogWarning("SentisCompat: Не удалось закэшировать RenderToTexture(Tensor, RenderTexture, TextureTransform).");
                   }
-                  else
+                  else if (debugLogging) Debug.Log("SentisCompat: TextureTransformType не найден, пропускаем кэширование 3-аргументного RenderToTexture.");
+
+
+                  renderToTexture2Arg_Cache = allRenderToTexture.FirstOrDefault(m =>
                   {
-                        Debug.LogError("SentisCompat: Не удалось найти критичные типы (ModelLoader или Model). Инициализация провалена.");
-                  }
+                        var p = m.GetParameters();
+                        return p.Length == 2 && TensorType.IsAssignableFrom(p[0].ParameterType) &&
+                               p[1].ParameterType == typeof(RenderTexture);
+                  });
+                  if (renderToTexture2Arg_Cache != null && debugLogging) Debug.Log($"SentisCompat: Cached RenderToTexture(Tensor,RT): {renderToTexture2Arg_Cache.Name}");
+                  else if (debugLogging && renderToTexture3Arg_Cache == null) Debug.LogWarning("SentisCompat: Не удалось закэшировать RenderToTexture(Tensor, RenderTexture) (и 3-аргументная версия тоже не найдена).");
+                  else if (debugLogging && renderToTexture3Arg_Cache != null) Debug.Log("SentisCompat: RenderToTexture(Tensor,RT) не кэширован, т.к. 3-аргументная версия (Tensor,RT,TT) была найдена и предпочтительна.");
+
             }
             catch (Exception e)
             {
                   Debug.LogError($"SentisCompat: Исключение при инициализации: {e.Message}");
+            }
+
+            if (ModelLoaderType != null && ModelType != null)
+            {
+                  if (debugLogging) Debug.Log("SentisCompat: Базовые типы (ModelLoader, Model) найдены. Инициализация считается успешной для загрузки и попытки создания worker.");
+                  isInitialized = true;
+                  if (WorkerType == null) Debug.LogWarning("SentisCompat: Тип Worker/IWorker не найден, Execute/Dispose могут не работать.");
+                  if (TensorType == null) Debug.LogWarning("SentisCompat: Тип Tensor не найден, работа с тензорами может быть нарушена.");
+                  if (OpsType == null) Debug.LogWarning("SentisCompat: Тип Ops не найден, операции с тензорами могут быть нарушены.");
+                  if (TextureConverterType == null) Debug.LogWarning("SentisCompat: Тип TextureConverter не найден, конвертация текстур может быть нарушена.");
+            }
+            else
+            {
+                  Debug.LogError("SentisCompat: Не удалось найти критичные типы (ModelLoader или Model). Инициализация провалена.");
             }
       }
 
@@ -532,92 +589,140 @@ public static class SentisCompat
             if (texture == null) { Debug.LogError("SentisCompat: Текстура равна null"); return null; }
             if (!isInitialized) { Debug.LogError("SentisCompat: Инициализация не удалась, не могу продолжить TextureToTensor."); return null; }
 
-            Assembly sentisAssembly = ModelLoaderType?.Assembly;
-            if (sentisAssembly == null)
+            // Attempt 1: Cached ToTensor(Texture2D tex)
+            if (toTensorSingleArgT2D_Cache != null)
             {
-                  // Fallback if modelLoaderType was somehow null
-                  sentisAssembly = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(asm => asm.GetName().Name == "Unity.Sentis");
-                  if (sentisAssembly == null) { Debug.LogError("SentisCompat: Сборка Unity.Sentis не найдена."); return null; }
+                  try
+                  {
+                        // if (debugLogging) Debug.Log("SentisCompat: Попытка вызова кэшированного ToTensor(Texture2D).");
+                        object result = toTensorSingleArgT2D_Cache.Invoke(null, new object[] { texture });
+                        if (result != null) { /* if (debugLogging) Debug.Log("SentisCompat: Тензор успешно создан через кэшированный ToTensor(Texture2D)."); */ return result; }
+                  }
+                  catch (Exception e)
+                  {
+                        if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при вызове кэшированного ToTensor(Texture2D): {e.Message}\n{e.StackTrace}");
+                        toTensorSingleArgT2D_Cache = null; // Invalidate bad cache
+                  }
             }
 
-            if (debugLogging) Debug.Log($"SentisCompat: Используется сборка {sentisAssembly.FullName} для TextureToTensor.");
-            if (debugLogging) Debug.Log($"SentisCompat: Текстура размером {texture.width}x{texture.height}, формат {texture.format}");
+            // Attempt 2: Cached ToTensor(Texture tex)
+            if (toTensorSingleArgTex_Cache != null)
+            {
+                  try
+                  {
+                        // if (debugLogging) Debug.Log("SentisCompat: Попытка вызова кэшированного ToTensor(Texture).");
+                        object result = toTensorSingleArgTex_Cache.Invoke(null, new object[] { texture });
+                        if (result != null) { /* if (debugLogging) Debug.Log("SentisCompat: Тензор успешно создан через кэшированный ToTensor(Texture)."); */ return result; }
+                  }
+                  catch (Exception e)
+                  {
+                        if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при вызове кэшированного ToTensor(Texture): {e.Message}\n{e.StackTrace}");
+                        toTensorSingleArgTex_Cache = null; // Invalidate bad cache
+                  }
+            }
+
+            // Attempt 3: Cached ToTensor(Texture tex, int w, int h, int c)
+            if (toTensor4Arg_Cache != null)
+            {
+                  try
+                  {
+                        // if (debugLogging) Debug.Log("SentisCompat: Попытка вызова кэшированного ToTensor(Texture,int,int,int).");
+                        object result = toTensor4Arg_Cache.Invoke(null, new object[] { texture, texture.width, texture.height, 3 }); // Assuming 3 channels (RGB)
+                        if (result != null) { /* if (debugLogging) Debug.Log("SentisCompat: Тензор успешно создан через кэшированный ToTensor(Texture,int,int,int)."); */ return result; }
+                  }
+                  catch (Exception e)
+                  {
+                        if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при вызове кэшированного ToTensor(Texture,int,int,int): {e.Message}\n{e.StackTrace}");
+                        toTensor4Arg_Cache = null; // Invalidate bad cache
+                  }
+            }
+
+            // Fallback: Dynamic search
+            if (debugLogging) Debug.LogWarning("SentisCompat (Fallback): Кэшированные методы ToTensor не сработали или не найдены. Попытка динамического поиска...");
+            Assembly sentisAssembly = TextureConverterType?.Assembly ?? ModelLoaderType?.Assembly ?? AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(asm => asm.GetName().Name == "Unity.Sentis");
+            if (sentisAssembly == null) { Debug.LogError("SentisCompat: Сборка Unity.Sentis не найдена (fallback)."); return null; }
+
+            if (debugLogging) Debug.Log($"SentisCompat (Fallback): Используется сборка {sentisAssembly.FullName} для TextureToTensor.");
+            if (debugLogging) Debug.Log($"SentisCompat (Fallback): Текстура размером {texture.width}x{texture.height}, формат {texture.format}");
 
             if (TextureConverterType != null)
             {
-                  if (debugLogging) Debug.Log("SentisCompat: Найден тип Unity.Sentis.TextureConverter.");
-                  MethodInfo toTensorMethod = null;
-                  string foundMethodSignature = "";
+                  var allToTensorMethods = TextureConverterType.GetMethods(BindingFlags.Public | BindingFlags.Static).Where(m => m.Name == "ToTensor").ToArray();
+                  if (debugLogging) Debug.Log($"SentisCompat (Fallback): Найдено {allToTensorMethods.Length} методов с именем ToTensor. Поиск подходящего...");
 
-                  // Try specific overloads first
-                  toTensorMethod = TextureConverterType.GetMethod("ToTensor", BindingFlags.Public | BindingFlags.Static, null, new Type[] { typeof(Texture2D) }, null);
-                  if (toTensorMethod != null) foundMethodSignature = "ToTensor(Texture2D)";
-                  else
+                  foreach (var methodCandidate in allToTensorMethods)
                   {
-                        toTensorMethod = TextureConverterType.GetMethod("ToTensor", BindingFlags.Public | BindingFlags.Static, null, new Type[] { typeof(Texture) }, null);
-                        if (toTensorMethod != null) foundMethodSignature = "ToTensor(Texture)";
-                  }
-
-                  if (toTensorMethod != null)
-                  {
-                        if (debugLogging) Debug.Log($"SentisCompat: Найден метод TextureConverter.{foundMethodSignature}. Попытка вызова...");
-                        try
+                        var parameters = methodCandidate.GetParameters();
+                        if (parameters.Length > 0 && typeof(Texture).IsAssignableFrom(parameters[0].ParameterType))
                         {
-                              object result = toTensorMethod.Invoke(null, new object[] { texture });
-                              if (result != null) { if (debugLogging) Debug.Log($"SentisCompat: Тензор успешно создан через TextureConverter.{foundMethodSignature}."); return result; }
-                              else Debug.LogWarning($"SentisCompat: TextureConverter.{foundMethodSignature} вернул null.");
-                        }
-                        catch (Exception e) { Debug.LogWarning($"SentisCompat: Ошибка при вызове TextureConverter.{foundMethodSignature}: {e.Message}\n{e.StackTrace}"); }
-                  }
-                  else Debug.LogWarning("SentisCompat: Методы TextureConverter.ToTensor(Texture2D) и ToTensor(Texture) не найдены прямым поиском. Попытка поиска по перегрузкам...");
-
-                  // Fallback to iterating all ToTensor methods
-                  if (toTensorMethod == null)
-                  {
-                        var allToTensorMethods = TextureConverterType.GetMethods(BindingFlags.Public | BindingFlags.Static).Where(m => m.Name == "ToTensor").ToArray();
-                        if (debugLogging) Debug.Log($"SentisCompat: Найдено {allToTensorMethods.Length} методов с именем ToTensor. Поиск подходящего...");
-                        foreach (var methodCandidate in allToTensorMethods)
-                        {
-                              var parameters = methodCandidate.GetParameters();
-                              if (parameters.Length > 0 && typeof(Texture).IsAssignableFrom(parameters[0].ParameterType))
+                              object[] args = new object[parameters.Length];
+                              args[0] = texture;
+                              bool canInvoke = true;
+                              for (int i = 1; i < parameters.Length; i++)
                               {
-                                    object[] args = new object[parameters.Length];
-                                    args[0] = texture;
-                                    bool canInvoke = true;
-                                    for (int i = 1; i < parameters.Length; i++)
+                                    var paramInfo = parameters[i];
+                                    if (paramInfo.Name.ToLower().Contains("width")) args[i] = texture.width;
+                                    else if (paramInfo.Name.ToLower().Contains("height")) args[i] = texture.height;
+                                    else if (paramInfo.Name.ToLower().Contains("channels")) args[i] = 3; // Предполагаем RGB
+                                    else if (paramInfo.ParameterType == typeof(int) && paramInfo.Name.ToLower().Contains("batch")) args[i] = 1;
+                                    else if (paramInfo.ParameterType == typeof(bool) && paramInfo.Name.ToLower().Contains("linear")) args[i] = false;
+                                    else if (TextureTransformType != null && paramInfo.ParameterType.IsAssignableFrom(TextureTransformType))
                                     {
-                                          var paramInfo = parameters[i];
-                                          if (paramInfo.Name.ToLower().Contains("width")) args[i] = texture.width;
-                                          else if (paramInfo.Name.ToLower().Contains("height")) args[i] = texture.height;
-                                          else if (paramInfo.Name.ToLower().Contains("channels")) args[i] = 3;
-                                          else if (paramInfo.ParameterType == typeof(int) && paramInfo.Name.ToLower().Contains("batch")) args[i] = 1;
-                                          else if (paramInfo.ParameterType == typeof(bool) && paramInfo.Name.ToLower().Contains("linear")) args[i] = false;
-                                          else if (paramInfo.ParameterType.Name.Contains("TextureTransform"))
-                                          {
-                                                try { args[i] = Activator.CreateInstance(paramInfo.ParameterType); } // Basic instance
-                                                catch { Debug.LogWarning($"SentisCompat: Не удалось создать TextureTransform для {paramInfo.Name}"); canInvoke = false; break; }
-                                          }
-                                          else if (paramInfo.HasDefaultValue) args[i] = paramInfo.DefaultValue;
-                                          else { Debug.LogWarning($"SentisCompat: Не удалось предоставить аргумент для '{paramInfo.Name}' ({paramInfo.ParameterType.Name})"); canInvoke = false; break; }
+                                          try { args[i] = GetTextureTransformInstance(); }
+                                          catch { Debug.LogWarning($"SentisCompat (Fallback): Не удалось создать TextureTransform для {paramInfo.Name}"); canInvoke = false; break; }
                                     }
-                                    if (canInvoke)
+                                    else if (paramInfo.HasDefaultValue) args[i] = paramInfo.DefaultValue;
+                                    else { Debug.LogWarning($"SentisCompat (Fallback): Не удалось предоставить аргумент для '{paramInfo.Name}' ({paramInfo.ParameterType.Name})"); canInvoke = false; break; }
+                              }
+                              if (canInvoke)
+                              {
+                                    if (debugLogging) Debug.Log($"SentisCompat (Fallback): Пробуем метод {methodCandidate.Name}({string.Join(", ", parameters.Select(p => p.ParameterType.Name + " " + p.Name))})");
+                                    try
                                     {
-                                          if (debugLogging) Debug.Log($"SentisCompat: Пробуем метод {methodCandidate.Name}({string.Join(", ", parameters.Select(p => p.ParameterType.Name + " " + p.Name))})");
-                                          try
+                                          object result = methodCandidate.Invoke(null, args);
+                                          if (result != null)
                                           {
-                                                object result = methodCandidate.Invoke(null, args);
-                                                if (result != null) { if (debugLogging) Debug.Log("SentisCompat: Тензор успешно создан через одну из перегрузок TextureConverter.ToTensor."); return result; }
+                                                // Update specific caches based on the found method's signature
+                                                var p_fallback = methodCandidate.GetParameters();
+                                                if (p_fallback.Length == 1 && p_fallback[0].ParameterType == typeof(Texture2D))
+                                                {
+                                                      toTensorSingleArgT2D_Cache = methodCandidate;
+                                                      if (debugLogging) Debug.Log("SentisCompat (Fallback): Тензор успешно создан и ToTensor(Texture2D) закэширован.");
+                                                }
+                                                else if (p_fallback.Length == 1 && p_fallback[0].ParameterType == typeof(Texture))
+                                                {
+                                                      toTensorSingleArgTex_Cache = methodCandidate;
+                                                      if (debugLogging) Debug.Log("SentisCompat (Fallback): Тензор успешно создан и ToTensor(Texture) закэширован.");
+                                                }
+                                                else if (p_fallback.Length == 4 && typeof(Texture).IsAssignableFrom(p_fallback[0].ParameterType) &&
+                                                           p_fallback[1].ParameterType == typeof(int) && p_fallback[2].ParameterType == typeof(int) && p_fallback[3].ParameterType == typeof(int))
+                                                {
+                                                      toTensor4Arg_Cache = methodCandidate;
+                                                      if (debugLogging) Debug.Log("SentisCompat (Fallback): Тензор успешно создан и ToTensor(Texture,int,int,int) закэширован.");
+                                                }
+                                                else
+                                                {
+                                                      if (debugLogging) Debug.LogWarning("SentisCompat (Fallback): Тензор успешно создан, но найденный метод ToTensor не соответствует стандартным кэшам.");
+                                                }
+                                                return result;
                                           }
-                                          catch (Exception e) { Debug.LogWarning($"SentisCompat: Ошибка при вызове {methodCandidate.Name}: {e.InnerException?.Message ?? e.Message}"); }
                                     }
+                                    catch (Exception e) { Debug.LogWarning($"SentisCompat (Fallback): Ошибка при вызове {methodCandidate.Name}: {(e.InnerException != null ? e.InnerException.Message : e.Message)}"); }
                               }
                         }
                   }
             }
-            else Debug.LogError("SentisCompat: Тип Unity.Sentis.TextureConverter не найден.");
+            else Debug.LogError("SentisCompat (Fallback): Тип Unity.Sentis.TextureConverter не найден.");
 
-            Debug.LogError("SentisCompat: Не удалось создать тензор через TextureConverter. Возвращаем null.");
+            Debug.LogError("SentisCompat: Не удалось создать тензор через TextureConverter после всех попыток (включая кэш и fallback). Возвращаем null.");
             return null;
+      }
+
+      private static object GetTextureTransformInstance()
+      {
+            // TextureTransform is a struct, so new TextureTransform() gives a default instance.
+            // The previous caching logic for an 'identity' property or specific constructor was incorrect.
+            return new Unity.Sentis.TextureTransform();
       }
 
       /// <summary>
@@ -634,163 +739,123 @@ public static class SentisCompat
                   return false;
             }
             if (!isInitialized) Initialize();
+            if (!isInitialized) { Debug.LogError("SentisCompat: Инициализация не удалась."); return false; }
 
-            // Эти типы должны быть инициализированы в Initialize()
+            if (TensorType == null || !TensorType.IsInstanceOfType(tensor))
+            {
+                  Debug.LogError($"SentisCompat: Предоставленный тензор имеет неверный тип ({tensor.GetType().FullName}). Ожидался {TensorType?.FullName}.");
+                  FillTextureWithPlaceholder(targetTexture);
+                  return false;
+            }
+
+            object transformInstance = null;
+            // Only get transform instance if the 3-arg cache is populated, as it might be the only user.
+            if (renderToTexture3Arg_Cache != null)
+            {
+                  transformInstance = GetTextureTransformInstance();
+            }
+
+
+            // Attempt 1: Use cached RenderToTexture(Tensor, RenderTexture, TextureTransform)
+            if (renderToTexture3Arg_Cache != null)
+            {
+                  try
+                  {
+                        // if (debugLogging) Debug.Log("SentisCompat: Попытка вызова кэшированного RenderToTexture(Tensor, RenderTexture, TextureTransform).");
+                        renderToTexture3Arg_Cache.Invoke(null, new object[] { tensor, targetTexture, transformInstance });
+                        // if (debugLogging) Debug.Log("SentisCompat: Текстура успешно отрисована через кэшированный RenderToTexture с Transform.");
+                        return true;
+                  }
+                  catch (Exception e)
+                  {
+                        if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при вызове кэшированного RenderToTexture(T,RT,TT): {e.Message}\n{e.StackTrace}");
+                        renderToTexture3Arg_Cache = null; // Invalidate bad cache
+                  }
+            }
+
+            // Attempt 2: Use cached RenderToTexture(Tensor, RenderTexture)
+            if (renderToTexture2Arg_Cache != null)
+            {
+                  try
+                  {
+                        // if (debugLogging) Debug.Log("SentisCompat: Попытка вызова кэшированного RenderToTexture(Tensor, RenderTexture).");
+                        renderToTexture2Arg_Cache.Invoke(null, new object[] { tensor, targetTexture });
+                        // if (debugLogging) Debug.Log("SentisCompat: Текстура успешно отрисована через кэшированный RenderToTexture.");
+                        return true;
+                  }
+                  catch (Exception e)
+                  {
+                        if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при вызове кэшированного RenderToTexture(T,RT): {e.Message}\n{e.StackTrace}");
+                        renderToTexture2Arg_Cache = null; // Invalidate bad cache
+                  }
+            }
+
+            // Fallback: Dynamic search
+            if (debugLogging) Debug.LogWarning("SentisCompat (Fallback): Кэшированные методы RenderToTexture не сработали или не найдены. Попытка динамического поиска...");
+
             Type actualTextureConverterType = TextureConverterType;
-            Type actualTensorType = TensorType;
-            Type actualTextureTransformType = null;
-
-            // Получаем TextureTransformType из той же сборки, что и TextureConverterType
-            if (actualTextureConverterType != null)
-            {
-                  actualTextureTransformType = actualTextureConverterType.Assembly.GetType("Unity.Sentis.TextureTransform");
-            }
-            else
-            {
-                  // Попытка найти TextureTransformType через другую известную сборку, если TextureConverterType был null
-                  Assembly sentisAssembly = ModelType?.Assembly ?? AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(asm => asm.GetName().Name == "Unity.Sentis");
-                  if (sentisAssembly != null)
-                  {
-                        actualTextureTransformType = sentisAssembly.GetType("Unity.Sentis.TextureTransform");
-                  }
-            }
-
-            // Проверки на null для критичных типов
-            if (actualTextureConverterType == null)
-            {
-                  Debug.LogError("SentisCompat: TextureConverterType не инициализирован. Невозможно выполнить RenderTensorToTexture.");
-                  FillTextureWithPlaceholder(targetTexture);
-                  return false;
-            }
-            if (actualTensorType == null)
-            {
-                  Debug.LogError("SentisCompat: TensorType не инициализирован. Невозможно выполнить RenderTensorToTexture.");
-                  FillTextureWithPlaceholder(targetTexture);
-                  return false;
-            }
-            if (!actualTensorType.IsInstanceOfType(tensor))
-            {
-                  Debug.LogError($"SentisCompat: Предоставленный тензор имеет неверный тип ({tensor.GetType().FullName}). Ожидался {actualTensorType.FullName}.");
-                  FillTextureWithPlaceholder(targetTexture);
-                  return false;
-            }
-            if (actualTextureTransformType == null && debugLogging)
-            {
-                  Debug.LogWarning("SentisCompat: Тип Unity.Sentis.TextureTransform не найден. Попытка продолжить без него.");
-            }
-
-            if (debugLogging) Debug.Log($"SentisCompat: RenderTensorToTexture: Using TextureConverter: {actualTextureConverterType.FullName}, Tensor: {actualTensorType.FullName}");
-
-            if (debugLogging)
-            {
-                  Debug.Log("SentisCompat: --- Detailed TextureConverter Method Diagnostics START ---");
-                  LogMethods(actualTextureConverterType, BindingFlags.Public | BindingFlags.Static, "TextureConverter Public Static");
-                  LogMethods(actualTextureConverterType, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance, "TextureConverter ALL Methods");
-                  Debug.Log("SentisCompat: --- Detailed TextureConverter Method Diagnostics END ---");
-            }
-
-            object textureTransformInstance = null;
-            if (actualTextureTransformType != null)
-            {
-                  PropertyInfo identityProperty = actualTextureTransformType.GetProperty("identity", BindingFlags.Public | BindingFlags.Static);
-                  if (identityProperty != null)
-                  {
-                        try
-                        {
-                              textureTransformInstance = identityProperty.GetValue(null);
-                              if (debugLogging) Debug.Log(textureTransformInstance != null ? "SentisCompat: Успешно получен TextureTransform.identity." : "SentisCompat: TextureTransform.identity is null after GetValue.");
-                        }
-                        catch (Exception ex) { if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при получении TextureTransform.identity: {ex.Message}"); }
-                  }
-                  else { if (debugLogging) Debug.LogWarning("SentisCompat: Property TextureTransform.identity not found."); }
-
-                  if (textureTransformInstance == null) // Если identity не сработало, пытаемся создать через конструктор
-                  {
-                        if (debugLogging) Debug.LogWarning("SentisCompat: TextureTransform.identity не доступен. Попытка создать экземпляр TextureTransform через конструктор по умолчанию.");
-                        ConstructorInfo constructor = actualTextureTransformType.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
-                        if (constructor != null)
-                        {
-                              try
-                              {
-                                    textureTransformInstance = constructor.Invoke(null);
-                                    if (debugLogging) Debug.Log("SentisCompat: Успешно создан экземпляр TextureTransform через конструктор по умолчанию.");
-                              }
-                              catch (Exception ex) { if (debugLogging) Debug.LogWarning($"SentisCompat: Ошибка при создании TextureTransform через конструктор: {ex.Message}"); }
-                        }
-                        else { if (debugLogging) Debug.LogWarning("SentisCompat: Default constructor for TextureTransform not found."); }
-                  }
-            }
-
-            if (textureTransformInstance == null && debugLogging) Debug.LogWarning("SentisCompat: Не удалось получить или создать экземпляр TextureTransform. Он будет null. Это может повлиять на некоторые перегрузки RenderToTexture.");
+            if (actualTextureConverterType == null) { Debug.LogError("SentisCompat (Fallback): TextureConverterType не инициализирован."); FillTextureWithPlaceholder(targetTexture); return false; }
 
             var methods = actualTextureConverterType.GetMethods(BindingFlags.Public | BindingFlags.Static)
                                       .Where(m => m.Name == "RenderToTexture")
-                                      .OrderByDescending(m => m.GetParameters().Length) // Предпочитаем более специфичные (больше параметров)
+                                      .OrderByDescending(m => m.GetParameters().Length) // Prefer methods with more params if ambiguous, e.g. with transform
                                       .ToList();
 
-            if (debugLogging && methods.Any())
-            {
-                  Debug.Log($"SentisCompat: Найдено {methods.Count} методов с именем RenderToTexture в {actualTextureConverterType.FullName}. Поиск подходящего...");
-                  foreach (var m in methods)
-                  {
-                        var parameters = m.GetParameters();
-                        string paramString = string.Join(", ", parameters.Select(p => $"{p.ParameterType.Name} {p.Name}"));
-                        Debug.Log($"SentisCompat:   Кандидат: RenderToTexture({paramString})");
-                  }
-            }
-            else if (debugLogging)
-            {
-                  Debug.LogWarning($"SentisCompat: Не найдено методов с именем RenderToTexture в {actualTextureConverterType.FullName}.");
-            }
+            if (debugLogging && methods.Any()) Debug.Log($"SentisCompat (Fallback): Найдено {methods.Count} методов RenderToTexture. Поиск подходящего...");
 
-            // Попытка 1: RenderToTexture(Tensor, RenderTexture, TextureTransform)
-            MethodInfo renderMethod = methods.FirstOrDefault(m =>
+            // Fallback Attempt 1: RenderToTexture(Tensor, RenderTexture, TextureTransform)
+            MethodInfo found3ArgMethod = methods.FirstOrDefault(m =>
             {
                   var parameters = m.GetParameters();
                   return parameters.Length == 3 &&
-                         actualTensorType.IsAssignableFrom(parameters[0].ParameterType) &&
+                         TensorType.IsAssignableFrom(parameters[0].ParameterType) &&
                          parameters[1].ParameterType == typeof(RenderTexture) &&
-                         actualTextureTransformType != null && parameters[2].ParameterType.IsAssignableFrom(actualTextureTransformType);
+                         TextureTransformType != null && parameters[2].ParameterType.IsAssignableFrom(TextureTransformType);
             });
 
-            if (renderMethod != null)
+            if (found3ArgMethod != null)
             {
-                  if (debugLogging) Debug.Log("SentisCompat: Попытка вызова RenderToTexture(Tensor, RenderTexture, TextureTransform).");
-                  if (textureTransformInstance == null && debugLogging) Debug.LogWarning("SentisCompat: textureTransformInstance is null, но все равно пытаемся вызвать перегрузку с 3 параметрами.");
+                  if (transformInstance == null && TextureTransformType != null)
+                  { // Re-attempt to get transformInstance if it wasn't fetched before
+                        transformInstance = GetTextureTransformInstance();
+                  }
+                  if (debugLogging) Debug.Log("SentisCompat (Fallback): Попытка вызова RenderToTexture(Tensor, RenderTexture, TextureTransform).");
                   try
                   {
-                        renderMethod.Invoke(null, new object[] { tensor, targetTexture, textureTransformInstance });
-                        if (debugLogging) Debug.Log("SentisCompat: Текстура успешно отрисована через TextureConverter.RenderToTexture(Tensor, RenderTexture, TextureTransform).");
+                        found3ArgMethod.Invoke(null, new object[] { tensor, targetTexture, transformInstance });
+                        renderToTexture3Arg_Cache = found3ArgMethod; // Cache it
+                        if (debugLogging) Debug.Log("SentisCompat (Fallback): Текстура успешно отрисована и RenderToTexture(T,RT,TT) закэширован.");
                         return true;
                   }
                   catch (Exception e)
                   {
-                        Debug.LogError($"SentisCompat: Ошибка при вызове TextureConverter.RenderToTexture(Tensor, RenderTexture, TextureTransform): {e.Message}\\\\n{e.StackTrace}");
-                        // Ошибка с 3-параметрической версией, продолжаем к 2-параметрической
+                        Debug.LogError($"SentisCompat (Fallback): Ошибка RenderToTexture(..., Transform): {e.Message}\n{e.StackTrace}");
+                        // Don't nullify renderToTexture3Arg_Cache here as it's being set *on success*
                   }
             }
 
-            // Попытка 2: RenderToTexture(Tensor, RenderTexture)
-            renderMethod = methods.FirstOrDefault(m =>
+            // Fallback Attempt 2: RenderToTexture(Tensor, RenderTexture)
+            MethodInfo found2ArgMethod = methods.FirstOrDefault(m =>
             {
                   var parameters = m.GetParameters();
                   return parameters.Length == 2 &&
-                         actualTensorType.IsAssignableFrom(parameters[0].ParameterType) &&
+                         TensorType.IsAssignableFrom(parameters[0].ParameterType) &&
                          parameters[1].ParameterType == typeof(RenderTexture);
             });
 
-            if (renderMethod != null)
+            if (found2ArgMethod != null)
             {
-                  if (debugLogging) Debug.Log("SentisCompat: Попытка вызова RenderToTexture(Tensor, RenderTexture).");
+                  if (debugLogging) Debug.Log("SentisCompat (Fallback): Попытка вызова RenderToTexture(Tensor, RenderTexture).");
                   try
                   {
-                        renderMethod.Invoke(null, new object[] { tensor, targetTexture });
-                        if (debugLogging) Debug.Log("SentisCompat: Текстура успешно отрисована через TextureConverter.RenderToTexture(Tensor, RenderTexture).");
+                        found2ArgMethod.Invoke(null, new object[] { tensor, targetTexture });
+                        renderToTexture2Arg_Cache = found2ArgMethod; // Cache it
+                        if (debugLogging) Debug.Log("SentisCompat (Fallback): Текстура успешно отрисована и RenderToTexture(T,RT) закэширован.");
                         return true;
                   }
                   catch (Exception e)
                   {
-                        Debug.LogError($"SentisCompat: Ошибка при вызове TextureConverter.RenderToTexture(Tensor, RenderTexture): {e.Message}\\\\n{e.StackTrace}");
+                        Debug.LogError($"SentisCompat (Fallback): Ошибка RenderToTexture: {e.Message}\n{e.StackTrace}");
                   }
             }
 
@@ -844,6 +909,7 @@ public static class SentisCompat
                         var parameters = method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}").ToArray(); // Simplified parameter type name for brevity
                         if (debugLogging) Debug.Log($"SentisCompat:   - {(method.ReturnType.IsGenericType ? method.ReturnType.Name.Split('`')[0] + "<" + string.Join(", ", method.ReturnType.GetGenericArguments().Select(ga => ga.Name)) + ">" : method.ReturnType.Name)} {method.Name}({string.Join(", ", parameters)})");
                   }
+                  if (debugLogging && methods.Length > 5) Debug.Log($"SentisCompat:   ... и еще {methods.Length - 5} методов (полный список скрыт для краткости).");
             }
       }
 }

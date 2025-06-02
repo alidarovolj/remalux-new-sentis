@@ -41,6 +41,7 @@ public class ARManagerInitializer2 : MonoBehaviour
     public ARPlaneManager planeManager;
     public AROcclusionManager arOcclusionManager;
     public ARRaycastManager arRaycastManager;
+    public ARAnchorManager arAnchorManager;
 
     [Tooltip("AR Mesh Manager для Scene Reconstruction (LiDAR сканирование)")]
     public ARMeshManager arMeshManager;
@@ -95,11 +96,8 @@ public class ARManagerInitializer2 : MonoBehaviour
     private RenderTexture currentSegmentationMask;
     private bool maskUpdated = false;
     private List<GameObject> generatedPlanes = new List<GameObject>();
-    private int lastPlaneCount = 0;
     private int frameCounter = 0;
-    private bool hadValidSegmentationResult = false;
     private float lastSuccessfulSegmentationTime = 0f;
-    private float segmentationTimeoutSeconds = 10f;
     private int trackablesParentInstanceID_FromStart = 0;
 
     [Header("Настройки Кластеризации Рейкастов")]
@@ -176,21 +174,41 @@ public class ARManagerInitializer2 : MonoBehaviour
         {
             if (useDetectedPlanes)
             {
-                planeManager.enabled = true;
-                Log("ARPlaneManager ENABLED as useDetectedPlanes = true.", ARManagerDebugFlags.Initialization);
-                planeManager.planesChanged -= OnPlanesChanged;
+                if (!planeManager.enabled)
+                {
+                    planeManager.enabled = true;
+                    Log("ARPlaneManager explicitly ENABLED as useDetectedPlanes = true.", ARManagerDebugFlags.Initialization);
+                }
+                else
+                {
+                    Log("ARPlaneManager was already enabled, useDetectedPlanes = true.", ARManagerDebugFlags.Initialization);
+                }
+                planeManager.planesChanged -= OnPlanesChanged; // Ensure no duplicate subscriptions
                 planeManager.planesChanged += OnPlanesChanged;
+                Log("Subscribed to planeManager.planesChanged.", ARManagerDebugFlags.Initialization);
             }
             else
             {
-                planeManager.enabled = false;
-                Log("ARPlaneManager DISABLED as useDetectedPlanes = false.", ARManagerDebugFlags.Initialization);
+                if (planeManager.enabled)
+                {
+                    planeManager.enabled = false;
+                    Log("ARPlaneManager explicitly DISABLED as useDetectedPlanes = false.", ARManagerDebugFlags.Initialization);
+                }
+                else
+                {
+                    Log("ARPlaneManager was already disabled, useDetectedPlanes = false.", ARManagerDebugFlags.Initialization);
+                }
                 planeManager.planesChanged -= OnPlanesChanged;
+                Log("Unsubscribed from planeManager.planesChanged.", ARManagerDebugFlags.Initialization);
             }
         }
         else if (useDetectedPlanes)
         {
             LogWarning("ARPlaneManager is null, but useDetectedPlanes is true. ARFoundation planes will not be detected.", ARManagerDebugFlags.Initialization);
+        }
+        else
+        {
+            Log("ARPlaneManager is null and useDetectedPlanes is false. No ARFoundation plane detection expected.", ARManagerDebugFlags.Initialization);
         }
 
         if (xrOrigin != null && xrOrigin.TrackablesParent != null)
@@ -205,11 +223,12 @@ public class ARManagerInitializer2 : MonoBehaviour
         InitializeLightEstimation();
         InitializeEnvironmentProbes();
         InitializeSceneReconstruction();
-        Log($"After InitializeSceneReconstruction: ARMeshManager Enabled: {(arMeshManager != null ? arMeshManager.enabled.ToString() : "NULL")}, Subsystem Valid: {(arMeshManager?.subsystem != null ? "True" : "False")}, Subsystem Running: {(arMeshManager?.subsystem?.running.ToString() ?? "N/A")}", ARManagerDebugFlags.Initialization);
+        Log($"After InitializeSceneReconstruction: ARMeshManager Enabled: {(arMeshManager != null ? arMeshManager.enabled.ToString() : "NULL")}, enableSceneReconstruction flag: {enableSceneReconstruction}, Subsystem Valid: {(arMeshManager?.subsystem != null ? "True" : "False")}, Subsystem Running: {(arMeshManager?.subsystem?.running.ToString() ?? "N/A")}", ARManagerDebugFlags.Initialization);
 
         // Subscribe to ARMeshManager events if it's enabled and available
-        if (arMeshManager != null && enableSceneReconstruction)
+        if (arMeshManager != null && arMeshManager.enabled && enableSceneReconstruction)
         {
+            arMeshManager.meshesChanged -= OnMeshesChanged;
             arMeshManager.meshesChanged += OnMeshesChanged;
             Log("Subscribed to ARMeshManager.meshesChanged.", ARManagerDebugFlags.Initialization);
         }
@@ -247,6 +266,7 @@ public class ARManagerInitializer2 : MonoBehaviour
     {
         if (arCameraManager != null && arDirectionalLight != null)
         {
+            arCameraManager.frameReceived -= OnARFrameReceived;
             arCameraManager.frameReceived += OnARFrameReceived;
             Log("Subscribed to ARCameraManager.frameReceived for light estimation.", ARManagerDebugFlags.Initialization);
         }
@@ -267,36 +287,53 @@ public class ARManagerInitializer2 : MonoBehaviour
     {
         if (!enableSceneReconstruction)
         {
-            Log("Scene Reconstruction отключена в настройках.", ARManagerDebugFlags.Initialization);
+            Log("Scene Reconstruction is administratively disabled by 'enableSceneReconstruction' flag.", ARManagerDebugFlags.Initialization);
+            if (arMeshManager != null)
+            {
+                arMeshManager.enabled = false; // Ensure it's off if global flag is off
+            }
             return;
         }
 
-        if (arMeshManager != null)
+        if (arMeshManager == null)
+        {
+            LogWarning("ARMeshManager component is not assigned. Scene Reconstruction cannot be enabled.", ARManagerDebugFlags.Initialization);
+            enableSceneReconstruction = false; // Update status to reflect that it won't work
+            return;
+        }
+
+        // At this point, enableSceneReconstruction is true (or was initially) and arMeshManager is assigned.
+        // Now, check the subsystem's availability.
+        // A more robust check might involve arMeshManager.subsystem.subsystemDescriptor.supportsMeshClassification or similar specific features.
+        if (arMeshManager.subsystem != null)
         {
             try
             {
-                // Включаем ARMeshManager
-                arMeshManager.enabled = true;
-
-                // Настраиваем параметры сканирования
-                if (arMeshManager.subsystem != null)
+                arMeshManager.enabled = true; // Attempt to enable the manager
+                // After enabling, check if it's actually running. Behavior might vary across ARFoundation versions.
+                if (arMeshManager.subsystem.running)
                 {
-                    Log($"✅ ARMeshManager успешно инициализирован. LiDAR Scene Reconstruction включен. Subsystem running: {arMeshManager.subsystem.running}", ARManagerDebugFlags.ARSystem);
+                    Log($"✅ ARMeshManager enabled and subsystem is running. Scene Reconstruction active.", ARManagerDebugFlags.ARSystem);
                 }
                 else
                 {
-                    LogWarning("ARMeshManager subsystem не доступен. Возможно, устройство не поддерживает Scene Reconstruction.", ARManagerDebugFlags.ARSystem);
+                    LogWarning($"ARMeshManager enabled, but subsystem is not running. Scene Reconstruction might not be fully active or may start shortly. Subsystem state: {arMeshManager.subsystem.running}", ARManagerDebugFlags.ARSystem);
+                    // For some versions/platforms, enabling the manager is enough for the subsystem to start.
+                    // If it doesn't start, further investigation might be needed (e.g., device capabilities, project settings).
                 }
             }
             catch (System.Exception e)
             {
-                LogError($"Ошибка инициализации Scene Reconstruction: {e.Message}", ARManagerDebugFlags.ARSystem);
+                LogError($"Error enabling ARMeshManager or interacting with its subsystem: {e.Message}. Disabling Scene Reconstruction.", ARManagerDebugFlags.ARSystem);
+                arMeshManager.enabled = false;
                 enableSceneReconstruction = false;
             }
         }
         else
         {
-            LogWarning("ARMeshManager не назначен. Scene Reconstruction не будет работать.", ARManagerDebugFlags.Initialization);
+            LogWarning($"ARMeshManager subsystem is not available (subsystem is null). Disabling Scene Reconstruction and ARMeshManager.", ARManagerDebugFlags.ARSystem);
+            arMeshManager.enabled = false;       // Disable the manager component
+            enableSceneReconstruction = false; // Update our flag to reflect it's not usable
         }
     }
 
@@ -334,7 +371,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         // <<< ДОБАВЛЕНО ДЛЯ ПРИНУДИТЕЛЬНОГО ОТКЛЮЧЕНИЯ ARPlaneManager >>>
         if (!useDetectedPlanes && planeManager != null && planeManager.enabled)
         {
-            LogWarning("ARPlaneManager был включен, несмотря на useDetectedPlanes = false. Принудительно отключаю.", ARManagerDebugFlags.Initialization);
+            LogWarning("ARPlaneManager was found enabled in Update, despite useDetectedPlanes = false. Forcibly disabling.", ARManagerDebugFlags.Initialization);
             planeManager.enabled = false;
         }
         // <<< КОНЕЦ ПРИНУДИТЕЛЬНОГО ОТКЛЮЧЕНИЯ >>>
@@ -370,6 +407,9 @@ public class ARManagerInitializer2 : MonoBehaviour
         if (xrOrigin != null && arMeshManager == null) arMeshManager = xrOrigin.GetComponentInChildren<ARMeshManager>();
         if (arMeshManager == null) arMeshManager = FindObjectOfType<ARMeshManager>();
 
+        if (xrOrigin != null && arAnchorManager == null) arAnchorManager = xrOrigin.GetComponentInChildren<ARAnchorManager>();
+        if (arAnchorManager == null) arAnchorManager = FindObjectOfType<ARAnchorManager>();
+
         // Проверка и назначение arDirectionalLight, если не установлено
         if (arDirectionalLight == null)
         {
@@ -403,6 +443,7 @@ public class ARManagerInitializer2 : MonoBehaviour
         Log($"AROcclusionManager: {(arOcclusionManager != null ? "Found" : "NULL")}", ARManagerDebugFlags.Initialization);
         Log($"ARRaycastManager: {(arRaycastManager != null ? "Found" : "NULL")}", ARManagerDebugFlags.Initialization);
         Log($"ARMeshManager: {(arMeshManager != null ? "Found" : "NULL")}", ARManagerDebugFlags.Initialization);
+        Log($"ARAnchorManager: {(arAnchorManager != null ? "Found" : "NULL")}", ARManagerDebugFlags.Initialization);
         Log($"AR Directional Light: {(arDirectionalLight != null ? arDirectionalLight.name : "NULL")}", ARManagerDebugFlags.Initialization);
         Log($"WallSegmentation: {(wallSegmentation != null ? "Found" : "NULL")}", ARManagerDebugFlags.Initialization);
         Log($"ARPlaneConfigurator: {(planeConfigurator != null ? "Found" : "NULL")}", ARManagerDebugFlags.Initialization);
@@ -538,7 +579,6 @@ public class ARManagerInitializer2 : MonoBehaviour
         if (mask == null) return;
         currentSegmentationMask = mask;
         maskUpdated = true;
-        hadValidSegmentationResult = true;
         lastSuccessfulSegmentationTime = Time.time;
         if (отображениеМаскиUI != null)
         {
@@ -737,7 +777,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         List<ARRaycastHit> hits = new List<ARRaycastHit>();
         bool didHitPrimary = false; // Для основного типа рэйкаста
-        bool didHitFallback = false; // Для TrackableType.All
+        bool didHitFallback = false; // Для TrackableType.AllTypes
 
         TrackableType primaryTrackableTypes = TrackableType.PlaneWithinPolygon | TrackableType.FeaturePoint;
 
@@ -799,13 +839,13 @@ public class ARManagerInitializer2 : MonoBehaviour
 
         if (!didHitPrimary)
         {
-            Log($"Primary raycast with {primaryTrackableTypes} found no hits. Retrying with TrackableType.All.", ARManagerDebugFlags.Raycasting);
+            Log($"Primary raycast with {primaryTrackableTypes} found no hits. Retrying with TrackableType.AllTypes.", ARManagerDebugFlags.Raycasting);
             // Очищаем hits перед повторным вызовом, если хотим только результаты от TrackableType.All
             // Однако, если мы хотим дополнить, то не очищаем. Для текущей логики лучше очистить, чтобы не смешивать.
             hits.Clear();
-            didHitFallback = arRaycastManager.Raycast(ray, hits, TrackableType.All);
-            if (didHitFallback) Log($"Fallback Raycast with TrackableType.All found {hits.Count} hits.", ARManagerDebugFlags.Raycasting);
-            else Log($"Fallback Raycast with TrackableType.All also found no hits.", ARManagerDebugFlags.Raycasting);
+            didHitFallback = arRaycastManager.Raycast(ray, hits, TrackableType.AllTypes);
+            if (didHitFallback) Log($"Fallback Raycast with TrackableType.AllTypes found {hits.Count} hits.", ARManagerDebugFlags.Raycasting);
+            else Log($"Fallback Raycast with TrackableType.AllTypes also found no hits.", ARManagerDebugFlags.Raycasting);
         }
         else
         {
