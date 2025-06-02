@@ -3072,4 +3072,9 @@ public class ARManagerInitializer2 : MonoBehaviour
 
             Debug.Log($"[DebugFind] Найдено объектов среды: {found}");
       }
+
+      /// <summary>
+      /// Публичный доступ к сгенерированным плоскостям для PlaneOrientationDebugger
+      /// </summary>
+      public List<GameObject> GeneratedPlanes => generatedPlanes;
 }

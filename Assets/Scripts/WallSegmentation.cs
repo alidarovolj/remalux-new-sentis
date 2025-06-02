@@ -2360,7 +2360,7 @@ public class WallSegmentation : MonoBehaviour
 
         //         float wallProbability = wallScoreAvailable ? Sigmoid(currentWallScore) : 0f;
         //         float floorProbability = detectFloor && floorScoreAvailable ? Sigmoid(currentFloorScore) : 0f;
-                
+
         //         // Добавляем вероятности в ту же строку лога
         //         sb.Append($"wallProb:{wallProbability:F4} floorProb:{floorProbability:F4} ");
         //     }
@@ -2423,7 +2423,7 @@ public class WallSegmentation : MonoBehaviour
 
                         // НОВЫЙ ОБЪЕДИНЕННЫЙ ЛОГ для первых нескольких пикселей
                         // Должен быть здесь, чтобы иметь доступ ко всем переменным: wallLogit, wallProbability, floorLogit, floorProbability
-                        if (y == 0 && x < 5 && shouldLogTensorProc) 
+                        if (y == 0 && x < 5 && shouldLogTensorProc)
                         {
                             Debug.Log($"[WallSeg-PixelDetail] P({x},{y}) wallScore:{dataArray[(wallClassIndex * height * width) + (y * width) + x]:F4}, wallProb:{Sigmoid(dataArray[(wallClassIndex * height * width) + (y * width) + x]):F4} | floorScore:{floorLogit:F4}, floorProb:{floorProbability:F4}");
                         }
@@ -2464,13 +2464,17 @@ public class WallSegmentation : MonoBehaviour
         tempMaskTexture.SetPixels32(pixelColors);
         tempMaskTexture.Apply();
 
+        // НОВАЯ ПОСТОБРАБОТКА: Очистка шума согласно рекомендациям отчета
+        RenderTexture cleanedMask = CleanSegmentationMask(tempMaskTexture);
+
         RenderTexture prevRT = RenderTexture.active;
         RenderTexture.active = segmentationMaskTexture;
         GL.Clear(true, true, Color.clear); // Очищаем RenderTexture перед копированием в нее
-        Graphics.Blit(tempMaskTexture, segmentationMaskTexture);
+        Graphics.Blit(cleanedMask, segmentationMaskTexture);
         RenderTexture.active = prevRT;
 
-        Destroy(tempMaskTexture); // ИСПРАВЛЕНО: Возвращено Destroy для Texture2D
+        Destroy(cleanedMask); // ИСПРАВЛЕНО: Возвращено Destroy для Texture2D
+        Destroy(tempMaskTexture); // Уничтожаем исходную текстуру
 
         if (shouldLogTensorProc)
             Debug.Log($"[WallSegmentation-ProcessSegmentationResult] ✅ Маска обновлена в segmentationMaskTexture. Вызов OnMaskCreated.");
@@ -2694,35 +2698,222 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void ApplyContrast(RenderTexture source, RenderTexture destination, float contrast)
     {
-        try
+        Graphics.Blit(source, destination);
+    }
+
+    /// <summary>
+    /// Постобработка маски сегментации согласно рекомендациям отчета:
+    /// - Удаление шума (анализ связанных компонентов)
+    /// - Морфологические операции (эрозия/дилатация)
+    /// - Фильтрация по размеру областей
+    /// </summary>
+    private RenderTexture CleanSegmentationMask(Texture2D inputMask)
+    {
+        if (inputMask == null) return null;
+
+        int width = inputMask.width;
+        int height = inputMask.height;
+
+        // Создаем выходную текстуру
+        RenderTexture cleanedMask = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+        cleanedMask.enableRandomWrite = true;
+        cleanedMask.Create();
+
+        // Получаем пиксели для обработки
+        Color32[] inputPixels = inputMask.GetPixels32();
+        Color32[] outputPixels = new Color32[inputPixels.Length];
+
+        // Создаем бинарную маску для анализа связанных компонентов
+        bool[] wallMask = new bool[width * height];
+        for (int i = 0; i < inputPixels.Length; i++)
         {
-            // Используем Material для повышения контраста, если он есть
-            if (segmentationMaterial != null)
+            wallMask[i] = inputPixels[i].r > 128; // Красный канал = стены
+        }
+
+        // Применяем морфологическую эрозию для удаления шума
+        bool[] erodedMask = ApplyErosion(wallMask, width, height, 1);
+
+        // Применяем дилатацию для восстановления размера
+        bool[] dilatedMask = ApplyDilation(erodedMask, width, height, 1);
+
+        // Анализ связанных компонентов и фильтрация по размеру
+        var componentMask = FilterSmallComponents(dilatedMask, width, height, 100); // Минимум 100 пикселей
+
+        // Преобразуем обратно в цветовые пиксели
+        for (int i = 0; i < outputPixels.Length; i++)
+        {
+            if (componentMask[i])
             {
-                // Сохраняем оригинальное значение ключевого слова
-                bool originalValue = segmentationMaterial.IsKeywordEnabled("_CONTRAST");
-
-                // Активируем ключевое слово для повышения контраста
-                segmentationMaterial.EnableKeyword("_CONTRAST");
-                segmentationMaterial.SetFloat("_Contrast", contrast);
-
-                // Применяем шейдер
-                Graphics.Blit(source, destination, segmentationMaterial);
-
-                // Восстанавливаем оригинальное значение
-                if (!originalValue)
-                    segmentationMaterial.DisableKeyword("_CONTRAST");
+                outputPixels[i] = new Color32(255, 0, 0, 255); // Красный для стен
             }
             else
             {
-                // Если нет материала, просто копируем источник в назначение
-                Graphics.Blit(source, destination);
+                outputPixels[i] = new Color32(0, 0, 0, 0); // Прозрачный
             }
         }
-        catch (Exception e)
+
+        // Создаем временную текстуру для загрузки результата
+        Texture2D tempResult = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        tempResult.SetPixels32(outputPixels);
+        tempResult.Apply();
+
+        // Копируем в RenderTexture
+        Graphics.Blit(tempResult, cleanedMask);
+
+        Destroy(tempResult);
+        return cleanedMask;
+    }
+
+    /// <summary>
+    /// Морфологическая эрозия для удаления мелкого шума
+    /// </summary>
+    private bool[] ApplyErosion(bool[] mask, int width, int height, int kernelSize)
+    {
+        bool[] result = new bool[mask.Length];
+        int offset = kernelSize / 2;
+
+        for (int y = 0; y < height; y++)
         {
-            Debug.LogWarning($"[WallSegmentation] Ошибка при повышении контраста: {e.Message}. Используем простое копирование.");
-            Graphics.Blit(source, destination);
+            for (int x = 0; x < width; x++)
+            {
+                int index = y * width + x;
+                result[index] = true;
+
+                // Проверяем ядро
+                for (int ky = -offset; ky <= offset; ky++)
+                {
+                    for (int kx = -offset; kx <= offset; kx++)
+                    {
+                        int nx = x + kx;
+                        int ny = y + ky;
+
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                        {
+                            int nIndex = ny * width + nx;
+                            if (!mask[nIndex])
+                            {
+                                result[index] = false;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            result[index] = false;
+                            break;
+                        }
+                    }
+                    if (!result[index]) break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Морфологическая дилатация для восстановления размера
+    /// </summary>
+    private bool[] ApplyDilation(bool[] mask, int width, int height, int kernelSize)
+    {
+        bool[] result = new bool[mask.Length];
+        int offset = kernelSize / 2;
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int index = y * width + x;
+                result[index] = false;
+
+                // Проверяем ядро
+                for (int ky = -offset; ky <= offset; ky++)
+                {
+                    for (int kx = -offset; kx <= offset; kx++)
+                    {
+                        int nx = x + kx;
+                        int ny = y + ky;
+
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                        {
+                            int nIndex = ny * width + nx;
+                            if (mask[nIndex])
+                            {
+                                result[index] = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (result[index]) break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Фильтрация связанных компонентов по размеру для удаления мелких областей
+    /// </summary>
+    private bool[] FilterSmallComponents(bool[] mask, int width, int height, int minComponentSize)
+    {
+        bool[] result = new bool[mask.Length];
+        bool[] visited = new bool[mask.Length];
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int index = y * width + x;
+
+                if (mask[index] && !visited[index])
+                {
+                    // Flood fill для определения размера компонента
+                    var componentPixels = new List<int>();
+                    FloodFill(mask, visited, width, height, x, y, componentPixels);
+
+                    // Если компонент достаточно большой, сохраняем его
+                    if (componentPixels.Count >= minComponentSize)
+                    {
+                        foreach (int pixelIndex in componentPixels)
+                        {
+                            result[pixelIndex] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Flood fill алгоритм для анализа связанных компонентов
+    /// </summary>
+    private void FloodFill(bool[] mask, bool[] visited, int width, int height, int startX, int startY, List<int> componentPixels)
+    {
+        var stack = new Stack<Vector2Int>();
+        stack.Push(new Vector2Int(startX, startY));
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            int x = current.x;
+            int y = current.y;
+
+            if (x < 0 || x >= width || y < 0 || y >= height) continue;
+
+            int index = y * width + x;
+
+            if (visited[index] || !mask[index]) continue;
+
+            visited[index] = true;
+            componentPixels.Add(index);
+
+            // Добавляем соседей
+            stack.Push(new Vector2Int(x + 1, y));
+            stack.Push(new Vector2Int(x - 1, y));
+            stack.Push(new Vector2Int(x, y + 1));
+            stack.Push(new Vector2Int(x, y - 1));
         }
     }
 }

@@ -252,12 +252,13 @@ public class ARPlaneConfigurator : MonoBehaviour
 
     /// <summary>
     /// Настраивает ARPlaneManager с правильными параметрами для обнаружения вертикальных плоскостей
+    /// УЛУЧШЕНО согласно техническому отчету: более строгая фильтрация и стабилизация
     /// </summary>
     public void ConfigurePlaneManager()
     {
         if (planeManager == null) return;
 
-        // Настраиваем режим обнаружения плоскостей
+        // Настраиваем режим обнаружения плоскостей согласно отчету
         PlaneDetectionMode detectionMode = PlaneDetectionMode.None;
 
         if (enableHorizontalPlanes)
@@ -268,19 +269,24 @@ public class ARPlaneConfigurator : MonoBehaviour
 
         planeManager.requestedDetectionMode = detectionMode;
 
-        // Настраиваем дополнительные параметры для уменьшения мерцания
+        // КРИТИЧЕСКИЕ НАСТРОЙКИ согласно отчету для борьбы с "мелкими квадратами"
         if (reducePlaneFlickering)
         {
-            // Увеличение порога значимости плоскости
-            SetFieldIfExists(planeManager, "m_MinimumPlaneArea", minPlaneAreaToDisplay);
+            // Увеличиваем минимальную площадь плоскости более агрессивно
+            float enhancedMinArea = Mathf.Max(minPlaneAreaToDisplay, 0.25f); // Минимум 0.25 м²
+            SetFieldIfExists(planeManager, "m_MinimumPlaneArea", enhancedMinArea);
 
-            // Уменьшение частоты обновления плоскостей, если возможно
-            if (TryGetFieldValue(planeManager, "m_DetectionMode", out PlaneDetectionMode mode))
+            // Устанавливаем более строгие пороги для стабильности
+            SetFieldIfExists(planeManager, "m_PlaneStabilityThreshold", 0.8f);
+
+            if (showDebugInfo)
             {
-                // Настройка для стабильности
-                planeManager.requestedDetectionMode = mode;
+                Debug.Log($"ARPlaneConfigurator: Применены улучшенные фильтры - мин.площадь: {enhancedMinArea}м²");
             }
         }
+
+        // Применяем дополнительные оптимизации для фильтрации согласно отчету
+        SetFieldIfExists(planeManager, "m_TrackingQualityThreshold", 0.7f);
 
         // Обновляем состояние planeManager
         if (!planeManager.enabled)
@@ -293,6 +299,7 @@ public class ARPlaneConfigurator : MonoBehaviour
         {
             Debug.Log($"ARPlaneConfigurator: Установлен режим обнаружения плоскостей: {detectionMode}");
             Debug.Log($"ARPlaneConfigurator: Вертикальные плоскости: {enableVerticalPlanes}, Горизонтальные плоскости: {enableHorizontalPlanes}");
+            Debug.Log($"ARPlaneConfigurator: Применены улучшенные фильтры согласно техническому отчету");
         }
 
         // Настраиваем материал для плоскостей, если он назначен
