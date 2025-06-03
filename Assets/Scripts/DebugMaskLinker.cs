@@ -64,15 +64,15 @@ public class DebugMaskLinker : MonoBehaviour
 
         if (mask.IsCreated())
         {
-            Debug.Log($"[DebugMaskLinker] Обновление текстуры RawImage: Маска ({mask.width}x{mask.height}, формат: {mask.format}, isReadable: {mask.isReadable}), RawImage InstanceID: {rawImage.GetInstanceID()}", gameObject);
+            // Debug.Log($"[DebugMaskLinker] Обновление текстуры RawImage: Маска ({mask.width}x{mask.height}, формат: {mask.format}, isReadable: {mask.isReadable}), RawImage InstanceID: {rawImage.GetInstanceID()}", gameObject);
             rawImage.texture = mask;
             rawImage.color = Color.white; // Устанавливаем белый цвет, чтобы убрать влияние альфа-канала самого RawImage
-            Debug.Log($"[DebugMaskLinker] Текстура RawImage назначена. Текущая текстура RawImage: {(rawImage.texture == null ? "null" : rawImage.texture.name + " (" + rawImage.texture.GetInstanceID() + ")")}", gameObject);
+            // Debug.Log($"[DebugMaskLinker] Текстура RawImage назначена. Текущая текстура RawImage: {(rawImage.texture == null ? "null" : rawImage.texture.name + " (" + rawImage.texture.GetInstanceID() + ")")}", gameObject);
 
             updateCounter++;
 
             // Отладочный лог перед условием сохранения
-            Debug.Log($"[DebugMaskLinker] Проверка условия сохранения: hasSavedOnce = {hasSavedOnce}, updateCounter = {updateCounter}, SAVE_AFTER_N_UPDATES = {SAVE_AFTER_N_UPDATES}", gameObject);
+            // Debug.Log($"[DebugMaskLinker] Проверка условия сохранения: hasSavedOnce = {hasSavedOnce}, updateCounter = {updateCounter}, SAVE_AFTER_N_UPDATES = {SAVE_AFTER_N_UPDATES}", gameObject);
 
             // Автоматическое сохранение маски для отладки
             if (!hasSavedOnce && updateCounter >= SAVE_AFTER_N_UPDATES)
@@ -100,7 +100,7 @@ public class DebugMaskLinker : MonoBehaviour
 
         byte[] bytes = tex2D.EncodeToPNG();
         string filePath = System.IO.Path.Combine(Application.persistentDataPath, fileName); // Используем Path.Combine для корректного пути
-        
+
         Debug.Log($"[DebugMaskLinker] Попытка сохранить текстуру в: {filePath}", gameObject);
         try
         {

@@ -352,9 +352,18 @@ public class ARPlaneConfigurator : MonoBehaviour
     {
         yield return new WaitForSeconds(0.5f);
 
-        if (planeManager.planePrefab == null)
+        if (planeManager != null &&
+            planeManager.enabled &&
+            planeManager.requestedDetectionMode != PlaneDetectionMode.None &&
+            planeManager.planePrefab == null)
         {
-            Debug.LogWarning("ARPlaneConfigurator: planePrefab не назначен в ARPlaneManager!");
+            Debug.LogWarning("ARPlaneConfigurator: planePrefab не назначен в ARPlaneManager! ARFoundation plane visualization might be affected if planeManager is intended to show planes.");
+            // We don't necessarily need to yield break here if other checks are useful
+        }
+
+        // If planePrefab is null, the rest of the checks might fail or be irrelevant.
+        if (planeManager == null || planeManager.planePrefab == null)
+        {
             yield break;
         }
 

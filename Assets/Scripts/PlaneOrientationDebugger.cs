@@ -9,9 +9,10 @@ using System.Collections.Generic;
 public class PlaneOrientationDebugger : MonoBehaviour
 {
       [Header("Настройки отладки")]
-      [SerializeField] private bool enableNormalVisualization = true;
-      [SerializeField] private bool enableBoundaryVisualization = true;
-      [SerializeField] private bool enableMeshOrientationCheck = true;
+      [SerializeField] private bool enableLogging = true;
+      [SerializeField] private bool enableNormalVisualization = false;
+      [SerializeField] private bool enableBoundaryVisualization = false;
+      [SerializeField] private bool enableMeshOrientationCheck = false;
       [SerializeField] private float normalLength = 0.3f;
       [SerializeField] private Color wallNormalColor = Color.red;
       [SerializeField] private Color floorNormalColor = Color.green;
@@ -106,7 +107,7 @@ public class PlaneOrientationDebugger : MonoBehaviour
                   CheckMeshOrientation(planeObject, arPlane);
             }
 
-            Debug.Log($"[PlaneOrientationDebugger] Обработана плоскость: {planeObject.name}, " +
+            if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Обработана плоскость: {planeObject.name}, " +
                      $"Вертикальная: {isVertical}, Площадь: {planeArea:F2}м², " +
                      $"Нормаль: {arPlane.normal:F2}, Центр: {arPlane.center:F2}");
       }
@@ -134,7 +135,7 @@ public class PlaneOrientationDebugger : MonoBehaviour
                   CheckGeneratedMeshOrientation(planeObject);
             }
 
-            Debug.Log($"[PlaneOrientationDebugger] Обработана сгенерированная плоскость: {planeObject.name}, " +
+            if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Обработана сгенерированная плоскость: {planeObject.name}, " +
                      $"Вертикальная: {isVertical}, Нормаль: {planeNormal:F2}, Центр: {planeCenter:F2}");
       }
 
@@ -213,13 +214,13 @@ public class PlaneOrientationDebugger : MonoBehaviour
                   bool isProperlyOriented = alignment > 0.7f;
 
                   string orientationStatus = isProperlyOriented ? "✅ ПРАВИЛЬНО" : "❌ НЕПРАВИЛЬНО";
-                  Debug.Log($"[PlaneOrientationDebugger] Ориентация меша {planeObject.name}: {orientationStatus} " +
+                  if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Ориентация меша {planeObject.name}: {orientationStatus} " +
                            $"(выравнивание: {alignment:F2}, ARPlane.normal: {arPlane.normal:F2}, " +
                            $"средняя нормаль меша: {averageMeshNormal:F2})");
 
                   if (!isProperlyOriented)
                   {
-                        Debug.LogWarning($"[PlaneOrientationDebugger] ⚠️ ПРОБЛЕМА ОРИЕНТАЦИИ: Плоскость {planeObject.name} " +
+                        if (enableLogging) Debug.LogWarning($"[PlaneOrientationDebugger] ⚠️ ПРОБЛЕМА ОРИЕНТАЦИИ: Плоскость {planeObject.name} " +
                                        $"может быть неправильно ориентирована для рендеринга!");
                   }
             }
@@ -237,12 +238,12 @@ public class PlaneOrientationDebugger : MonoBehaviour
             bool facingCamera = cameraAlignment > 0;
 
             string orientationStatus = facingCamera ? "✅ СМОТРИТ НА КАМЕРУ" : "❌ СМОТРИТ ОТ КАМЕРЫ";
-            Debug.Log($"[PlaneOrientationDebugger] Сгенерированная плоскость {planeObject.name}: {orientationStatus} " +
+            if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Сгенерированная плоскость {planeObject.name}: {orientationStatus} " +
                      $"(выравнивание с камерой: {cameraAlignment:F2})");
 
             if (!facingCamera)
             {
-                  Debug.LogWarning($"[PlaneOrientationDebugger] ⚠️ ВОЗМОЖНАЯ ПРОБЛЕМА: Сгенерированная плоскость {planeObject.name} " +
+                  if (enableLogging) Debug.LogWarning($"[PlaneOrientationDebugger] ⚠️ ВОЗМОЖНАЯ ПРОБЛЕМА: Сгенерированная плоскость {planeObject.name} " +
                                  $"может быть не видна из-за неправильной ориентации!");
             }
       }

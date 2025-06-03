@@ -48,9 +48,9 @@ public class WallSegmentation : MonoBehaviour
     [Header("Настройки сегментации")]
     [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
     [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
-    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.5f; // Изменено минимальное значение с 0.01f на 0.0001f
-    [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.5f;
-    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = false;
+    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.3f; // Увеличено с 0.07 до 0.3 для фильтрации шума
+    [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.4f; // Увеличено для лучшей фильтрации
+    [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = true;
 
     [Tooltip("Разрешение входного изображения")]
     public Vector2Int inputResolution = new Vector2Int(512, 512); // ИЗМЕНЕНО для segformer-b4-wall
@@ -85,9 +85,8 @@ public class WallSegmentation : MonoBehaviour
     [Tooltip("Материал, используемый для преобразования выхода модели в маску сегментации.")]
     private Material segmentationMaterial; // Добавлено поле
 
-    [SerializeField]
-    [Tooltip("Путь для сохранения отладочных изображений маски (относительно Assets). Оставьте пустым, чтобы не сохранять.")]
-    private string debugMaskSavePath = "DebugMasks"; // Добавлено поле с значением по умолчанию
+    [Tooltip("Сохранять отладочные маски в указанный путь")] // Добавлено
+    public string debugMaskSavePath = "DebugSegmentationMasks"; // Добавлено
 
     // Свойства для получения AR компонентов
     public ARSessionManager ARSessionManager
@@ -158,7 +157,7 @@ public class WallSegmentation : MonoBehaviour
         DetailedTensor = 1 << 7, // Более детальные логи обработки тензора
     }
     [Tooltip("Флаги для детальной отладки различных частей системы")]
-    public DebugFlags debugFlags = DebugFlags.None;
+    [SerializeField] public DebugFlags debugFlags = DebugFlags.None; // Устанавливаем в None для отключения логов
 
     [Tooltip("Сохранять отладочные маски в указанный путь")] // Добавлено
     public bool saveDebugMask = false; // Добавлено
@@ -216,19 +215,30 @@ public class WallSegmentation : MonoBehaviour
     private const int REQUIRED_STABLE_FRAMES = 2; // Уменьшено с 3 до 2 для более быстрой реакции
 
     // Параметры сглаживания маски для улучшения визуального качества
-    [Header("Настройки качества маски")]
-    [Tooltip("Применять сглаживание к маске сегментации")]
-    public bool applyMaskSmoothing = true;
-    [Tooltip("Значение размытия для сглаживания маски (в пикселях)")]
-    [Range(1, 10)]
-    public int maskBlurSize = 3;
-    [Tooltip("Повышать резкость краев на маске")]
-    public bool enhanceEdges = true;
-    [Tooltip("Повышать контраст маски")]
-    public bool enhanceContrast = true;
-    [Tooltip("Множитель контраста")]
+    [Header("Mask Enhancement Settings")]
+    [Tooltip("Apply Gaussian blur to smooth the mask.")]
+    [SerializeField] private bool applyMaskSmoothing = true; // ОСТАВЛЯЕМ ЭТОТ
+    [Tooltip("Blur size for Gaussian blur. Default: 1.5")]
+    [SerializeField] private float maskBlurSize = 1.5f; // ОСТАВЛЯЕМ ЭТОТ (float)
+    [Tooltip("Apply sharpening to the mask after blurring. Can help define edges but may increase noise.")]
+    [SerializeField] private bool applySharpening = false; // УСТАНОВЛЕНО В FALSE
+    [Tooltip("Sharpening strength. Default: 0.8")]
+    [SerializeField] private float sharpenStrength = 0.8f;
+    [Tooltip("Apply contrast adjustment to the mask. Can help make walls more distinct.")]
+    [SerializeField] private bool applyContrastAdjustment = true; // ОСТАВЛЯЕМ ЭТОТ
+    [Tooltip("Contrast threshold for adjustment. Default: 0.5")]
+    [Range(0.1f, 2.0f)]
+    public float contrastThreshold = 0.5f;
+    [Tooltip("Contrast multiplier for adjustment. Default: 1.5")]
     [Range(1f, 3f)]
-    public float contrastMultiplier = 1.5f;
+    public float contrastMultiplier = 1.5f; // ОСТАВЛЯЕМ ЭТОТ
+
+    [Tooltip("Повышать резкость краев на маске (старое поле, может быть использовано логикой)")] // ВОЗВРАЩАЕМ
+    public bool enhanceEdges = true;
+    [Tooltip("Повышать контраст маски (старое поле, может быть использовано логикой)")] // ВОЗВРАЩАЕМ
+    public bool enhanceContrast = true;
+
+    // Удалены дублирующиеся поля, оставлены оригинальные ниже
 
     // Добавляем оптимизированный пул текстур для уменьшения аллокаций памяти
     private class TexturePool
@@ -602,6 +612,7 @@ public class WallSegmentation : MonoBehaviour
     /// </summary>
     private void Start()
     {
+        this.debugFlags = DebugFlags.None; // FORCEFULLY DISABLE DEBUG LOGS
         Debug.Log("[WallSegmentation] ➡️ Start() вызван. Начало инициализации...");
 
         // Устанавливаем значения по умолчанию
@@ -2535,32 +2546,32 @@ public class WallSegmentation : MonoBehaviour
             // Применяем постобработку с использованием шейдера, если он доступен
             if (segmentationMaterial != null)
             {
-                // Применяем размытие по Гауссу (Pass 1)
+                // Применяем размытие по Гауссу (Pass 0, ранее 1)
                 if (applyMaskSmoothing)
                 {
                     segmentationMaterial.SetFloat("_BlurSize", maskBlurSize);
-                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 1); // Pass 1: Blur
+                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 0); // Pass 0: Blur
                     // Меняем местами текстуры (результат в tempRT1)
                     RenderTexture temp = tempRT1;
                     tempRT1 = tempRT2;
                     tempRT2 = temp;
                 }
 
-                // Повышаем резкость (Pass 2)
+                // Повышаем резкость (Pass 1, ранее 2)
                 if (enhanceEdges)
                 {
-                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 2); // Pass 2: Sharpen
+                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 1); // Pass 1: Sharpen
                     // Меняем местами текстуры (результат в tempRT1)
                     RenderTexture temp = tempRT1;
                     tempRT1 = tempRT2;
                     tempRT2 = temp;
                 }
 
-                // Повышаем контраст (Pass 3)
+                // Повышаем контраст (Pass 2, ранее 3)
                 if (enhanceContrast)
                 {
                     segmentationMaterial.SetFloat("_Contrast", contrastMultiplier);
-                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 3); // Pass 3: Contrast
+                    Graphics.Blit(tempRT1, tempRT2, segmentationMaterial, 2); // Pass 2: Contrast
                     // Меняем местами текстуры (результат в tempRT1)
                     RenderTexture temp = tempRT1;
                     tempRT1 = tempRT2;
@@ -2573,7 +2584,7 @@ public class WallSegmentation : MonoBehaviour
                 // Применяем сглаживание, если оно включено
                 if (applyMaskSmoothing)
                 {
-                    ApplyGaussianBlur(tempRT1, tempRT2, maskBlurSize);
+                    ApplyGaussianBlur(tempRT1, tempRT2, (int)maskBlurSize); // ИСПРАВЛЕНО: приведение maskBlurSize к int
                     // Меняем местами текстуры (результат в tempRT1)
                     RenderTexture temp = tempRT1;
                     tempRT1 = tempRT2;
@@ -2731,13 +2742,19 @@ public class WallSegmentation : MonoBehaviour
         }
 
         // Применяем морфологическую эрозию для удаления шума
-        bool[] erodedMask = ApplyErosion(wallMask, width, height, 1);
+        bool[] erodedMask = ApplyErosion(wallMask, width, height, morphologyKernelSize);
 
         // Применяем дилатацию для восстановления размера
-        bool[] dilatedMask = ApplyDilation(erodedMask, width, height, 1);
+        bool[] dilatedMask = ApplyDilation(erodedMask, width, height, morphologyKernelSize);
 
         // Анализ связанных компонентов и фильтрация по размеру
-        var componentMask = FilterSmallComponents(dilatedMask, width, height, 100); // Минимум 100 пикселей
+        var componentMask = FilterSmallComponents(dilatedMask, width, height, minComponentSize);
+
+        // Применяем фильтрацию потолочных регионов
+        if (filterCeilingRegions)
+        {
+            componentMask = FilterCeilingRegions(componentMask, width, height);
+        }
 
         // Преобразуем обратно в цветовые пиксели
         for (int i = 0; i < outputPixels.Length; i++)
@@ -2916,4 +2933,87 @@ public class WallSegmentation : MonoBehaviour
             stack.Push(new Vector2Int(x, y - 1));
         }
     }
+
+    [Header("Улучшенная фильтрация сегментации")]
+    [Tooltip("Минимальный размер компонента в пикселях для удержания области")]
+    [SerializeField] private int minComponentSize = 50; // Новый параметр
+
+    [Tooltip("Размер ядра морфологических операций для очистки")]
+    [SerializeField] private int morphologyKernelSize = 2; // Новый параметр
+
+    [Tooltip("Применять анализ граничных углов для исключения потолков")]
+    [SerializeField] private bool filterCeilingRegions = true; // Новый параметр
+
+    [Tooltip("Максимальный процент региона в верхней части экрана (для фильтрации потолков)")]
+    [SerializeField, Range(0f, 0.5f)] private float maxTopRegionRatio = 0.25f; // Новый параметр
+
+    /// <summary>
+    /// Фильтрация регионов потолка на основе их положения в кадре
+    /// </summary>
+    private bool[] FilterCeilingRegions(bool[] mask, int width, int height)
+    {
+        bool[] result = new bool[mask.Length];
+        bool[] visited = new bool[mask.Length];
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int index = y * width + x;
+
+                if (mask[index] && !visited[index])
+                {
+                    // Flood fill для определения компонента
+                    var componentPixels = new List<int>();
+                    FloodFill(mask, visited, width, height, x, y, componentPixels);
+
+                    // Анализируем позицию компонента
+                    float avgY = 0f;
+                    foreach (int pixelIndex in componentPixels)
+                    {
+                        avgY += (pixelIndex / width);
+                    }
+                    avgY /= componentPixels.Count;
+
+                    // Фильтруем, если компонент слишком высоко (возможно потолок)
+                    float normalizedY = avgY / height;
+                    if (normalizedY > maxTopRegionRatio) // Верхняя часть экрана
+                    {
+                        // Проверяем соотношение ширины к высоте компонента
+                        int minX = width, maxX = 0, minY = height, maxY = 0;
+                        foreach (int pixelIndex in componentPixels)
+                        {
+                            int px = pixelIndex % width;
+                            int py = pixelIndex / width;
+                            minX = Mathf.Min(minX, px);
+                            maxX = Mathf.Max(maxX, px);
+                            minY = Mathf.Min(minY, py);
+                            maxY = Mathf.Max(maxY, py);
+                        }
+
+                        float regionWidth = maxX - minX + 1;
+                        float regionHeight = maxY - minY + 1;
+                        float aspectRatio = regionWidth / regionHeight;
+
+                        // Если слишком горизонтальный и в верхней части - вероятно потолок
+                        if (aspectRatio > 3.0f && normalizedY < 0.4f)
+                        {
+                            continue; // Пропускаем этот компонент
+                        }
+                    }
+
+                    // Если компонент прошел фильтрацию, сохраняем его
+                    foreach (int pixelIndex in componentPixels)
+                    {
+                        result[pixelIndex] = true;
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    [Tooltip("Whether to enable logging for segmentation processing times.")]
+    [SerializeField] private bool logProcessingTime = false;
 }

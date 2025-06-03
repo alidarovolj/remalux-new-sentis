@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 7658902086638960283}
   - component: {fileID: 323567551784522224}
   - component: {fileID: 9047686717867529774}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: Plane
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -119,13 +119,14 @@ GameObject:
   - component: {fileID: 1594118810536075580}
   - component: {fileID: 1353384515693615784}
   - component: {fileID: 5664617325222014234}
-  m_Layer: 0
+  - component: {fileID: 5622644158091338124}
+  m_Layer: 8
   m_Name: Floor
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &3929527087209849353
 Transform:
   m_ObjectHideFlags: 0
@@ -225,6 +226,28 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_ClassificationType: floor
+--- !u!64 &5622644158091338124
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3475735057603037936}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
 --- !u!1 &5056272964426416779
 GameObject:
   m_ObjectHideFlags: 0
@@ -238,13 +261,14 @@ GameObject:
   - component: {fileID: 6530858046662263605}
   - component: {fileID: 3215108384216239577}
   - component: {fileID: 3067344686904770414}
-  m_Layer: 0
+  - component: {fileID: 5409485155963084884}
+  m_Layer: 8
   m_Name: Wall
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &5911072156897761180
 Transform:
   m_ObjectHideFlags: 0
@@ -344,6 +368,28 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_ClassificationType: wall
+--- !u!64 &5409485155963084884
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5056272964426416779}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
 --- !u!1 &6586649302037701020
 GameObject:
   m_ObjectHideFlags: 0
@@ -354,13 +400,13 @@ GameObject:
   m_Component:
   - component: {fileID: 2770449827095792652}
   - component: {fileID: 7604074379993464214}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: GeneratedSimulatedPlane(Clone)
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &2770449827095792652
 Transform:
   m_ObjectHideFlags: 0
@@ -404,13 +450,13 @@ GameObject:
   m_Component:
   - component: {fileID: 4270802234803236213}
   - component: {fileID: 7711892851430715690}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: GeneratedSimulatedPlane(Clone)
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &4270802234803236213
 Transform:
   m_ObjectHideFlags: 0
@@ -454,13 +500,13 @@ GameObject:
   m_Component:
   - component: {fileID: 5283108358406351049}
   - component: {fileID: 5314822872707058091}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: SimEnvironmentProbe
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &5283108358406351049
 Transform:
   m_ObjectHideFlags: 0
@@ -499,13 +545,13 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 4744334345910528120}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: Generated Planes
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &4744334345910528120
 Transform:
   m_ObjectHideFlags: 0
@@ -533,7 +579,7 @@ GameObject:
   m_Component:
   - component: {fileID: 4365528357719543085}
   - component: {fileID: 7618165371811446966}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: Simulation Environment
   m_TagString: Untagged
   m_Icon: {fileID: 0}
