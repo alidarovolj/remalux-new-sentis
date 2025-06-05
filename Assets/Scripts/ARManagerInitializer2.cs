@@ -30,16 +30,16 @@ public class ARManagerInitializer2 : MonoBehaviour
 
       [Header("Настройки сегментации")]
       [Tooltip("Использовать обнаруженные плоскости вместо генерации из маски")]
-      public bool useDetectedPlanes = false;
+      public bool useDetectedPlanes = true; // ИЗМЕНЕНО: из false в true, чтобы ARFoundation плоскости могли быть использованы для коллайдеров
 
       [Tooltip("Минимальный размер плоскости для создания (в метрах)")]
       [SerializeField] private float minPlaneSizeInMeters = 0.1f;
 
       [Tooltip("Минимальный размер области в пикселях (ширина И высота) для её учета")]
-      [SerializeField] private int minPixelsDimensionForArea = 2; // было minAreaSize
+      [SerializeField] private int minPixelsDimensionForArea = 1; // было minAreaSize
 
       [Tooltip("Минимальная площадь области в пикселях для её учета")]
-      [SerializeField] private int minAreaSizeInPixels = 10; // Новое поле, раньше было minAreaSize = 2*2=4 или 50
+      [SerializeField] private int minAreaSizeInPixels = 150; // БЫЛО 1500. Новое поле, раньше было minAreaSize = 2*2=4 или 50
 
       [Tooltip("Разрешение, до которого будет уменьшена маска сегментации перед анализом на CPU (для повышения производительности). Меньшее значение = быстрее, но менее точно.")]
       [SerializeField] private int maskProcessingResolution = 128;
@@ -127,6 +127,11 @@ public class ARManagerInitializer2 : MonoBehaviour
       [SerializeField] private float minPlaneSize = 0.3f; // Минимальный размер плоскости в метрах. Note: minPlaneSizeInMeters (0.1f) is used in logic.
       [SerializeField] private float maxAspectRatio = 15.0f; // Максимальное соотношение сторон (длина/ширина) // INCREASED from 10.0f
 
+      [Tooltip("Дополнительный коэффициент масштабирования для уменьшения размера создаваемых плоскостей. 1.0 = без изменений, 0.5 = в два раза меньше.")]
+      [SerializeField] private float planeSizeScalingFactor = 0.5f; // Новый параметр для масштабирования
+
+      private Camera mainCamera;
+
       // [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)] // ЗАКОММЕНТИРОВАТЬ или УДАЛИТЬ
       // private static void Initialize()
       // {
@@ -183,6 +188,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
       private void Start()
       {
+            DeleteAllPlanes(); // <-- ДОБАВЛЕНО ДЛЯ ОЧИСТКИ ПРИ СТАРТЕ
             // Debug.Log("[ARManagerInitializer2] Start() called.");
 
             FindARComponents();
@@ -265,10 +271,23 @@ public class ARManagerInitializer2 : MonoBehaviour
       {
             frameCounter++;
 
-            if (maskUpdated)
+            // Обрабатываем маску только если сессия AR полностью инициализирована
+            if (sessionManager != null && sessionManager.IsSessionInitialized())
             {
-                  ProcessSegmentationMask();
-                  maskUpdated = false;
+                  if (maskUpdated)
+                  {
+                        // Debug.Log("[ARManagerInitializer2] AR Session is initialized and mask is updated. Processing mask...");
+                        ProcessSegmentationMask();
+                        maskUpdated = false;
+                  }
+            }
+            else if (maskUpdated)
+            {
+                  // Опционально: Логирование, что маска получена, но сессия еще не готова
+                  // if (frameCounter % 60 == 0) // Логировать не каждый кадр, чтобы не спамить
+                  // {
+                  //       Debug.Log("[ARManagerInitializer2] Mask updated, but AR session not yet initialized or sessionManager is null. Holding off processing.");
+                  // }
             }
 
             // Обрабатываем жесты пользователя для быстрого сохранения
@@ -1290,8 +1309,8 @@ public class ARManagerInitializer2 : MonoBehaviour
             // 1. Отключаем визуализаторы плоскостей
             if (planeManager != null)
             {
-                  // Отключаем отображение префаба плоскостей
-                  planeManager.planePrefab = null;
+                  // НЕ ОБНУЛЯЕМ planePrefab, так как он нужен для создания коллайдеров даже при отключенной визуализации
+                  // planeManager.planePrefab = null; // ЗАКОММЕНТИРОВАНО: Сохраняем префаб для коллайдеров
                   planeManager.requestedDetectionMode = PlaneDetectionMode.None; // ADDED: Prevent ARPlaneConfigurator warning
 
                   // Проходимся по всем трекабл-объектам и отключаем их визуализацию
@@ -1607,12 +1626,13 @@ public class ARManagerInitializer2 : MonoBehaviour
             // ИСПОЛЬЗУЕМ hitLayerMask, НАСТРОЕННУЮ В ИНСПЕКТОРЕ, НО ИСКЛЮЧАЕМ СОБСТВЕННЫЕ ПЛОСКОСТИ
             LayerMask layerMask = this.hitLayerMask;
             // Исключаем слой ARPlanes (где находятся наши созданные плоскости), чтобы избежать попаданий в собственные плоскости
-            int arPlanesLayer = LayerMask.NameToLayer("ARPlanes");
-            if (arPlanesLayer != -1)
-            {
-                  layerMask &= ~(1 << arPlanesLayer); // Убираем ARPlanes из маски
-            }
-            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask из инспектора (исключен ARPlanes): {LayerMaskToString(layerMask)} (Value: {layerMask.value})");
+            // int arPlanesLayer = LayerMask.NameToLayer("ARPlanes"); // ЗАКОММЕНТИРОВАНО: Позволяем попадания в ARPlanes
+            // if (arPlanesLayer != -1) // ЗАКОММЕНТИРОВАНО: Позволяем попадания в ARPlanes
+            // { // ЗАКОММЕНТИРОВАНО: Позволяем попадания в ARPlanes
+            //       layerMask &= ~(1 << arPlanesLayer); // Убираем ARPlanes из маски // ЗАКОММЕНТИРОВАНО: Позволяем попадания в ARPlanes
+            // } // ЗАКОММЕНТИРОВАНО: Позволяем попадания в ARPlanes
+            // if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask из инспектора (исключен ARPlanes): {LayerMaskToString(layerMask)} (Value: {layerMask.value})");
+            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ПЕРЕД РЕЙКАСТАМИ: Используется LayerMask из инспектора (ARPlanes НЕ исключен): {LayerMaskToString(layerMask)} (Value: {layerMask.value})");
 
 
             // Параметры для рейкастинга
@@ -1959,19 +1979,30 @@ public class ARManagerInitializer2 : MonoBehaviour
 
                   // Ориентируем Z плоскости ПО нормали к поверхности (чтобы плоскость "лежала" на поверхности)
                   // forward плоскости будет смотреть ОТ поверхности.
-                  finalPlaneRotation = Quaternion.LookRotation(bestNormal, mainCamera.transform.up);  // ИЗМЕНЕНО: arCamera -> mainCamera
-                                                                                                      // Если bestNormal почти параллельна arCamera.transform.up (например, пол/потолок), LookRotation может дать непредсказуемый результат для "up" вектора.
-                                                                                                      // Можно добавить проверку и использовать другой up вектор, например, cameraRight, если normal.y близок к +/-1.
-                  if (Mathf.Abs(Vector3.Dot(bestNormal, mainCamera.transform.up)) > 0.95f)
-                  { // ИЗМЕНЕНО: arCamera -> mainCamera
-                        finalPlaneRotation = Quaternion.LookRotation(bestNormal, -cameraForward); // Используем -cameraForward как "верх" для горизонтальных плоскостей
-                        if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Нормаль ({bestNormal}) почти параллельна camera.up. Используем -cameraForward как второй аргумент LookRotation.");
+                  // ---- MODIFICATION START ----
+                  // For vertical walls identified by raycast, always try to use world Vector3.up as the up vector for LookRotation
+                  // This should prevent roll based on camera tilt.
+                  Vector3 upForLookRotation = Vector3.up;
+                  // cameraForward is defined earlier in this method from raycasting setup
+
+                  // If the bestNormal (from raycast) is very close to Vector3.up or Vector3.down,
+                  // then Vector3.up is not a good 'up' direction for LookRotation.
+                  if (Mathf.Abs(Vector3.Dot(bestNormal, Vector3.up)) > 0.95f) // Check alignment of bestNormal with WORLD up
+                  {
+                        upForLookRotation = -cameraForward;
+                        if (enableCustomPlaneCreationLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Raycast Normal ({bestNormal}) is highly aligned with World Up. Using -cameraForward for LookRotation's up vector.");
                   }
+                  finalPlaneRotation = Quaternion.LookRotation(bestNormal, upForLookRotation);
+                  // ---- MODIFICATION END ----
 
                   if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🧭 Параметры для плоскости ПОСЛЕ РЕЙКАСТА: Pos={finalPlanePosition:F2}, Rot(Эйлер)={finalPlaneRotation.eulerAngles:F1}");
             }
             else // Если didHit == false (ни один рейкаст не попал или все были отфильтрованы)
             {
+                  Debug.LogWarning("[ARManagerInitializer2-UOCP] ⚠️ Ни один рейкаст не дал валидного попадания. Эвристика ВРЕМЕННО ОТКЛЮЧЕНА. Плоскость не будет создана для этой области.");
+                  return false; // ВРЕМЕННО ОТКЛЮЧЕНО: Не создаем эвристическую плоскость
+
+                  /*
                   Debug.LogWarning("[ARManagerInitializer2-UOCP] ⚠️ Ни один рейкаст не дал валидного попадания. Используется ЭВРИСТИКА.");
                   // РАСШИРЕННЫЙ АЛГОРИТМ для случаев, когда рейкастинг не нашел поверхностей
                   bool foundARPlane = false;
@@ -1989,41 +2020,27 @@ public class ARManagerInitializer2 : MonoBehaviour
                               Vector3 planeCenter = plane.center;
                               Vector3 planeSurfaceNormal = plane.normal;
 
-                              // УЛУЧШЕННАЯ ОЦЕНКА СООТВЕТСТВИЯ ПЛОСКОСТИ ЛУЧУ
-                              // Учитываем ориентацию, расстояние и размер плоскости
-
-                              // Фактор ориентации - насколько плоскость параллельна лучу
-                              // float angleWithRay = Vector3.Angle(planeSurfaceNormal, -rayDirection); // ИЗМЕНЕНО: rayDirection -> initialRayDirection
-                              float angleWithRay = Vector3.Angle(planeSurfaceNormal, -initialRayDirection); // Используем initialRayDirection
+                              float angleWithRay = Vector3.Angle(planeSurfaceNormal, -initialRayDirection); 
                               float orientationFactor = Mathf.Cos(angleWithRay * Mathf.Deg2Rad);
-                              if (orientationFactor < 0.3f) continue; // Игнорируем плоскости с плохой ориентацией
+                              if (orientationFactor < 0.3f) continue; 
 
-                              // Фактор расстояния - насколько плоскость близко к проекции луча
                               Vector3 toCenterVector = planeCenter - cameraPosition;
-                              // float projectionLength = Vector3.Dot(toCenterVector, rayDirection); // ИЗМЕНЕНО: rayDirection -> initialRayDirection
-                              float projectionLength = Vector3.Dot(toCenterVector, initialRayDirection); // Используем initialRayDirection
+                              float projectionLength = Vector3.Dot(toCenterVector, initialRayDirection); 
 
-                              // Игнорируем плоскости позади камеры или слишком далеко
                               if (projectionLength <= 0.5f || projectionLength > 8.0f) continue;
 
-                              // Находим ближайшую точку луча к центру плоскости
-                              // Vector3 projectedPoint = cameraPosition + rayDirection * projectionLength; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
-                              Vector3 projectedPoint = cameraPosition + initialRayDirection * projectionLength; // Используем initialRayDirection
+                              Vector3 projectedPoint = cameraPosition + initialRayDirection * projectionLength; 
                               float perpendicularDistance = Vector3.Distance(projectedPoint, planeCenter);
 
-                              // Фактор перпендикулярного расстояния - насколько точка проекции близка к центру плоскости
-                              // Учитываем размер плоскости - для больших плоскостей допускаем большее расстояние
                               float sizeCompensation = Mathf.Sqrt(plane.size.x * plane.size.y);
                               float maxPerpDistance = 0.5f + sizeCompensation * 0.5f;
 
                               if (perpendicularDistance > maxPerpDistance) continue;
 
-                              // Вычисляем общий скор для этой плоскости
                               float perpDistanceFactor = 1.0f - (perpendicularDistance / maxPerpDistance);
-                              float distanceFactor = 1.0f - Mathf.Clamp01((projectionLength - 1.0f) / 7.0f); // Ближе лучше
-                              float sizeFactor = Mathf.Clamp01(sizeCompensation / 2.0f); // Чем больше плоскость, тем лучше
+                              float distanceFactor = 1.0f - Mathf.Clamp01((projectionLength - 1.0f) / 7.0f); 
+                              float sizeFactor = Mathf.Clamp01(sizeCompensation / 2.0f); 
 
-                              // Комбинируем факторы с разными весами
                               float planeScore = orientationFactor * 0.4f + perpDistanceFactor * 0.4f + distanceFactor * 0.1f + sizeFactor * 0.1f;
 
                               if (planeScore > bestMatchScore)
@@ -2034,14 +2051,14 @@ public class ARManagerInitializer2 : MonoBehaviour
                               }
                         }
 
-                        if (bestMatchPlane != null && bestMatchScore > 0.6f) // Требуем достаточно высокий скор
+                        if (bestMatchPlane != null && bestMatchScore > 0.6f) 
                         {
                               actualDistanceFromCameraForPlane = bestMatchDistance - 0.05f;
                               actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.0f, 5.0f);
                               bool isVertical = Mathf.Abs(Vector3.Dot(bestMatchPlane.normal, Vector3.up)) < 0.3f;
                               if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 Эвристика: Используется AR плоскость '{bestMatchPlane.name}' на расстоянии {actualDistanceFromCameraForPlane:F2}м (скор: {bestMatchScore:F2}, {(isVertical ? "вертикальная" : "горизонтальная")})");
                               foundARPlane = true;
-                              bestNormal = bestMatchPlane.normal; // Используем нормаль найденной AR плоскости
+                              bestNormal = bestMatchPlane.normal; 
                         }
                         else
                         {
@@ -2051,67 +2068,52 @@ public class ARManagerInitializer2 : MonoBehaviour
 
                   if (!foundARPlane)
                   {
-                        // Debug.LogWarning("[ARManagerInitializer2-UOCP] Эвристика: AR-плоскости не найдены или не подошли. Используется адаптивное расстояние.");
-                        // Используем комбинацию статистических данных и контекстной информации
-
-                        // Анализ текущей позиции в пространстве
-                        float viewportY = normalizedCenterY; // ИЗМЕНЕНО: normalizedY -> normalizedCenterY
+                        float viewportY = normalizedCenterY; 
                         float adaptiveBaseDistance;
 
-                        // Для разных частей экрана используем разные базовые расстояния
                         if (viewportY < 0.3f)
                         {
-                              // Нижняя часть экрана - обычно близкие объекты
                               adaptiveBaseDistance = 1.8f;
                         }
                         else if (viewportY > 0.7f)
                         {
-                              // Верхняя часть экрана - обычно дальние объекты
                               adaptiveBaseDistance = 2.5f;
                         }
                         else
                         {
-                              // Середина экрана - средние расстояния
                               adaptiveBaseDistance = 2.2f;
                         }
 
-                        // Адаптируем расстояние на основе размера плоскости и позиции на экране
-                        // float sizeAdjustment = estimatedPlaneWidthInMetersBasedOnArea * 0.3f; // ИЗМЕНЕНО ниже
-                        // Вычисляем estimatedPlaneWidthInMetersBasedOnArea на основе actualDistanceFromCameraForPlane, которое было установлено эвристикой выше
                         float tempWorldHeightAtActualDistance = 2.0f * actualDistanceFromCameraForPlane * Mathf.Tan(mainCamera.fieldOfView * 0.5f * Mathf.Deg2Rad);
                         float tempWorldWidthAtActualDistance = tempWorldHeightAtActualDistance * mainCamera.aspect;
                         float estimatedPlaneWidthInMetersBasedOnArea = (area.width / (float)textureWidth) * tempWorldWidthAtActualDistance;
 
                         float sizeAdjustment = estimatedPlaneWidthInMetersBasedOnArea * 0.3f;
-                        float positionAdjustment = Mathf.Abs(normalizedCenterX - 0.5f) * 0.5f; // ИЗМЕНЕНО: normalizedX -> normalizedCenterX // Боковые части немного дальше
+                        float positionAdjustment = Mathf.Abs(normalizedCenterX - 0.5f) * 0.5f; 
 
                         actualDistanceFromCameraForPlane = adaptiveBaseDistance + sizeAdjustment + positionAdjustment;
                         actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, 1.4f, 4.5f);
-                        // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Эвристика: Адаптивное расстояние = {actualDistanceFromCameraForPlane:F2}м (est.Width={estimatedPlaneWidthInMetersBasedOnArea:F2})");
-
-                        // ИСПРАВЛЕНО: Не используем -initialRayDirection для нормали, а пытаемся определить подходящую нормаль для стены
-                        // Для вертикальных плоскостей (стен) нормаль должна быть горизонтальной и перпендикулярной к направлению взгляда
+                        
                         Vector3 camerForwardHorizontal = new Vector3(initialRayDirection.x, 0, initialRayDirection.z).normalized;
-                        bestNormal = Vector3.Cross(camerForwardHorizontal, Vector3.up).normalized; // Нормаль перпендикулярна горизонтальному направлению камеры
+                        bestNormal = Vector3.Cross(camerForwardHorizontal, Vector3.up).normalized; 
 
-                        // Проверяем, в какую сторону должна смотреть нормаль (к камере или от камеры)
                         Vector3 toCameraHorizontal = new Vector3(-initialRayDirection.x, 0, -initialRayDirection.z).normalized;
                         if (Vector3.Dot(bestNormal, toCameraHorizontal) < 0)
                         {
-                              bestNormal = -bestNormal; // Инвертируем нормаль, чтобы она смотрела к камере
+                              bestNormal = -bestNormal; 
                         }
                   }
 
-                  finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; // ИЗМЕНЕНО: rayDirection -> initialRayDirection
-                                                                                                                // Логика определения ориентации для эвристического случая
-                  Vector3 upDirectionForHeuristic = mainCamera.transform.up; // ИЗМЕНЕНО: arCamera -> mainCamera
+                  finalPlanePosition = cameraPosition + initialRayDirection * actualDistanceFromCameraForPlane; 
+                  Vector3 upDirectionForHeuristic = mainCamera.transform.up; 
                   if (Mathf.Abs(Vector3.Dot(bestNormal, mainCamera.transform.up)) > 0.95f)
-                  { // ИЗМЕНЕНО: arCamera -> mainCamera // Если нормаль почти вертикальна (пол/потолок по эвристике)
+                  { 
                         upDirectionForHeuristic = -cameraForward;
                         if (enableDetailedRaycastLogging) Debug.LogWarning($"[ARManagerInitializer2-UOCP] Эвристика: Нормаль ({bestNormal}) почти параллельна camera.up. Используем -cameraForward как второй аргумент LookRotation.");
                   }
                   finalPlaneRotation = Quaternion.LookRotation(bestNormal, upDirectionForHeuristic);
                   if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🧭 Параметры для плоскости ПО ЭВРИСТИКЕ: Pos={finalPlanePosition:F2}, Rot(Эйлер)={finalPlaneRotation.eulerAngles:F1}, Нормаль={bestNormal:F2}");
+                  */
             }
 
             // Теперь, когда у нас есть finalPlanePosition и actualDistanceFromCameraForPlane, мы можем вычислить мировые размеры плоскости
@@ -2533,40 +2535,41 @@ public class ARManagerInitializer2 : MonoBehaviour
       // Check if a new plane would overlap with existing persistent planes
       private bool OverlapsWithPersistentPlanes(Vector3 position, Vector3 normal, float width, float height)
       {
-            if (!usePersistentPlanes || persistentGeneratedPlanes.Count == 0)
-                  return false;
+            if (persistentGeneratedPlanes.Count == 0) return false;
 
-            float maxOverlapDistance = 0.5f; // Maximum distance to consider overlap (increased from 0.3f)
-            float maxAngleDifference = 25f; // Maximum angle difference to consider overlap (reduced from 30f)
+            float maxAngleThresholdForOverlap = 15.0f; // Degrees
+            // float maxDistanceThresholdForOverlap = 0.5f; // Meters - This was too strict
 
-            foreach (var kvp in persistentGeneratedPlanes)
+            foreach (var pair in persistentGeneratedPlanes)
             {
-                  GameObject persistentPlane = kvp.Key;
-                  bool isPersistent = kvp.Value;
+                  GameObject existingPlane = pair.Key;
+                  if (existingPlane == null || !existingPlane.activeInHierarchy) continue;
 
-                  if (persistentPlane == null || !isPersistent)
-                        continue;
+                  Vector3 existingPlaneCenter = existingPlane.transform.position;
+                  Vector3 existingPlaneNormal = existingPlane.transform.forward; // Assumes plane mesh is oriented with its "forward" as the normal
 
-                  // Check distance and angle
-                  float distance = Vector3.Distance(position, persistentPlane.transform.position);
-                  float angle = Vector3.Angle(normal, persistentPlane.transform.forward);
+                  float angleDiff = Vector3.Angle(existingPlaneNormal, normal);
+                  float distanceDiff = Vector3.Distance(existingPlaneCenter, position);
 
-                  if (distance < maxOverlapDistance && angle < maxAngleDifference)
+                  // Calculate extents for a more robust overlap check than just center distance
+                  float existingPlaneHalfWidth = existingPlane.transform.localScale.x / 2f;
+                  float existingPlaneHalfHeight = existingPlane.transform.localScale.y / 2f; // Assuming Y scale is height for vertical plane from CreatePlaneMesh
+                  float newPlaneHalfWidth = width / 2f;
+                  float newPlaneHalfHeight = height / 2f;
+
+                  float maxExistingExtent = Mathf.Max(existingPlaneHalfWidth, existingPlaneHalfHeight);
+                  float maxNewExtent = Mathf.Max(newPlaneHalfWidth, newPlaneHalfHeight);
+                  float combinedExtents = maxExistingExtent + maxNewExtent;
+
+                  // Condition for overlap: similar orientation, AND their extents suggest an actual overlap.
+                  // The strict distanceDiff < maxDistanceThresholdForOverlap check was removed as it was too restrictive for large planes.
+                  if (angleDiff < maxAngleThresholdForOverlap &&
+                      combinedExtents * 0.5f > distanceDiff) // MODIFIED: Was 0.8f
                   {
-                        // Check size overlap
-                        MeshFilter meshFilter = persistentPlane.GetComponent<MeshFilter>();
-                        if (meshFilter != null && meshFilter.mesh != null)
-                        {
-                              Vector3 meshSize = meshFilter.mesh.bounds.size;
-                              // If the new plane is similar in size or smaller, consider it an overlap
-                              if (width <= meshSize.x * 1.5f && height <= meshSize.y * 1.5f)
-                              {
-                                    return true;
-                              }
-                        }
+                        if (enableCustomPlaneCreationLogging) Debug.LogWarning($"[ARManagerInitializer2-Overlaps] Overlap detected with {existingPlane.name}. New: pos={position:F2}, normal={normal:F2}, w={width:F1},h={height:F1}. Existing: pos={existingPlaneCenter:F2}, normal={existingPlaneNormal:F2}, scale={existingPlane.transform.localScale:F1}. AngleDiff={angleDiff:F1}, DistDiff={distanceDiff:F1}, CombExt*0.5={combinedExtents * 0.5f:F1}"); // MODIFIED: Log message to reflect 0.5f
+                        return true;
                   }
             }
-
             return false;
       }
 
@@ -2578,7 +2581,7 @@ public class ARManagerInitializer2 : MonoBehaviour
       [Tooltip("Задержка перед удалением 'потерянной' плоскости (в секундах)")]
       [SerializeField] private float planePersistenceDelay = 2.0f; // ИЗМЕНЕНО с 0.5f
       [Tooltip("Минимальное время существования плоскости, чтобы она считалась 'стабильной' и могла стать 'постоянной' (в секундах)")]
-      [SerializeField] private float minPlaneLifetimeForPersistence = 2.0f;
+      [SerializeField] private float minPlaneLifetimeForPersistence = 3.0f; // MODIFIED: Was 2.0f
 
       // Метод для автоматического превращения стабильных плоскостей в персистентные
       private void MakeStablePlanesPersistent()

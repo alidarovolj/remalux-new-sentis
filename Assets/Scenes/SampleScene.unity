@@ -269,7 +269,7 @@ PrefabInstance:
         type: 3}
       propertyPath: m_PlanePrefab
       value: 
-      objectReference: {fileID: 1585201990951412, guid: 886609fc1566e4c27b399f1095d6de18,
+      objectReference: {fileID: 1500486927542100180, guid: d21529d6ff6637a408c2cb9d1ed7bbe9,
         type: 3}
     - target: {fileID: 2512387470528047738, guid: 48cb3fb68c91eb94999fd99957eb0cae,
         type: 3}
@@ -329,11 +329,7 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents:
-    - targetCorrespondingSourceObject: {fileID: 2512387469002778309, guid: 48cb3fb68c91eb94999fd99957eb0cae,
-        type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 0}
+    m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 48cb3fb68c91eb94999fd99957eb0cae, type: 3}
 --- !u!1 &357467128
 GameObject:
@@ -364,6 +360,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2623ba78cb062411eac5eaec1d3498f0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  enableLogging: 1
   enableNormalVisualization: 1
   enableBoundaryVisualization: 1
   enableMeshOrientationCheck: 1
@@ -426,8 +423,9 @@ MonoBehaviour:
   useDetectedPlanes: 0
   minPlaneSizeInMeters: 0.1
   minPixelsDimensionForArea: 2
-  minAreaSizeInPixels: 10
-  wallPixelThreshold: 60
+  minAreaSizeInPixels: 1500
+  maskProcessingResolution: 128
+  wallPixelThreshold: 200
   enableDetailedRaycastLogging: 1
   maxRayDistance: 70
   hitLayerMask:
@@ -447,11 +445,13 @@ MonoBehaviour:
     type: 2}
   debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
   enableSceneObjectsDiagnostics: 1
+  enableGetCameraParametersLogging: 0
   enableCustomPlaneCreationLogging: 0
   enableVerboseLoggingCleanup: 1
-  maxPlaneSize: 15
-  minPlaneSize: 0.3
+  maxPlaneSize: 50
+  minPlaneSize: 0.1
   maxAspectRatio: 10
+  planeSizeScalingFactor: 0.5
   makePersistentCheckInterval: 1
   planePersistenceDelay: 2
   minPlaneLifetimeForPersistence: 2
@@ -484,7 +484,7 @@ GameObject:
   - component: {fileID: 419754867}
   - component: {fileID: 419754866}
   - component: {fileID: 419754865}
-  m_Layer: 8
+  m_Layer: 0
   m_Name: Floor
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -649,7 +649,7 @@ GameObject:
   - component: {fileID: 782996761}
   - component: {fileID: 782996760}
   - component: {fileID: 782996759}
-  m_Layer: 8
+  m_Layer: 9
   m_Name: Wall_Right
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -803,13 +803,20 @@ MonoBehaviour:
   maxConsecutiveFailsBeforeSimulation: 5
   applyMaskSmoothing: 0
   maskBlurSize: 3
+  applySharpening: 0
+  sharpenStrength: 0.8
+  applyContrastAdjustment: 1
+  contrastThreshold: 0.5
+  contrastMultiplier: 1.5
   enhanceEdges: 1
   enhanceContrast: 1
-  contrastMultiplier: 1.5
+  applyGaussianBlur: 1
+  gaussianBlurSize: 0.5
   minComponentSize: 50
   morphologyKernelSize: 2
   filterCeilingRegions: 1
   maxTopRegionRatio: 0.25
+  logProcessingTime: 0
 --- !u!4 &956393579
 Transform:
   m_ObjectHideFlags: 0
@@ -1222,7 +1229,7 @@ GameObject:
   - component: {fileID: 1549527283}
   - component: {fileID: 1549527282}
   - component: {fileID: 1549527281}
-  m_Layer: 8
+  m_Layer: 9
   m_Name: Wall_Front
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -1363,7 +1370,7 @@ GameObject:
   - component: {fileID: 1652224072}
   - component: {fileID: 1652224071}
   - component: {fileID: 1652224070}
-  m_Layer: 8
+  m_Layer: 9
   m_Name: Wall_Left
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -1514,7 +1521,7 @@ GameObject:
   - component: {fileID: 1925477536}
   - component: {fileID: 1925477535}
   - component: {fileID: 1925477534}
-  m_Layer: 8
+  m_Layer: 9
   m_Name: Wall_Back
   m_TagString: Untagged
   m_Icon: {fileID: 0}

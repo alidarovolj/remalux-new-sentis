@@ -48,7 +48,7 @@ public class WallSegmentation : MonoBehaviour
     [Header("Настройки сегментации")]
     [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
     [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
-    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.3f; // Увеличено с 0.07 до 0.3 для фильтрации шума
+    [Tooltip("Порог вероятности для определения стены")][SerializeField, Range(0.0001f, 1.0f)] private float wallConfidence = 0.6f; // Увеличено с 0.3 до 0.6 для фильтрации шума
     [Tooltip("Порог вероятности для определения пола")][SerializeField, Range(0.01f, 1.0f)] private float floorConfidence = 0.4f; // Увеличено для лучшей фильтрации
     [Tooltip("Обнаруживать также горизонтальные поверхности (пол)")] public bool detectFloor = true;
 
@@ -217,26 +217,34 @@ public class WallSegmentation : MonoBehaviour
     // Параметры сглаживания маски для улучшения визуального качества
     [Header("Mask Enhancement Settings")]
     [Tooltip("Apply Gaussian blur to smooth the mask.")]
-    [SerializeField] private bool applyMaskSmoothing = true; // ОСТАВЛЯЕМ ЭТОТ
+    [SerializeField] private bool applyMaskSmoothing = true;
     [Tooltip("Blur size for Gaussian blur. Default: 1.5")]
-    [SerializeField] private float maskBlurSize = 1.5f; // ОСТАВЛЯЕМ ЭТОТ (float)
+    [SerializeField] private float maskBlurSize = 0.5f; // Ensure this is 0.5f
     [Tooltip("Apply sharpening to the mask after blurring. Can help define edges but may increase noise.")]
-    [SerializeField] private bool applySharpening = false; // УСТАНОВЛЕНО В FALSE
+    [SerializeField] private bool applySharpening = false;
     [Tooltip("Sharpening strength. Default: 0.8")]
     [SerializeField] private float sharpenStrength = 0.8f;
     [Tooltip("Apply contrast adjustment to the mask. Can help make walls more distinct.")]
-    [SerializeField] private bool applyContrastAdjustment = true; // ОСТАВЛЯЕМ ЭТОТ
+    [SerializeField] private bool applyContrastAdjustment = true;
     [Tooltip("Contrast threshold for adjustment. Default: 0.5")]
     [Range(0.1f, 2.0f)]
     public float contrastThreshold = 0.5f;
     [Tooltip("Contrast multiplier for adjustment. Default: 1.5")]
     [Range(1f, 3f)]
-    public float contrastMultiplier = 1.5f; // ОСТАВЛЯЕМ ЭТОТ
+    public float contrastMultiplier = 1.5f;
 
-    [Tooltip("Повышать резкость краев на маске (старое поле, может быть использовано логикой)")] // ВОЗВРАЩАЕМ
+    [Tooltip("Повышать резкость краев на маске (старое поле, может быть использовано логикой)")]
     public bool enhanceEdges = true;
-    [Tooltip("Повышать контраст маски (старое поле, может быть использовано логикой)")] // ВОЗВРАЩАЕМ
+    [Tooltip("Повышать контраст маски (старое поле, может быть использовано логикой)")]
     public bool enhanceContrast = true;
+
+    [Header("Mask Enhancement Settings")]
+    [Tooltip("Apply Gaussian blur to the mask to smooth it. Default: true")]
+    [SerializeField] private bool applyGaussianBlur = true;
+    [Tooltip("Blur size for Gaussian blur. Default: 1.5")]
+    [SerializeField] private float gaussianBlurSize = 0.5f; // MODIFIED from 1.5f
+
+
 
     // Удалены дублирующиеся поля, оставлены оригинальные ниже
 

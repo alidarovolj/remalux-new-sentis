@@ -369,7 +369,7 @@ public class ARSetupValidator : MonoBehaviour
                               issues.Add("Ссылка на ARSessionManager в WallSegmentation автоматически установлена");
                         }
                   }
-                  
+
                   if (wallSegmentation.XROrigin == null)
                   {
                         if (xrOrigin != null)
@@ -477,8 +477,10 @@ public class ARSetupValidator : MonoBehaviour
             // 5. Проверка настройки Prefab для ARPlaneManager
             if (planeManager != null && planeManager.planePrefab == null)
             {
-                  Debug.LogWarning("ARSetupValidator: ARPlaneManager не имеет назначенного префаба. Создаем стандартный префаб.");
+                  Debug.LogWarning("ARSetupValidator: ARPlaneManager не имеет назначенного префаба. Пожалуйста, назначьте корректно настроенный префаб плоскости (с MeshFilter, MeshRenderer, MeshCollider, ARPlane и ARPlaneMeshVisualizer) в инспекторе для компонента ARPlaneManager на объекте XR Origin.");
 
+                  // ЗАКОММЕНТИРОВАНО: Блок автоматического создания префаба, который вызывал проблемы
+                  /*
                   // Создаем простой префаб с сеткой и коллайдером
                   GameObject planePrefab = new GameObject("AR Plane Prefab");
                   planePrefab.AddComponent<MeshFilter>();
@@ -514,6 +516,7 @@ public class ARSetupValidator : MonoBehaviour
                   DontDestroyOnLoad(planePrefab); // Предотвращаем удаление
                   planeManager.planePrefab = planePrefab;
 #endif
+                  */
             }
 
             // 6. Проверка настройки ARPlaneManager
@@ -542,13 +545,13 @@ public class ARSetupValidator : MonoBehaviour
                   {
                         wallSegmentation.ARCameraManager = arCameraManager;
                   }
-                  
+
                   var sessionManager = FindObjectOfType<ARSessionManager>();
                   if (sessionManager != null)
                   {
                         wallSegmentation.ARSessionManager = sessionManager;
                   }
-                  
+
                   if (xrOrigin != null)
                   {
                         wallSegmentation.XROrigin = xrOrigin;
