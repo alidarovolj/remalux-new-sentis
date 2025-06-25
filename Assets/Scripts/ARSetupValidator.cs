@@ -478,45 +478,6 @@ public class ARSetupValidator : MonoBehaviour
             if (planeManager != null && planeManager.planePrefab == null)
             {
                   Debug.LogWarning("ARSetupValidator: ARPlaneManager не имеет назначенного префаба. Пожалуйста, назначьте корректно настроенный префаб плоскости (с MeshFilter, MeshRenderer, MeshCollider, ARPlane и ARPlaneMeshVisualizer) в инспекторе для компонента ARPlaneManager на объекте XR Origin.");
-
-                  // ЗАКОММЕНТИРОВАНО: Блок автоматического создания префаба, который вызывал проблемы
-                  /*
-                  // Создаем простой префаб с сеткой и коллайдером
-                  GameObject planePrefab = new GameObject("AR Plane Prefab");
-                  planePrefab.AddComponent<MeshFilter>();
-                  MeshRenderer renderer = planePrefab.AddComponent<MeshRenderer>();
-                  planePrefab.AddComponent<ARPlane>();
-                  planePrefab.AddComponent<MeshCollider>();
-
-                  // Создаем материал для AR плоскостей
-                  Shader arPlaneShader = Shader.Find("Universal Render Pipeline/Simple Lit");
-                  if (arPlaneShader != null)
-                  {
-                        Material planeMaterial = new Material(arPlaneShader);
-                        planeMaterial.name = "AR Plane Material";
-                        planeMaterial.color = new Color(1f, 1f, 1f, 0.5f); // Полупрозрачный белый
-                        renderer.material = planeMaterial;
-                  }
-
-                  // Сохраняем префаб в ресурсы, чтобы он был доступен в рантайме
-                  if (!Directory.Exists("Assets/Resources"))
-                  {
-                        Directory.CreateDirectory("Assets/Resources");
-                  }
-
-#if UNITY_EDITOR
-                  // Только в редакторе сохраняем как настоящий ассет
-                  UnityEditor.PrefabUtility.SaveAsPrefabAsset(planePrefab, "Assets/Resources/ARPlanePrefab.prefab");
-                  UnityEditor.AssetDatabase.Refresh();
-                  Destroy(planePrefab); // Удаляем временный объект
-                  planeManager.planePrefab = Resources.Load<GameObject>("ARPlanePrefab");
-#else
-                  // В рантайме устанавливаем созданный объект напрямую
-                  planePrefab.SetActive(false); // Скрываем его, т.к. это шаблон
-                  DontDestroyOnLoad(planePrefab); // Предотвращаем удаление
-                  planeManager.planePrefab = planePrefab;
-#endif
-                  */
             }
 
             // 6. Проверка настройки ARPlaneManager

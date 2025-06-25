@@ -9,7 +9,7 @@ using System.Collections.Generic;
 public class PlaneOrientationDebugger : MonoBehaviour
 {
       [Header("Настройки отладки")]
-      [SerializeField] private bool enableLogging = true;
+      [SerializeField] private bool enableLogging = false;
       [SerializeField] private bool enableNormalVisualization = false;
       [SerializeField] private bool enableBoundaryVisualization = false;
       [SerializeField] private bool enableMeshOrientationCheck = false;
@@ -135,8 +135,8 @@ public class PlaneOrientationDebugger : MonoBehaviour
                   CheckGeneratedMeshOrientation(planeObject);
             }
 
-            if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Обработана сгенерированная плоскость: {planeObject.name}, " +
-                     $"Вертикальная: {isVertical}, Нормаль: {planeNormal:F2}, Центр: {planeCenter:F2}");
+            // if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Обработана сгенерированная плоскость: {planeObject.name}, " +
+            //          $"Вертикальная: {isVertical}, Нормаль: {planeNormal:F2}, Центр: {planeCenter:F2}");
       }
 
       private void CreateNormalVisualization(GameObject planeObject, Vector3 center, Vector3 normal, bool isVertical)
@@ -238,8 +238,8 @@ public class PlaneOrientationDebugger : MonoBehaviour
             bool facingCamera = cameraAlignment > 0;
 
             string orientationStatus = facingCamera ? "✅ СМОТРИТ НА КАМЕРУ" : "❌ СМОТРИТ ОТ КАМЕРЫ";
-            if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Сгенерированная плоскость {planeObject.name}: {orientationStatus} " +
-                     $"(выравнивание с камерой: {cameraAlignment:F2})");
+            // if (enableLogging) Debug.Log($"[PlaneOrientationDebugger] Сгенерированная плоскость {planeObject.name}: {orientationStatus} " +
+            //          $"(выравнивание с камерой: {cameraAlignment:F2})");
 
             if (!facingCamera)
             {

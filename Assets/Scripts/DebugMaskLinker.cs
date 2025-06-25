@@ -77,7 +77,7 @@ public class DebugMaskLinker : MonoBehaviour
             // Автоматическое сохранение маски для отладки
             if (!hasSavedOnce && updateCounter >= SAVE_AFTER_N_UPDATES)
             {
-                Debug.Log($"[DebugMaskLinker] Достигнуто {SAVE_AFTER_N_UPDATES} обновлений ({updateCounter}). Автоматическое сохранение маски DebugMaskOutput_Auto.png...", gameObject);
+                // Debug.Log($"[DebugMaskLinker] Достигнуто {SAVE_AFTER_N_UPDATES} обновлений ({updateCounter}). Автоматическое сохранение маски DebugMaskOutput_Auto.png...", gameObject);
                 SaveRenderTextureToFile(mask, "DebugMaskOutput_Auto.png");
                 hasSavedOnce = true; // Предотвращаем повторное сохранение
             }
@@ -101,11 +101,11 @@ public class DebugMaskLinker : MonoBehaviour
         byte[] bytes = tex2D.EncodeToPNG();
         string filePath = System.IO.Path.Combine(Application.persistentDataPath, fileName); // Используем Path.Combine для корректного пути
 
-        Debug.Log($"[DebugMaskLinker] Попытка сохранить текстуру в: {filePath}", gameObject);
+        // Debug.Log($"[DebugMaskLinker] Попытка сохранить текстуру в: {filePath}", gameObject);
         try
         {
             System.IO.File.WriteAllBytes(filePath, bytes);
-            Debug.Log($"[DebugMaskLinker] Текстура УСПЕШНО сохранена в {filePath}", gameObject);
+            // Debug.Log($"[DebugMaskLinker] Текстура УСПЕШНО сохранена в {filePath}", gameObject);
         }
         catch (System.Exception e)
         {

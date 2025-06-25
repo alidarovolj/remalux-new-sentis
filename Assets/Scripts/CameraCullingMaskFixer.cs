@@ -10,13 +10,13 @@ public class CameraCullingMaskFixer : MonoBehaviour
 {
     private HashSet<int> processedCameraIds = new HashSet<int>();
     private int lastCameraCount = 0;
-    
+
     // Преобразуем числовые значения cullingMask в имена слоев для отладки
     private static string FormatCullingMask(int mask)
     {
         if (mask == -1) return "Everything (-1)";
         if (mask == 0) return "Nothing (0)";
-        
+
         List<string> layers = new List<string>();
         for (int i = 0; i < 32; i++)
         {
@@ -34,7 +34,7 @@ public class CameraCullingMaskFixer : MonoBehaviour
                 }
             }
         }
-        
+
         return $"{mask} [{string.Join(", ", layers)}]";
     }
 
@@ -42,13 +42,13 @@ public class CameraCullingMaskFixer : MonoBehaviour
     void Start()
     {
         Debug.Log("[CameraCullingMaskFixer] 🔥 Компонент запущен");
-        
+
         // Устанавливаем cullingMask для всех существующих камер
         SetAllCamerasToEverything();
-        
+
         // Запускаем периодическую проверку камер
         StartCoroutine(CheckCamerasRoutine());
-        
+
         // Запускаем корутину для проверки поиска камер по имени
         StartCoroutine(FindCamerasByNameRoutine());
     }
@@ -65,16 +65,16 @@ public class CameraCullingMaskFixer : MonoBehaviour
             SetAllCamerasToEverything();
         }
     }
-    
+
     // Устанавливает cullingMask в -1 (Everything) для всех камер
     private void SetAllCamerasToEverything()
     {
         Camera[] allCameras = Camera.allCameras;
         bool shouldLog = Time.frameCount % 300 == 0 || Time.frameCount < 10;
-        
+
         bool anyChanges = false;
         int fixedCount = 0;
-        
+
         int arPlanesLayer = LayerMask.NameToLayer("ARPlanes");
 
         foreach (Camera camera in allCameras)
@@ -85,11 +85,7 @@ public class CameraCullingMaskFixer : MonoBehaviour
             if (camera.CompareTag("MainCamera") || camera.name == "Main Camera")
             {
                 targetMask = -1; // Everything
-                if (arPlanesLayer != -1)
-                {
-                    targetMask &= ~(1 << arPlanesLayer); // Exclude ARPlanes layer
-                }
-                targetMaskDescription = $"Everything except ARPlanes ({FormatCullingMask(targetMask)})";
+                targetMaskDescription = "Everything (-1)";
             }
             else
             {
@@ -105,14 +101,14 @@ public class CameraCullingMaskFixer : MonoBehaviour
                 {
                     string oldMask = FormatCullingMask(camera.cullingMask);
                     string oldName = camera.name;
-                    
+
                     camera.cullingMask = targetMask;
                     anyChanges = true;
                     fixedCount++;
-                    
+
                     Debug.LogWarning($"[CameraCullingMaskFixer] 🔧 Исправлен cullingMask для камеры '{oldName}': {oldMask} → {targetMaskDescription}");
                 }
-                
+
                 // Помечаем камеру как обработанную
                 processedCameraIds.Add(camera.GetInstanceID());
             }
@@ -122,16 +118,16 @@ public class CameraCullingMaskFixer : MonoBehaviour
                 if (camera.cullingMask != targetMask)
                 {
                     string oldMask = FormatCullingMask(camera.cullingMask);
-                    
+
                     camera.cullingMask = targetMask;
                     anyChanges = true;
                     fixedCount++;
-                    
+
                     Debug.LogWarning($"[CameraCullingMaskFixer] 🔁 Повторно исправлен cullingMask для камеры '{camera.name}': {oldMask} → {targetMaskDescription}");
                 }
             }
         }
-        
+
         if (anyChanges)
         {
             Debug.Log($"[CameraCullingMaskFixer] ✅ Исправлено {fixedCount} камер из {allCameras.Length}");
@@ -146,7 +142,7 @@ public class CameraCullingMaskFixer : MonoBehaviour
     private IEnumerator CheckCamerasRoutine()
     {
         yield return new WaitForSeconds(2f); // Ждем 2 секунды после старта
-        
+
         int checkCount = 0;
         while (true)
         {
@@ -155,29 +151,29 @@ public class CameraCullingMaskFixer : MonoBehaviour
             {
                 Debug.Log("[CameraCullingMaskFixer] 🔄 Периодическая проверка всех камер...");
             }
-            
+
             SetAllCamerasToEverything();
             checkCount++;
-            
+
             yield return new WaitForSeconds(15f); // Проверяем каждые 15 секунд
         }
     }
-    
+
     // Корутина для поиска камер по имени
     private IEnumerator FindCamerasByNameRoutine()
     {
         string[] cameraNames = new string[] { "AR Camera", "SimulationCamera", "Main Camera", "ARCamera", "XR Origin" };
-        
+
         yield return new WaitForSeconds(2f); // увеличиваем задержку
-        
+
         Debug.Log("[CameraCullingMaskFixer] 🔍 Начат поиск камер по именам...");
         int arPlanesLayer = LayerMask.NameToLayer("ARPlanes");
-        
+
         for (int i = 0; i < 3; i++) // уменьшаем количество попыток
         {
             bool foundAny = false;
             bool shouldLog = i == 0; // логируем только при первой попытке
-            
+
             foreach (string cameraNameInList in cameraNames)
             {
                 GameObject cameraObj = GameObject.Find(cameraNameInList);
@@ -187,18 +183,14 @@ public class CameraCullingMaskFixer : MonoBehaviour
                     if (camera != null)
                     {
                         foundAny = true;
-                        
+
                         int targetMask;
                         string targetMaskDescription;
 
                         if (camera.CompareTag("MainCamera") || camera.name == "Main Camera")
                         {
                             targetMask = -1; // Everything
-                            if (arPlanesLayer != -1)
-                            {
-                                targetMask &= ~(1 << arPlanesLayer); // Exclude ARPlanes layer
-                            }
-                            targetMaskDescription = $"Everything except ARPlanes ({FormatCullingMask(targetMask)})";
+                            targetMaskDescription = "Everything (-1)";
                         }
                         else
                         {
@@ -211,7 +203,7 @@ public class CameraCullingMaskFixer : MonoBehaviour
                         {
                             string oldMask = FormatCullingMask(camera.cullingMask);
                             camera.cullingMask = targetMask;
-                            
+
                             Debug.LogWarning($"[CameraCullingMaskFixer] 🔧 Найдена и исправлена камера по имени '{cameraNameInList}': {oldMask} → {targetMaskDescription}");
                         }
                         else if (shouldLog)
@@ -221,16 +213,16 @@ public class CameraCullingMaskFixer : MonoBehaviour
                     }
                 }
             }
-            
+
             if (!foundAny && shouldLog)
             {
                 Debug.Log("[CameraCullingMaskFixer] 🔍 Не найдено камер по заданным именам");
             }
-            
+
             yield return new WaitForSeconds(5f); // увеличиваем интервал между попытками
         }
     }
-    
+
     // Метод для ручного вызова исправления (например, после загрузки сцены)
     public void ForceFixAllCameras()
     {
@@ -238,6 +230,6 @@ public class CameraCullingMaskFixer : MonoBehaviour
         processedCameraIds.Clear(); // Сбрасываем список обработанных камер
         SetAllCamerasToEverything();
     }
-} 
+}
 
 

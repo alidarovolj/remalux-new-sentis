@@ -8,54 +8,54 @@ public class WallMaterialSetter : MonoBehaviour
     [Header("Материалы для плоскостей")]
     [Tooltip("Материал для стен (вертикальных плоскостей)")]
     public Material wallMaterial;
-    
+
     [Tooltip("Материал для пола (горизонтальных плоскостей)")]
     public Material floorMaterial; // Пока не используется для обновления существующих, но может понадобиться
-    
+
     [Header("Настройки")]
     [Tooltip("Применять материал автоматически при старте")]
     public bool applyOnStart = true;
-    
+
     // private ARManagerInitializer2 arManager; // Не используется напрямую для изменения материалов
-    
+
     private void Start()
     {
         if (applyOnStart)
-        {            
+        {
             ApplyMaterialsToExistingPlanes();
         }
     }
-    
+
     /// <summary>
     /// Устанавливает материалы для существующих плоскостей.
     /// Этот метод теперь не меняет материалы в ARManagerInitializer2.
     /// </summary>
     public void ApplyMaterialsToExistingPlanes() // Переименован для ясности
     {
-        ARManagerInitializer2 arInitializer = ARManagerInitializer2.Instance;
+        ARManagerInitializer2 arInitializer = FindObjectOfType<ARManagerInitializer2>();
         if (arInitializer == null)
         {
             Debug.LogError("[WallMaterialSetter] ❌ ARManagerInitializer2 не найден в сцене! Невозможно обновить материалы плоскостей.");
             return;
         }
-        
+
         // Логика ниже теперь не нужна, т.к. мы не меняем материалы в ARManagerInitializer2
         // if (wallMaterial != null)
         // {
         //     // arInitializer.VerticalPlaneMaterial = wallMaterial; // ОШИБКА: Свойство только для чтения
         //     Debug.Log("[WallMaterialSetter] ✅ Материал для стен (в WallMaterialSetter) готов к использованию.");
         // }
-        
+
         // if (floorMaterial != null)
         // {
         //     // arInitializer.HorizontalPlaneMaterial = floorMaterial; // ОШИБКА: Свойство только для чтения
         //     Debug.Log("[WallMaterialSetter] ✅ Материал для пола (в WallMaterialSetter) готов к использованию.");
         // }
-        
+
         // Обновляем материалы существующих плоскостей, используя материалы из WallMaterialSetter
         UpdateExistingPlanesGraphics();
     }
-    
+
     /// <summary>
     /// Обновляет графическое представление (материалы) для существующих плоскостей.
     /// </summary>
@@ -72,7 +72,7 @@ public class WallMaterialSetter : MonoBehaviour
         {
             wallPlanes = FindWallPlanesByName(); // Поиск по имени как фоллбэк
         }
-        
+
         Debug.Log($"[WallMaterialSetter] Найдено {wallPlanes.Length} плоскостей для возможного обновления материала.");
 
         int updatedCount = 0;
@@ -98,21 +98,21 @@ public class WallMaterialSetter : MonoBehaviour
                 }
             }
         }
-        
+
         if (updatedCount > 0)
         {
             Debug.Log($"[WallMaterialSetter] Обновлены материалы для {updatedCount} из {wallPlanes.Length} найденных плоскостей.");
         }
     }
-    
+
     /// <summary>
     /// Ищет объекты WallPlane по имени (должны начинаться с 'MyARPlane_Debug_')
     /// </summary>
     private GameObject[] FindWallPlanesByName()
-    {        
+    {
         GameObject[] allObjects = FindObjectsOfType<GameObject>(); // Используем неустаревший метод
         System.Collections.Generic.List<GameObject> foundPlanes = new System.Collections.Generic.List<GameObject>();
-        
+
         foreach (GameObject obj in allObjects)
         {
             // Плоскости, создаваемые ARManagerInitializer2, начинаются с "MyARPlane_Debug_"
@@ -124,4 +124,4 @@ public class WallMaterialSetter : MonoBehaviour
         // Debug.Log($"[WallMaterialSetter] Найдено по имени (FindWallPlanesByName): {foundPlanes.Count} плоскостей.");
         return foundPlanes.ToArray();
     }
-} 
+}

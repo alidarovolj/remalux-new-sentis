@@ -9,7 +9,6 @@ public class WallPlaneAttacher : MonoBehaviour
       [Header("Настройки крепления к стенам")]
       [SerializeField] private bool enableWallAttachment = true;
       [SerializeField] private LayerMask wallLayerMask = 1; // Default layer
-      [SerializeField] private float maxRayDistance = 10f;
       [SerializeField] private Material temporaryWallMaterial;
 
       private void Start()

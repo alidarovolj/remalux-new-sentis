@@ -289,11 +289,11 @@ public class ARPlaneConfigurator : MonoBehaviour
         SetFieldIfExists(planeManager, "m_TrackingQualityThreshold", 0.7f);
 
         // Обновляем состояние planeManager
-        if (!planeManager.enabled)
-        {
-            planeManager.enabled = true;
-            Debug.Log("ARPlaneConfigurator: ARPlaneManager был включен");
-        }
+        // if (!planeManager.enabled)
+        // {
+        //     planeManager.enabled = true;
+        //     Debug.Log("ARPlaneConfigurator: ARPlaneManager был включен");
+        // }
 
         if (showDebugInfo)
         {

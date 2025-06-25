@@ -26,7 +26,6 @@ public class ARPlanePersistenceUI : MonoBehaviour
       public TextMeshProUGUI statusText { get { return _statusText; } set { _statusText = value; } }
 
       [Header("Settings")]
-      [SerializeField] private float minDistanceBetweenPlanes = 0.5f;
       [SerializeField] private float maxPlanesInScene = 20; // Limit to prevent performance issues
 
       private int savedPlanesCount = 0;

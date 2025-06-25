@@ -3,8 +3,9 @@ Shader "Custom/WallPaint"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
-        _PaintColor ("Paint Color", Color) = (1,0,0,1)
-        _BlendFactor ("Blend Factor", Range(0,1)) = 0.5
+        _PaintColor ("Paint Color", Color) = (1,1,1,1)
+        _BlendFactor ("Blend Factor", Range(0.0, 1.0)) = 0.7
+        _Alpha ("Alpha", Range(0.0, 1.0)) = 0.8
         _SegmentationMask ("Segmentation Mask", 2D) = "black" {}
         [Toggle(USE_MASK)] _UseMask ("Use Segmentation Mask", Float) = 1
         [Toggle(DEBUG_OVERLAY)] _DebugOverlay ("Debug Overlay", Float) = 0
@@ -15,164 +16,157 @@ Shader "Custom/WallPaint"
     SubShader
     {
         Tags { "RenderType"="Transparent" "Queue"="Transparent" "RenderPipeline" = "UniversalPipeline" }
-        LOD 100
+        LOD 200
         
-        // Transparent blending setup
-        Blend SrcAlpha OneMinusSrcAlpha
-        Cull Off
-        ZWrite Off
-        ZTest Always
-
         Pass
         {
+            Name "WallPaintPass"
+            Tags { "LightMode" = "UniversalForward" }
+            
+            Blend SrcAlpha OneMinusSrcAlpha
+            ZWrite Off
+            Cull Back
+            
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             
-            // Feature toggles
-            #pragma multi_compile _ USE_MASK
-            #pragma multi_compile _ DEBUG_OVERLAY
-            #pragma multi_compile _ USE_AR_WORLD_SPACE
-            
-            // Platform specifics
-            #pragma multi_compile_instancing
-            #pragma prefer_hlslcc gles
-            #pragma exclude_renderers d3d11_9x
-            #pragma target 2.0
-
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            
             struct Attributes
             {
                 float4 positionOS : POSITION;
                 float2 uv : TEXCOORD0;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
+                float3 normalOS : NORMAL;
             };
-
+            
             struct Varyings
             {
-                float2 uv : TEXCOORD0;
                 float4 positionHCS : SV_POSITION;
-                float4 worldPos : TEXCOORD1;
-                UNITY_VERTEX_OUTPUT_STEREO
+                float2 uv : TEXCOORD0;
+                float3 normalWS : TEXCOORD1;
+                float3 worldPos : TEXCOORD2;
             };
-
+            
             TEXTURE2D(_MainTex);
             SAMPLER(sampler_MainTex);
-            TEXTURE2D(_SegmentationMask);
-            SAMPLER(sampler_SegmentationMask);
             
-            half4 _PaintColor;
-            float _BlendFactor;
-            float4 _MainTex_ST;
-            float _DebugGrid;
-            float4x4 _PlaneToWorldMatrix;
-            float4x4 _WorldToCameraMatrix;
-            float4x4 _CameraToWorldMatrix;
-            float3 _PlaneNormal;
-            float3 _PlaneCenter;
-            float _PlaneID;
-
-            Varyings vert(Attributes IN)
+            CBUFFER_START(UnityPerMaterial)
+                float4 _MainTex_ST;
+                float4 _PaintColor;
+                float _BlendFactor;
+                float _Alpha;
+            CBUFFER_END
+            
+            Varyings vert(Attributes input)
             {
-                Varyings OUT;
-                UNITY_SETUP_INSTANCE_ID(IN);
-                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
+                Varyings output;
                 
-                #ifdef USE_AR_WORLD_SPACE
-                    float4 worldPos = mul(_PlaneToWorldMatrix, float4(IN.positionOS.xyz, 1.0));
-                    
-                    OUT.worldPos = worldPos;
-                    
-                    OUT.positionHCS = mul(UNITY_MATRIX_VP, worldPos);
-                #else
-                    OUT.positionHCS = TransformObjectToHClip(IN.positionOS.xyz);
-                    OUT.worldPos = mul(UNITY_MATRIX_M, float4(IN.positionOS.xyz, 1.0));
-                #endif
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(input.positionOS.xyz);
+                VertexNormalInputs normalInput = GetVertexNormalInputs(input.normalOS);
                 
-                OUT.uv = TRANSFORM_TEX(IN.uv, _MainTex);
-                return OUT;
+                output.positionHCS = vertexInput.positionCS;
+                output.uv = TRANSFORM_TEX(input.uv, _MainTex);
+                output.normalWS = normalInput.normalWS;
+                output.worldPos = vertexInput.positionWS;
+                
+                return output;
             }
-
-            half4 frag(Varyings IN) : SV_Target
+            
+            half4 frag(Varyings input) : SV_Target
             {
-                UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
+                // Sample the texture
+                half4 texColor = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv);
                 
-                // Sample base texture
-                half4 color = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv);
+                // Basic lighting calculation
+                Light mainLight = GetMainLight();
+                float NdotL = saturate(dot(input.normalWS, mainLight.direction));
+                half3 lighting = mainLight.color * NdotL + SampleSH(input.normalWS);
                 
-                // Debug overlay mode - show checkerboard pattern or world-space grid
-                #ifdef DEBUG_OVERLAY
-                    #ifdef USE_AR_WORLD_SPACE
-                        float3 worldPos = IN.worldPos.xyz;
-                        
-                        float gridSize = 0.1;
-                        float gridThickness = 0.005;
-                        
-                        float xGridXZ = step(1.0 - gridThickness, frac(abs(worldPos.x) / gridSize));
-                        float zGridXZ = step(1.0 - gridThickness, frac(abs(worldPos.z) / gridSize));
-                        
-                        float xGridXY = step(1.0 - gridThickness, frac(abs(worldPos.x) / gridSize));
-                        float yGridXY = step(1.0 - gridThickness, frac(abs(worldPos.y) / gridSize));
-                        
-                        float yGridYZ = step(1.0 - gridThickness, frac(abs(worldPos.y) / gridSize));
-                        float zGridYZ = step(1.0 - gridThickness, frac(abs(worldPos.z) / gridSize));
-                        
-                        float floorGrid = max(xGridXZ, zGridXZ);
-                        float wallGridX = max(yGridYZ, zGridYZ);
-                        float wallGridZ = max(xGridXY, yGridXY);
-                        
-                        float dotUp = abs(dot(_PlaneNormal, float3(0, 1, 0)));
-                        float dotRight = abs(dot(_PlaneNormal, float3(1, 0, 0)));
-                        
-                        float gridValue = 0;
-                        if (dotUp > 0.8)
-                            gridValue = floorGrid;
-                        else if (dotRight > 0.8)
-                            gridValue = wallGridX;
-                        else
-                            gridValue = wallGridZ;
-                        
-                        float3 planeColor = float3(frac(_PlaneID * 5.33), frac(_PlaneID * 7.77), frac(_PlaneID * 3.55));
-                        
-                        half4 debugColor = half4(lerp(planeColor, float3(1, 1, 1), gridValue), 0.7);
-                        return debugColor;
-                    #else
-                        float checker = (fmod(floor(IN.uv.x * _DebugGrid), 2) == 0) ^ (fmod(floor(IN.uv.y * _DebugGrid), 2) == 0);
-                        half4 debugColor = lerp(half4(1,0,0,0.5), half4(0,1,0,0.5), checker);
-                        return debugColor;
-                    #endif
-                #endif
+                // Blend texture with paint color
+                half3 blendedColor = lerp(texColor.rgb, _PaintColor.rgb, _BlendFactor);
                 
-                #ifdef USE_MASK
-                    // Sample segmentation mask
-                    float mask = SAMPLE_TEXTURE2D(_SegmentationMask, sampler_SegmentationMask, IN.uv).r;
-                    
-                    // Apply color only in wall areas (mask > 0.1)
-                    if (mask > 0.1)
-                    {
-                        // Blend with original color
-                        half3 blendedColor = lerp(color.rgb, _PaintColor.rgb, _BlendFactor * mask);
-                        
-                        // Calculate alpha based on blend factor and mask
-                        half blendedAlpha = lerp(0.0, _PaintColor.a, _BlendFactor * mask);
-                        
-                        return half4(blendedColor, blendedAlpha);
-                    }
-                    else
-                    {
-                        // Return transparent for non-wall areas
-                        return half4(0, 0, 0, 0);
-                    }
-                #else
-                    // Without mask - apply paint across the entire view with controlled opacity
-                    half3 blendedColor = lerp(color.rgb, _PaintColor.rgb, _BlendFactor);
-                    half blendedAlpha = _BlendFactor * _PaintColor.a;
-                    return half4(blendedColor, blendedAlpha);
-                #endif
+                // Apply lighting
+                blendedColor *= lighting;
+                
+                // Final color with alpha
+                half4 finalColor = half4(blendedColor, _PaintColor.a * _Alpha * texColor.a);
+                
+                return finalColor;
             }
             ENDHLSL
         }
     }
-    FallBack "Hidden/Universal Render Pipeline/FallbackError"
+    
+    // Fallback for Built-in Render Pipeline
+    SubShader
+    {
+        Tags 
+        { 
+            "RenderType"="Transparent" 
+            "Queue"="Transparent" 
+        }
+        
+        LOD 200
+        
+        Pass
+        {
+            Blend SrcAlpha OneMinusSrcAlpha
+            ZWrite Off
+            
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #include "UnityCG.cginc"
+            
+            struct appdata
+            {
+                float4 vertex : POSITION;
+                float2 uv : TEXCOORD0;
+                float3 normal : NORMAL;
+            };
+            
+            struct v2f
+            {
+                float2 uv : TEXCOORD0;
+                float4 vertex : SV_POSITION;
+                float3 worldNormal : TEXCOORD1;
+            };
+            
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            fixed4 _PaintColor;
+            float _BlendFactor;
+            float _Alpha;
+            
+            v2f vert (appdata v)
+            {
+                v2f o;
+                o.vertex = UnityObjectToClipPos(v.vertex);
+                o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+                o.worldNormal = UnityObjectToWorldNormal(v.normal);
+                return o;
+            }
+            
+            fixed4 frag (v2f i) : SV_Target
+            {
+                fixed4 texColor = tex2D(_MainTex, i.uv);
+                
+                // Simple lighting
+                float3 lightDir = normalize(_WorldSpaceLightPos0.xyz);
+                float NdotL = max(0, dot(i.worldNormal, lightDir));
+                float3 lighting = _LightColor0.rgb * NdotL + unity_AmbientSky.rgb;
+                
+                // Blend colors
+                fixed3 blendedColor = lerp(texColor.rgb, _PaintColor.rgb, _BlendFactor);
+                blendedColor *= lighting;
+                
+                return fixed4(blendedColor, _PaintColor.a * _Alpha * texColor.a);
+            }
+            ENDCG
+        }
+    }
+    
+    Fallback "Legacy Shaders/Transparent/Diffuse"
 } 
