@@ -1,3 +1,0 @@
-using UnityEngine.XR.ARSubsystems; // Добавляем для доступа к PlaneDetectionMode
- 
-// ... остальные строки кода остаются без изменений ... 

@@ -124,12 +124,12 @@ public class ARManagerInitializer2 : MonoBehaviour
       [SerializeField] private bool enableVerboseLoggingCleanup = false; // Ensured false by default
 
       [Header("📏 Размеры и геометрия")]
-      [SerializeField] private float maxPlaneSize = 2.5f; // УМЕНЬШЕНО: Реалистичный максимальный размер плоскости
-      [SerializeField] private float minPlaneSize = 0.5f; // ИСПРАВЛЕНО: Минимальный размер плоскости
-      [SerializeField] private float maxAspectRatio = 4.0f; // ИСПРАВЛЕНО: Более строгое соотношение сторон
-      [SerializeField] private float maxWallHeight = 2.5f; // УМЕНЬШЕНО: Реалистичная максимальная высота стены
-      [SerializeField] private float maxWallWidth = 3.0f;  // УМЕНЬШЕНО: Реалистичная максимальная ширина стены
-      [SerializeField] private float planeSizeMultiplier = 0.4f; // УМЕНЬШЕНО: Более агрессивное уменьшение размеров
+      [SerializeField] private float maxPlaneSize = 10.0f; // УВЕЛИЧЕНО: Максимальный размер плоскости для больших стен
+      [SerializeField] private float minPlaneSize = 0.3f; // УМЕНЬШЕНО: Минимальный размер плоскости
+      [SerializeField] private float maxAspectRatio = 8.0f; // УВЕЛИЧЕНО: Более гибкое соотношение сторон для длинных стен
+      [SerializeField] private float maxWallHeight = 6.0f; // УВЕЛИЧЕНО: Максимальная высота стены для высоких потолков
+      [SerializeField] private float maxWallWidth = 8.0f;  // УВЕЛИЧЕНО: Максимальная ширина стены для длинных стен
+      [SerializeField] private float planeSizeMultiplier = 1.5f; // УВЕЛИЧЕНО: Множитель для покрытия всей стены
 
       [Tooltip("Дополнительный коэффициент масштабирования для уменьшения размера создаваемых плоскостей. 1.0 = без изменений, 0.5 = в два раза меньше.")]
       // [SerializeField] private float planeSizeScalingFactor = 0.5f; // Не используется - удалено для избежания предупреждения
@@ -243,29 +243,30 @@ public class ARManagerInitializer2 : MonoBehaviour
                   SubscribeToWallSegmentation();
             }
 
-            if (!useDetectedPlanes)
-            {
-                  Debug.Log("[ARManagerInitializer2-Start] useDetectedPlanes is false. Disabling ARFoundation visualizers.");
-                  DisableARFoundationVisualizers();
-            }
+            // Всегда отключаем ARFoundation визуализаторы синих плоскостей
+            Debug.Log("[ARManagerInitializer2-Start] Отключение ARFoundation визуализаторов синих плоскостей.");
+            DisableARFoundationVisualizers();
 
-            // Попытка отключить стандартный ARPlaneManager, если он есть и мы используем кастомную генерацию
-            if (planeManager != null && useDetectedPlanes)
+            // Удаляем существующие синие плоскости ARFoundation
+            RemoveExistingARFoundationPlanes();
+
+            // Отключаем стандартный ARPlaneManager, чтобы убрать синие плоскости ARFoundation
+            if (planeManager != null)
             {
-                  // Debug.LogWarning("[ARManagerInitializer2] Попытка отключить ARPlaneManager.");
-                  // planeManager.enabled = false;
-                  // if (!planeManager.enabled)
-                  // {
-                  //     Debug.Log("[ARManagerInitializer2] ARPlaneManager успешно отключен.");
-                  // }
-                  // else
-                  // {
-                  //     Debug.LogWarning("[ARManagerInitializer2] Не удалось отключить ARPlaneManager.");
-                  // }
+                  Debug.LogWarning("[ARManagerInitializer2] Отключение ARPlaneManager для предотвращения генерации синих плоскостей ARFoundation.");
+                  planeManager.enabled = false;
+                  if (!planeManager.enabled)
+                  {
+                        Debug.Log("[ARManagerInitializer2] ✅ ARPlaneManager успешно отключен. Синие плоскости больше не будут генерироваться.");
+                  }
+                  else
+                  {
+                        Debug.LogWarning("[ARManagerInitializer2] ⚠️ Не удалось отключить ARPlaneManager.");
+                  }
             }
-            else if (planeManager == null && useDetectedPlanes)
+            else
             {
-                  // Debug.LogWarning("[ARManagerInitializer2] planeManager не назначен, но useDetectedPlanes=true. Нечего отключать.");
+                  Debug.LogWarning("[ARManagerInitializer2] planeManager не назначен. Нечего отключать.");
             }
 
 
@@ -351,6 +352,12 @@ public class ARManagerInitializer2 : MonoBehaviour
             if (frameCounter % 180 == 0)
             {
                   CleanupOversizedPlanes();
+            }
+
+            // ДОБАВЛЕНО: Периодическое удаление синих плоскостей ARFoundation (каждые 2 секунды)
+            if (frameCounter % 120 == 0)
+            {
+                  RemoveExistingARFoundationPlanes();
             }
 
             // Обновление позиций существующих плоскостей (если они не привязаны к трекаблам XROrigin)
@@ -1577,6 +1584,40 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
       }
 
+      // НОВЫЙ МЕТОД: Удаление существующих синих плоскостей ARFoundation
+      private void RemoveExistingARFoundationPlanes()
+      {
+            Debug.Log("[ARManagerInitializer2] Поиск и удаление существующих синих плоскостей ARFoundation...");
+
+            // Ищем все объекты ARPlane в сцене
+            ARPlane[] existingPlanes = FindObjectsOfType<ARPlane>();
+            int removedCount = 0;
+
+            foreach (ARPlane plane in existingPlanes)
+            {
+                  if (plane != null)
+                  {
+                        Debug.Log($"[ARManagerInitializer2] Удаление ARFoundation плоскости: {plane.name}");
+                        Destroy(plane.gameObject);
+                        removedCount++;
+                  }
+            }
+
+            // Также ищем объекты с именами, типичными для ARFoundation плоскостей
+            GameObject[] allObjects = FindObjectsOfType<GameObject>();
+            foreach (GameObject obj in allObjects)
+            {
+                  if (obj.name.Contains("ARPlane") && !obj.name.Contains("MyARPlane_Debug_"))
+                  {
+                        Debug.Log($"[ARManagerInitializer2] Удаление объекта с именем ARPlane: {obj.name}");
+                        Destroy(obj);
+                        removedCount++;
+                  }
+            }
+
+            Debug.Log($"[ARManagerInitializer2] ✅ Удалено {removedCount} синих плоскостей ARFoundation");
+      }
+
       // НОВЫЙ МЕТОД: Отключение других AR визуализаторов, которые могут появляться в рантайме
       private void DisableOtherARVisualizers()
       {
@@ -2201,7 +2242,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
                   // ИСПРАВЛЕНО: Используем реальную точку попадания с небольшим смещением ПО НОРМАЛИ
                   actualDistanceFromCameraForPlane = determinedDistance;
-                  actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, minHitDistanceThreshold, 6.0f);
+                  actualDistanceFromCameraForPlane = Mathf.Clamp(actualDistanceFromCameraForPlane, minHitDistanceThreshold, 12.0f); // УВЕЛИЧЕНО: Максимальное расстояние для больших помещений
 
                   // ИСПРАВЛЕНО: Позиционируем плоскость на реальной поверхности со смещением по нормали
                   finalPlanePosition = determinedHitPoint + bestNormal * 0.005f; // Небольшое смещение ОТ поверхности по нормали
@@ -2391,12 +2432,12 @@ public class ARManagerInitializer2 : MonoBehaviour
                   // Ширина - среднее расстояние между верхними и нижними точками
                   float topWidth = Vector3.Distance(worldTopLeft, worldTopRight);
                   float bottomWidth = Vector3.Distance(worldBottomLeft, worldBottomRight);
-                  finalPlaneWorldWidth = (topWidth + bottomWidth) / 2f;
+                  finalPlaneWorldWidth = (topWidth + bottomWidth) / 2f * planeSizeMultiplier;
 
                   // Высота - среднее расстояние между левыми и правыми точками
                   float leftHeight = Vector3.Distance(worldTopLeft, worldBottomLeft);
                   float rightHeight = Vector3.Distance(worldTopRight, worldBottomRight);
-                  finalPlaneWorldHeight = (leftHeight + rightHeight) / 2f;
+                  finalPlaneWorldHeight = (leftHeight + rightHeight) / 2f * planeSizeMultiplier;
 
                   if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📏 НОВЫЙ РАСЧЕТ РАЗМЕРОВ: Ширина={finalPlaneWorldWidth:F2}м, Высота={finalPlaneWorldHeight:F2}м (на расстоянии {actualDistanceFromCameraForPlane:F2}м)");
             }
