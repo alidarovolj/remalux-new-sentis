@@ -16,7 +16,8 @@ public class WallMaterialSetter : MonoBehaviour
     [Tooltip("Применять материал автоматически при старте")]
     public bool applyOnStart = true;
 
-    // private ARManagerInitializer2 arManager; // Не используется напрямую для изменения материалов
+    private ARManagerInitializer2 arManager;
+    private WallPainterController wallPainterController;
 
     private void Start()
     {
@@ -28,49 +29,43 @@ public class WallMaterialSetter : MonoBehaviour
 
     /// <summary>
     /// Устанавливает материалы для существующих плоскостей.
-    /// Этот метод теперь не меняет материалы в ARManagerInitializer2.
+    /// Работает как с новой системой WallPainterController, так и со старой ARManagerInitializer2.
     /// </summary>
-    public void ApplyMaterialsToExistingPlanes() // Переименован для ясности
+    public void ApplyMaterialsToExistingPlanes()
     {
-        ARManagerInitializer2 arInitializer = FindObjectOfType<ARManagerInitializer2>();
-        if (arInitializer == null)
+        // Ищем обе системы
+        wallPainterController = FindObjectOfType<WallPainterController>();
+        arManager = FindObjectOfType<ARManagerInitializer2>();
+
+        if (wallPainterController == null && arManager == null)
         {
-            Debug.LogError("[WallMaterialSetter] ❌ ARManagerInitializer2 не найден в сцене! Невозможно обновить материалы плоскостей.");
+            Debug.LogError("[WallMaterialSetter] ❌ Не найдены ни WallPainterController, ни ARManagerInitializer2!");
             return;
         }
 
-        // Логика ниже теперь не нужна, т.к. мы не меняем материалы в ARManagerInitializer2
-        // if (wallMaterial != null)
-        // {
-        //     // arInitializer.VerticalPlaneMaterial = wallMaterial; // ОШИБКА: Свойство только для чтения
-        //     Debug.Log("[WallMaterialSetter] ✅ Материал для стен (в WallMaterialSetter) готов к использованию.");
-        // }
+        string activeSystem = wallPainterController != null ? "WallPainterController (новая)" : "ARManagerInitializer2 (старая)";
+        Debug.Log($"[WallMaterialSetter] ✅ Подключен к системе: {activeSystem}");
 
-        // if (floorMaterial != null)
-        // {
-        //     // arInitializer.HorizontalPlaneMaterial = floorMaterial; // ОШИБКА: Свойство только для чтения
-        //     Debug.Log("[WallMaterialSetter] ✅ Материал для пола (в WallMaterialSetter) готов к использованию.");
-        // }
-
-        // Обновляем материалы существующих плоскостей, используя материалы из WallMaterialSetter
+        // Обновляем материалы существующих плоскостей
         UpdateExistingPlanesGraphics();
     }
 
     /// <summary>
     /// Обновляет графическое представление (материалы) для существующих плоскостей.
     /// </summary>
-    public void UpdateExistingPlanesGraphics() // Переименован для ясности
+    public void UpdateExistingPlanesGraphics()
     {
-        // Важно: ARManagerInitializer2.Instance.generatedPlanes может быть более надежным источником
-        // чем поиск по тегу или имени, особенно если плоскости создаются/удаляются динамически.
-        // Однако, если WallMaterialSetter должен влиять и на плоскости, созданные не ARManagerInitializer2,
-        // то поиск по тегу/имени остается актуальным.
+        var allPlanes = GetAllPlanes();
+        GameObject[] wallPlanes = allPlanes.ToArray();
 
-        // Пока оставим поиск по тегу/имени, но рассмотрим использование generatedPlanes
-        GameObject[] wallPlanes = GameObject.FindGameObjectsWithTag("WallPlane");
+        // Если плоскости не найдены через системы, пробуем поиск по тегу/имени
         if (wallPlanes.Length == 0)
         {
-            wallPlanes = FindWallPlanesByName(); // Поиск по имени как фоллбэк
+            wallPlanes = GameObject.FindGameObjectsWithTag("WallPlane");
+            if (wallPlanes.Length == 0)
+            {
+                wallPlanes = FindWallPlanesByName(); // Поиск по имени как фоллбэк
+            }
         }
 
         Debug.Log($"[WallMaterialSetter] Найдено {wallPlanes.Length} плоскостей для возможного обновления материала.");
@@ -123,5 +118,27 @@ public class WallMaterialSetter : MonoBehaviour
         }
         // Debug.Log($"[WallMaterialSetter] Найдено по имени (FindWallPlanesByName): {foundPlanes.Count} плоскостей.");
         return foundPlanes.ToArray();
+    }
+
+    /// <summary>
+    /// Получает все плоскости из активной системы (WallPainterController или ARManagerInitializer2)
+    /// </summary>
+    private System.Collections.Generic.List<GameObject> GetAllPlanes()
+    {
+        var planes = new System.Collections.Generic.List<GameObject>();
+
+        // Сначала пробуем новую систему
+        if (wallPainterController != null)
+        {
+            planes.AddRange(wallPainterController.GeneratedPlanes);
+        }
+
+        // Затем старую систему
+        if (arManager != null)
+        {
+            planes.AddRange(arManager.GeneratedPlanes);
+        }
+
+        return planes;
     }
 }

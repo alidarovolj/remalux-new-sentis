@@ -11,6 +11,7 @@ public class SegmentationPlaneDebugger : MonoBehaviour
 {
       [Header("Ссылки на компоненты")]
       [SerializeField] private WallSegmentation wallSegmentation;
+      [SerializeField] private WallPainterController wallPainterController;
       [SerializeField] private ARManagerInitializer2 arManager;
 
       [Header("Настройки отладки")]
@@ -36,14 +37,29 @@ public class SegmentationPlaneDebugger : MonoBehaviour
             if (wallSegmentation == null)
                   wallSegmentation = FindObjectOfType<WallSegmentation>();
 
+            // Сначала ищем новую систему WallPainterController
+            if (wallPainterController == null)
+                  wallPainterController = FindObjectOfType<WallPainterController>();
+
+            // Если не найдена, ищем старую систему ARManagerInitializer2
             if (arManager == null)
                   arManager = FindObjectOfType<ARManagerInitializer2>();
 
-            if (wallSegmentation == null || arManager == null)
+            if (wallSegmentation == null)
             {
-                  Debug.LogError("[SegmentationPlaneDebugger] ❌ Не удалось найти WallSegmentation или ARManagerInitializer2!");
+                  Debug.LogError("[SegmentationPlaneDebugger] ❌ Не удалось найти WallSegmentation!");
                   return;
             }
+
+            if (wallPainterController == null && arManager == null)
+            {
+                  Debug.LogError("[SegmentationPlaneDebugger] ❌ Не удалось найти WallPainterController или ARManagerInitializer2!");
+                  return;
+            }
+
+            // Определяем какая система активна
+            string activeSystem = wallPainterController != null ? "WallPainterController (новая)" : "ARManagerInitializer2 (старая)";
+            Debug.Log($"[SegmentationPlaneDebugger] ✅ Подключен к системе: {activeSystem}");
 
             // Подписываемся на события
             wallSegmentation.OnSegmentationMaskUpdated += OnSegmentationMaskUpdated;
@@ -116,8 +132,16 @@ public class SegmentationPlaneDebugger : MonoBehaviour
                       $"Красных пикселей: {redPixelCount}/{pixels.Length} ({redPixelPercentage:F1}%), " +
                       $"Макс. красный: {maxRedValue:F2}");
 
-            // Проверяем настройки ARManager
-            if (arManager != null)
+            // Проверяем настройки активной системы
+            if (wallPainterController != null)
+            {
+                  Debug.Log($"[SegmentationPlaneDebugger] ⚙️ Настройки WallPainterController: " +
+                            $"debugMode={GetPrivateField<bool>(wallPainterController, "debugMode")}, " +
+                            $"segmentationConfidence={GetPrivateField<float>(wallPainterController, "segmentationConfidence")}, " +
+                            $"maxRaycastDistance={GetPrivateField<float>(wallPainterController, "maxRaycastDistance")}, " +
+                            $"minContourArea={GetPrivateField<int>(wallPainterController, "minContourArea")}");
+            }
+            else if (arManager != null)
             {
                   Debug.Log($"[SegmentationPlaneDebugger] ⚙️ Настройки ARManager: " +
                             $"useDetectedPlanes={arManager.useDetectedPlanes}, " +
@@ -159,14 +183,34 @@ public class SegmentationPlaneDebugger : MonoBehaviour
                   }
 
                   // Проверяем количество сгенерированных плоскостей
-                  if (arManager != null)
+                  if (wallPainterController != null)
+                  {
+                        // Для новой системы ищем объекты с тегом "WallPlane" или по названию
+                        var wallPlanes = GameObject.FindObjectsOfType<GameObject>()
+                            .Where(go => go.name.Contains("WallPlane") || go.name.Contains("Wall_") || go.tag == "WallPlane")
+                            .ToArray();
+                        planesGeneratedCount = wallPlanes.Length;
+
+                        if (planesGeneratedCount > 0 && enableDebugLogging && Time.frameCount % 300 == 0)
+                        {
+                              Debug.Log($"[SegmentationPlaneDebugger] ✅ Найдено плоскостей WallPainter: {planesGeneratedCount}");
+                              foreach (var plane in wallPlanes.Take(3)) // Показываем первые 3
+                              {
+                                    if (plane != null)
+                                    {
+                                          Debug.Log($"  - {plane.name}: Pos={plane.transform.position}, Size={GetPlaneSize(plane)}");
+                                    }
+                              }
+                        }
+                  }
+                  else if (arManager != null)
                   {
                         var generatedPlanes = arManager.GeneratedPlanes;
                         planesGeneratedCount = generatedPlanes?.Count ?? 0;
 
                         if (planesGeneratedCount > 0 && enableDebugLogging && Time.frameCount % 300 == 0)
                         {
-                              Debug.Log($"[SegmentationPlaneDebugger] ✅ Сгенерировано плоскостей: {planesGeneratedCount}");
+                              Debug.Log($"[SegmentationPlaneDebugger] ✅ Сгенерировано плоскостей ARManager: {planesGeneratedCount}");
                               foreach (var plane in generatedPlanes.Take(3)) // Показываем первые 3
                               {
                                     if (plane != null)

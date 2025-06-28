@@ -19,24 +19,30 @@ public class PlaneGeometryAnalyzer : MonoBehaviour
       [SerializeField] private float maxWallWidth = 4.0f;  // ИСПРАВЛЕНО: Реалистичная максимальная ширина стены
 
       private ARManagerInitializer2 arManager;
+      private WallPainterController wallPainterController;
       private float lastAnalysisTime = 0f;
 
       private void Start()
       {
-            // Находим ARManagerInitializer2
+            // Сначала ищем новую систему WallPainterController
+            wallPainterController = FindObjectOfType<WallPainterController>();
+
+            // Затем ищем старую систему ARManagerInitializer2  
             arManager = FindObjectOfType<ARManagerInitializer2>();
-            if (arManager == null)
+
+            if (wallPainterController == null && arManager == null)
             {
-                  Debug.LogError("[PlaneGeometryAnalyzer] ARManagerInitializer2 не найден!");
+                  Debug.LogError("[PlaneGeometryAnalyzer] ❌ Не найдены ни WallPainterController, ни ARManagerInitializer2!");
                   return;
             }
 
-            Debug.Log("[PlaneGeometryAnalyzer] ✅ Инициализирован. Начинаю анализ геометрии плоскостей...");
+            string activeSystem = wallPainterController != null ? "WallPainterController (новая)" : "ARManagerInitializer2 (старая)";
+            Debug.Log($"[PlaneGeometryAnalyzer] ✅ Инициализирован с системой: {activeSystem}. Начинаю анализ геометрии плоскостей...");
       }
 
       private void Update()
       {
-            if (!enableContinuousAnalysis || arManager == null) return;
+            if (!enableContinuousAnalysis || (wallPainterController == null && arManager == null)) return;
 
             if (Time.time - lastAnalysisTime >= analysisInterval)
             {
@@ -48,9 +54,7 @@ public class PlaneGeometryAnalyzer : MonoBehaviour
       [ContextMenu("Анализировать геометрию плоскостей")]
       public void AnalyzePlanesGeometry()
       {
-            if (arManager == null) return;
-
-            var planes = arManager.GeneratedPlanes;
+            var planes = GetAllPlanes();
             if (planes.Count == 0)
             {
                   Debug.Log("[PlaneGeometryAnalyzer] 📊 Нет созданных плоскостей для анализа");
@@ -98,13 +102,60 @@ public class PlaneGeometryAnalyzer : MonoBehaviour
             if (meshFilter != null && meshFilter.mesh != null)
             {
                   var bounds = meshFilter.mesh.bounds;
-                  data.Width = bounds.size.x * plane.transform.localScale.x;
-                  data.Height = bounds.size.y * plane.transform.localScale.y;
-                  data.Depth = bounds.size.z * plane.transform.localScale.z;
+
+                  // Учитываем масштаб и вращение для правильного определения размеров
+                  var scale = plane.transform.localScale;
+                  var rotation = plane.transform.rotation;
+
+                  // Вычисляем размеры с учетом ориентации
+                  Vector3 size = Vector3.Scale(bounds.size, scale);
+
+                  // Для вертикальных плоскостей используем правильные оси
+                  var forward = plane.transform.forward;
+                  var right = plane.transform.right;
+                  var up = plane.transform.up;
+
+                  // Определяем какой размер соответствует ширине и высоте
+                  float dotUp = Mathf.Abs(Vector3.Dot(up, Vector3.up));
+                  float dotRight = Mathf.Abs(Vector3.Dot(right, Vector3.up));
+                  float dotForward = Mathf.Abs(Vector3.Dot(forward, Vector3.up));
+
+                  if (dotUp > dotRight && dotUp > dotForward)
+                  {
+                        // Up axis направлен вверх
+                        data.Width = Mathf.Max(size.x, size.z);
+                        data.Height = size.y;
+                        data.Depth = Mathf.Min(size.x, size.z);
+                  }
+                  else if (dotRight > dotForward)
+                  {
+                        // Right axis направлен вверх
+                        data.Width = Mathf.Max(size.y, size.z);
+                        data.Height = size.x;
+                        data.Depth = Mathf.Min(size.y, size.z);
+                  }
+                  else
+                  {
+                        // Forward axis направлен вверх
+                        data.Width = Mathf.Max(size.x, size.y);
+                        data.Height = size.z;
+                        data.Depth = Mathf.Min(size.x, size.y);
+                  }
+
+                  // Обеспечиваем минимальные размеры
+                  data.Width = Mathf.Max(data.Width, 0.01f);
+                  data.Height = Mathf.Max(data.Height, 0.01f);
+                  data.Depth = Mathf.Max(data.Depth, 0.01f);
+            }
+            else
+            {
+                  // Fallback: используем масштаб трансформа
+                  data.Width = Mathf.Max(plane.transform.localScale.x, 0.01f);
+                  data.Height = Mathf.Max(plane.transform.localScale.y, 0.01f);
+                  data.Depth = Mathf.Max(plane.transform.localScale.z, 0.01f);
             }
 
             // Определяем ориентацию плоскости
-            var up = plane.transform.up;
             var normal = plane.transform.forward;
 
             // Угол с вертикалью
@@ -208,6 +259,8 @@ public class PlaneGeometryAnalyzer : MonoBehaviour
             }
       }
 
+
+
       private bool IsValidWallDimensions(PlaneGeometryData plane)
       {
             return plane.Width >= minWallWidth && plane.Width <= maxWallWidth &&
@@ -232,9 +285,7 @@ public class PlaneGeometryAnalyzer : MonoBehaviour
       [ContextMenu("Экспорт данных в лог")]
       public void ExportPlaneDataToLog()
       {
-            if (arManager == null) return;
-
-            var planes = arManager.GeneratedPlanes;
+            var planes = GetAllPlanes();
             Debug.Log($"[PlaneGeometryAnalyzer] 📋 === ЭКСПОРТ ДАННЫХ {planes.Count} ПЛОСКОСТЕЙ ===");
 
             foreach (var plane in planes)
@@ -248,6 +299,23 @@ public class PlaneGeometryAnalyzer : MonoBehaviour
 
                   Debug.Log($"[PlaneGeometryAnalyzer] CSV: {csvLine}");
             }
+      }
+
+      private List<GameObject> GetAllPlanes()
+      {
+            var planes = new List<GameObject>();
+
+            if (wallPainterController != null)
+            {
+                  planes.AddRange(wallPainterController.GeneratedPlanes);
+            }
+
+            if (arManager != null)
+            {
+                  planes.AddRange(arManager.GeneratedPlanes);
+            }
+
+            return planes;
       }
 }
 
