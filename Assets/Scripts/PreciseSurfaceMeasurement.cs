@@ -3,6 +3,7 @@ using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.XR.CoreUtils;
 
 /// <summary>
 /// Система точного измерения поверхностей для создания плоскостей реальных размеров
@@ -12,7 +13,7 @@ public class PreciseSurfaceMeasurement : MonoBehaviour
       [Header("Компоненты для измерения")]
       [SerializeField] private ARPlaneManager planeManager;
       [SerializeField] private ARPointCloudManager pointCloudManager;
-      [SerializeField] private ARSessionOrigin sessionOrigin;
+      [SerializeField] private XROrigin sessionOrigin;
       [SerializeField] private Camera arCamera;
 
       [Header("Настройки калибровки")]
@@ -65,7 +66,7 @@ public class PreciseSurfaceMeasurement : MonoBehaviour
                   pointCloudManager = FindObjectOfType<ARPointCloudManager>();
 
             if (sessionOrigin == null)
-                  sessionOrigin = FindObjectOfType<ARSessionOrigin>();
+                  sessionOrigin = FindObjectOfType<XROrigin>();
 
             if (arCamera == null)
                   arCamera = Camera.main;

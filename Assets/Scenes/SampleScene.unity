@@ -390,6 +390,10 @@ PrefabInstance:
         type: 3}
       insertIndex: -1
       addedObject: {fileID: 1004066123}
+    - targetCorrespondingSourceObject: {fileID: 2512387470528047719, guid: 48cb3fb68c91eb94999fd99957eb0cae,
+        type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1004066124}
   m_SourcePrefab: {fileID: 100100000, guid: 48cb3fb68c91eb94999fd99957eb0cae, type: 3}
 --- !u!114 &331264286 stripped
 MonoBehaviour:
@@ -576,6 +580,7 @@ GameObject:
   - component: {fileID: 511383934}
   - component: {fileID: 511383933}
   - component: {fileID: 511383932}
+  - component: {fileID: 511383936}
   m_Layer: 0
   m_Name: WallPainterController
   m_TagString: Untagged
@@ -597,20 +602,22 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   wallSegmentation: {fileID: 956393578}
   arCamera: {fileID: 331264288}
-  raycastManager: {fileID: 331264286}
+  raycastManager: {fileID: 511383933}
+  planeManager: {fileID: 0}
+  m_AnchorManager: {fileID: 0}
   wallPlanePrefab: {fileID: 3917181021891084353, guid: 5aa212ceb657e42f288aa70c17fcb592,
     type: 3}
-  wallPaintMaterial: {fileID: 2100000, guid: 12d2490fa9cda4eafb7039a02d320d6a, type: 2}
+  wallPaintMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4, type: 2}
   segmentationConfidence: 0.75
   maxRaycastDistance: 5
   minContourArea: 1000
-  planeSizeMultiplier: 1
-  maxWallWidth: 10
-  maxWallHeight: 10
-  maxPlaneCalculationDistance: 10
   contourSimplificationTolerance: 2
-  debugMode: 1
-  showContourVisualization: 1
+  stabilizationFrames: 5
+  positionFilterQ: 0.005
+  positionFilterR: 0.1
+  rotationSmoothingFactor: 0.15
+  debugMode: 0
+  showContourVisualization: 0
   debugContourMaterial: {fileID: 0}
 --- !u!114 &511383933
 MonoBehaviour:
@@ -657,6 +664,19 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &511383936
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 511383931}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 728ad7fae8e460a4ba41265c7308d757, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_AnchorPrefab: {fileID: 0}
 --- !u!1 &687729649
 GameObject:
   m_ObjectHideFlags: 0
@@ -867,6 +887,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   wallSegmentation: {fileID: 956393578}
+  wallPainterController: {fileID: 0}
   arManager: {fileID: 367304186}
   enableDebugLogging: 1
   visualizeRaycastResults: 1
@@ -923,52 +944,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e883d66876404ea4ea89b2bd73fe9657, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  modelAsset: {fileID: 5022602860645237092, guid: 7fb62a2f4059841628326f9c81eb8875,
-    type: 3}
-  preferredBackend: 1
-  useSafeModelLoading: 1
-  modelLoadTimeout: 30
-  forceXRSimulationCapture: 1
-  wallClassIndex: 0
-  floorClassIndex: 2
-  wallConfidence: 0.15
-  floorConfidence: 0.15
-  detectFloor: 0
+  segmentationMaskTexture: {fileID: 0}
   inputResolution: {x: 224, y: 224}
-  useSimulationIfNoCamera: 1
-  failureThresholdForSimulation: 10
+  arCameraManager: {fileID: 0}
   arSessionManager: {fileID: 1288005832}
   xrOrigin: {fileID: 1004066121}
-  segmentationMaskTexture: {fileID: 0}
-  segmentationConfidenceThreshold: 0.15
-  floorConfidenceThreshold: 0.15
-  modelPath: segformer-model-new.sentis
-  selectedBackend: 0
-  segmentationMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b,
-    type: 2}
-  debugMaskSavePath: DebugMasks
-  debugMode: 1
-  debugFlags: 4
-  saveDebugMask: 1
-  debugSavePath: SegmentationMasks
-  useSimulationIfCameraFails: 1
-  maxConsecutiveFailsBeforeSimulation: 5
-  applyMaskSmoothing: 0
-  maskBlurSize: 3
-  applySharpening: 0
-  sharpenStrength: 0.8
-  applyContrastAdjustment: 1
-  contrastThreshold: 0.5
-  contrastMultiplier: 1.5
-  enhanceEdges: 1
-  enhanceContrast: 1
-  applyGaussianBlur: 1
-  gaussianBlurSize: 0.5
-  minComponentSize: 50
-  morphologyKernelSize: 2
-  filterCeilingRegions: 1
-  maxTopRegionRatio: 0.25
-  logProcessingTime: 0
 --- !u!4 &956393579
 Transform:
   m_ObjectHideFlags: 0
@@ -1017,20 +997,36 @@ MonoBehaviour:
   wallSegmentation: {fileID: 956393578}
   arCamera: {fileID: 331264288}
   raycastManager: {fileID: 331264286}
+  planeManager: {fileID: 151853166}
+  m_AnchorManager: {fileID: 1004066124}
   wallPlanePrefab: {fileID: 3917181021891084353, guid: 5aa212ceb657e42f288aa70c17fcb592,
     type: 3}
   wallPaintMaterial: {fileID: 2100000, guid: 2d8bbbe4759fb0346b0c66902365902b, type: 2}
   segmentationConfidence: 0.75
   maxRaycastDistance: 5
   minContourArea: 1000
-  planeSizeMultiplier: 1
-  maxWallWidth: 10
-  maxWallHeight: 10
-  maxPlaneCalculationDistance: 10
   contourSimplificationTolerance: 2
+  stabilizationFrames: 5
+  positionFilterQ: 0.005
+  positionFilterR: 0.1
+  rotationSmoothingFactor: 0.15
   debugMode: 1
   showContourVisualization: 1
-  debugContourMaterial: {fileID: 0}
+  debugContourMaterial: {fileID: 2100000, guid: 3e1c49e7077310249b71ba38ae9a8799,
+    type: 2}
+--- !u!114 &1004066124
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 331264289}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 728ad7fae8e460a4ba41265c7308d757, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_AnchorPrefab: {fileID: 0}
 --- !u!1 &1009996019
 GameObject:
   m_ObjectHideFlags: 0
