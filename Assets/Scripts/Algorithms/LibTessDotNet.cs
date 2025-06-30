@@ -1,19 +1,43 @@
 ﻿/*
-** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008) 
-** Copyright (C) 2011 Silicon Graphics, Inc.
-** All Rights Reserved.
+ * LibTessDotNet
+ *
+ * Copyright (c) 2010-2014 Stefan Gustavson, polymonistic
+ *
+ * Copyright (c) 2014-2021 Remi Gillig
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+/*
+** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008)
+** Copyright (C) 1991-2000 Silicon Graphics, Inc. All Rights Reserved.
 **
 ** Permission is hereby granted, free of charge, to any person obtaining a copy
 ** of this software and associated documentation files (the "Software"), to deal
 ** in the Software without restriction, including without limitation the rights
-** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-** of the Software, and to permit persons to whom the Software is furnished to do so,
-** subject to the following conditions:
+** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+** copies of the Software, and to permit persons to whom the Software is
+** furnished to do so, subject to the following conditions:
 ** 
 ** The above copyright notice including the dates of first publication and either this
 ** permission notice or a reference to http://oss.sgi.com/projects/FreeB/ shall be
-** included in all copies or substantial portions of the Software. 
-**
+** included in all copies or substantial portions of the Software.
+** 
 ** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
 ** INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
 ** PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL SILICON GRAPHICS, INC.
@@ -34,6 +58,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+
 #if DOUBLE
 using Real = System.Double;
 #else
@@ -844,38 +869,6 @@ namespace LibTessDotNet
         }
     }
 }
-/*
-** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008) 
-** Copyright (C) 2011 Silicon Graphics, Inc.
-** All Rights Reserved.
-**
-** Permission is hereby granted, free of charge, to any person obtaining a copy
-** of this software and associated documentation files (the "Software"), to deal
-** in the Software without restriction, including without limitation the rights
-** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-** of the Software, and to permit persons to whom the Software is furnished to do so,
-** subject to the following conditions:
-** 
-** The above copyright notice including the dates of first publication and either this
-** permission notice or a reference to http://oss.sgi.com/projects/FreeB/ shall be
-** included in all copies or substantial portions of the Software. 
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-** INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-** PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL SILICON GRAPHICS, INC.
-** BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
-** OR OTHER DEALINGS IN THE SOFTWARE.
-** 
-** Except as contained in this notice, the name of Silicon Graphics, Inc. shall not
-** be used in advertising or otherwise to promote the sale, use or other dealings in
-** this Software without prior written authorization from Silicon Graphics, Inc.
-*/
-/*
-** Original Author: Eric Veach, July 1994.
-** libtess2: Mikko Mononen, http://code.google.com/p/libtess2/.
-** LibTessDotNet: Remi Gillig, https://github.com/speps/LibTessDotNet
-*/
 
 #if DOUBLE
 namespace LibTessDotNet.Double
@@ -1423,38 +1416,6 @@ namespace LibTessDotNet
         }
     }
 }
-/*
-** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008) 
-** Copyright (C) 2011 Silicon Graphics, Inc.
-** All Rights Reserved.
-**
-** Permission is hereby granted, free of charge, to any person obtaining a copy
-** of this software and associated documentation files (the "Software"), to deal
-** in the Software without restriction, including without limitation the rights
-** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-** of the Software, and to permit persons to whom the Software is furnished to do so,
-** subject to the following conditions:
-** 
-** The above copyright notice including the dates of first publication and either this
-** permission notice or a reference to http://oss.sgi.com/projects/FreeB/ shall be
-** included in all copies or substantial portions of the Software. 
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-** INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-** PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL SILICON GRAPHICS, INC.
-** BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
-** OR OTHER DEALINGS IN THE SOFTWARE.
-** 
-** Except as contained in this notice, the name of Silicon Graphics, Inc. shall not
-** be used in advertising or otherwise to promote the sale, use or other dealings in
-** this Software without prior written authorization from Silicon Graphics, Inc.
-*/
-/*
-** Original Author: Eric Veach, July 1994.
-** libtess2: Mikko Mononen, http://code.google.com/p/libtess2/.
-** LibTessDotNet: Remi Gillig, https://github.com/speps/LibTessDotNet
-*/
 
 #if DOUBLE
 namespace LibTessDotNet.Double
@@ -1665,38 +1626,6 @@ namespace LibTessDotNet
         }
     }
 }
-/*
-** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008) 
-** Copyright (C) 2011 Silicon Graphics, Inc.
-** All Rights Reserved.
-**
-** Permission is hereby granted, free of charge, to any person obtaining a copy
-** of this software and associated documentation files (the "Software"), to deal
-** in the Software without restriction, including without limitation the rights
-** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-** of the Software, and to permit persons to whom the Software is furnished to do so,
-** subject to the following conditions:
-** 
-** The above copyright notice including the dates of first publication and either this
-** permission notice or a reference to http://oss.sgi.com/projects/FreeB/ shall be
-** included in all copies or substantial portions of the Software. 
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-** INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-** PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL SILICON GRAPHICS, INC.
-** BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
-** OR OTHER DEALINGS IN THE SOFTWARE.
-** 
-** Except as contained in this notice, the name of Silicon Graphics, Inc. shall not
-** be used in advertising or otherwise to promote the sale, use or other dealings in
-** this Software without prior written authorization from Silicon Graphics, Inc.
-*/
-/*
-** Original Author: Eric Veach, July 1994.
-** libtess2: Mikko Mononen, http://code.google.com/p/libtess2/.
-** LibTessDotNet: Remi Gillig, https://github.com/speps/LibTessDotNet
-*/
 
 #if DOUBLE
 namespace LibTessDotNet.Double
@@ -1893,38 +1822,6 @@ namespace LibTessDotNet
         }
     }
 }
-/*
-** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008) 
-** Copyright (C) 2011 Silicon Graphics, Inc.
-** All Rights Reserved.
-**
-** Permission is hereby granted, free of charge, to any person obtaining a copy
-** of this software and associated documentation files (the "Software"), to deal
-** in the Software without restriction, including without limitation the rights
-** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-** of the Software, and to permit persons to whom the Software is furnished to do so,
-** subject to the following conditions:
-** 
-** The above copyright notice including the dates of first publication and either this
-** permission notice or a reference to http://oss.sgi.com/projects/FreeB/ shall be
-** included in all copies or substantial portions of the Software. 
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-** INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-** PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL SILICON GRAPHICS, INC.
-** BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
-** OR OTHER DEALINGS IN THE SOFTWARE.
-** 
-** Except as contained in this notice, the name of Silicon Graphics, Inc. shall not
-** be used in advertising or otherwise to promote the sale, use or other dealings in
-** this Software without prior written authorization from Silicon Graphics, Inc.
-*/
-/*
-** Original Author: Eric Veach, July 1994.
-** libtess2: Mikko Mononen, http://code.google.com/p/libtess2/.
-** LibTessDotNet: Remi Gillig, https://github.com/speps/LibTessDotNet
-*/
 
 #if DOUBLE
 namespace LibTessDotNet.Double
@@ -3153,38 +3050,6 @@ namespace LibTessDotNet
         }
     }
 }
-/*
-** SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008) 
-** Copyright (C) 2011 Silicon Graphics, Inc.
-** All Rights Reserved.
-**
-** Permission is hereby granted, free of charge, to any person obtaining a copy
-** of this software and associated documentation files (the "Software"), to deal
-** in the Software without restriction, including without limitation the rights
-** to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-** of the Software, and to permit persons to whom the Software is furnished to do so,
-** subject to the following conditions:
-** 
-** The above copyright notice including the dates of first publication and either this
-** permission notice or a reference to http://oss.sgi.com/projects/FreeB/ shall be
-** included in all copies or substantial portions of the Software. 
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-** INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-** PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL SILICON GRAPHICS, INC.
-** BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
-** OR OTHER DEALINGS IN THE SOFTWARE.
-** 
-** Except as contained in this notice, the name of Silicon Graphics, Inc. shall not
-** be used in advertising or otherwise to promote the sale, use or other dealings in
-** this Software without prior written authorization from Silicon Graphics, Inc.
-*/
-/*
-** Original Author: Eric Veach, July 1994.
-** libtess2: Mikko Mononen, http://code.google.com/p/libtess2/.
-** LibTessDotNet: Remi Gillig, https://github.com/speps/LibTessDotNet
-*/
 
 #if DOUBLE
 namespace LibTessDotNet.Double
@@ -3952,40 +3817,24 @@ namespace LibTessDotNet
         public void Tessellate(WindingRule windingRule = WindingRule.EvenOdd, ElementType elementType = ElementType.Polygons, int polySize = 3,
             CombineCallback combineCallback = null, Vec3 normal = new Vec3())
         {
-            _normal = normal;
-            _vertices = null;
-            _elements = null;
+            if (_pool == null)
+            {
+                _pool = new DefaultPool();
+            }
+            if (_mesh == null)
+            {
+                _mesh = _pool.Get<Mesh>();
+            }
 
             _windingRule = windingRule;
             _combineCallback = combineCallback;
-
-            if (_mesh == null)
+            if (normal.X != 0.0f || normal.Y != 0.0f || normal.Z != 0.0f)
             {
-                return;
+                ComputeNormal(ref normal);
             }
 
-            // Determine the polygon normal and project vertices onto the plane
-            // of the polygon.
             ProjectPolygon();
-
-            // ComputeInterior computes the planar arrangement specified
-            // by the given contours, and further subdivides this arrangement
-            // into regions.  Each region is marked "inside" if it belongs
-            // to the polygon, according to the rule given by windingRule.
-            // Each interior region is guaranteed be monotone.
             ComputeInterior();
-
-            // If the user wants only the boundary contours, we throw away all edges
-            // except those which separate the interior from the exterior.
-            // Otherwise we tessellate all the regions marked "inside".
-            if (elementType == ElementType.BoundaryContours)
-            {
-                SetWindingNumber(1, true);
-            }
-            else
-            {
-                TessellateInterior();
-            }
 
             _mesh.Check();
 
@@ -3995,11 +3844,21 @@ namespace LibTessDotNet
             }
             else
             {
+                int maxFaceVerts = polySize;
+                if (polySize == 3)
+                {
+                    maxFaceVerts = 3;
+                }
+                _mesh.MergeConvexFaces(_pool, maxFaceVerts);
                 OutputPolymesh(elementType, polySize);
             }
 
-            _pool.Return(_mesh);
-            _mesh = null;
+            if (_pool is DefaultPool)
+            {
+                _mesh.Reset(_pool);
+                _pool.Return(_mesh);
+                _mesh = null;
+            }
         }
     }
 }

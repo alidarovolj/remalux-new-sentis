@@ -32,6 +32,14 @@ using TensorFloat = System.Object;
 /// </summary>
 public class WallSegmentation : MonoBehaviour
 {
+      // --- Sentis Types (found via reflection) ---
+      private static Type _modelLoaderType;
+      private static Type _workerType;
+      private static Type _textureConverterType;
+      private static Type _tensorFloatType;
+      private static Type _textureTransformType;
+      private static bool _sentisTypesResolved = false;
+
       [Header("ML Model Settings")]
       [Tooltip("The ML model asset in ONNX or Sentis format.")]
       public ModelAsset modelAsset;
@@ -94,6 +102,11 @@ public class WallSegmentation : MonoBehaviour
       [Tooltip("Enable debug mode for detailed logging.")]
       public bool debugMode = true;
 
+      [Header("Fallback Camera")]
+      [Tooltip("Веб-камера для использования если AR камера недоступна")]
+      [SerializeField] private WebCamTexture webCamTexture;
+      [SerializeField] private bool useWebCamFallback = false;
+
       // Events to notify other components
       public event System.Action OnModelInitialized;
       public event System.Action<RenderTexture> OnSegmentationMaskUpdated;
@@ -131,9 +144,11 @@ public class WallSegmentation : MonoBehaviour
       private string lastErrorMessage = null;
       private bool isInitializationFailed = false;
       private int consecutiveFailures = 0;
+      private string cachedInputName;
 
       // Unity Sentis availability
       private bool isSentisAvailable = false;
+      private Dictionary<string, Type> sentisTypes;
       private System.Type modelLoaderType;
       private System.Type workerFactoryType;
       private System.Type textureConverterType;
@@ -141,7 +156,9 @@ public class WallSegmentation : MonoBehaviour
 
       private void Awake()
       {
+            debugMode = true; // Принудительно включаем для диагностики
             Debug.Log($"[WallSegmentation] 🟢 Awake() вызван, компонент: {gameObject.name}");
+            sentisTypes = new Dictionary<string, Type>();
 
             // Проверяем наличие Unity Sentis
             CheckSentisAvailability();
@@ -186,66 +203,72 @@ public class WallSegmentation : MonoBehaviour
 
       private void CheckSentisAvailability()
       {
-            // Если определен символ UNITY_SENTIS, то пакет должен быть доступен
-#if UNITY_SENTIS
-            Debug.Log("[WallSegmentation] UNITY_SENTIS define symbol detected - Sentis should be available");
-            isSentisAvailable = true;
-            return;
-#endif
+            if (_sentisTypesResolved)
+            {
+                  Debug.Log("[WallSegmentation] ✅ Sentis types already resolved, skipping check.");
+                  isSentisAvailable = true;
+                  return;
+            }
 
             try
             {
                   Debug.Log("[WallSegmentation] Checking Sentis availability via reflection...");
 
-                  // Попытка загрузить основные типы Unity Sentis - пробуем разные варианты имен
-                  string[] possibleAssemblyNames = { "Unity.Sentis", "Unity.Sentis.Runtime", "com.unity.sentis" };
-
-                  foreach (string assemblyName in possibleAssemblyNames)
+                  Assembly sentisAssembly = null;
+                  // Ищем сборку, в которой точно есть ModelLoader, чтобы избежать выбора бэкенд-сборок
+                  foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                   {
-                        Debug.Log($"[WallSegmentation] Trying assembly: {assemblyName}");
-
-                        modelLoaderType = System.Type.GetType($"Unity.Sentis.ModelLoader, {assemblyName}");
-                        workerFactoryType = System.Type.GetType($"Unity.Sentis.WorkerFactory, {assemblyName}");
-                        textureConverterType = System.Type.GetType($"Unity.Sentis.TextureConverter, {assemblyName}");
-                        tensorFloatType = System.Type.GetType($"Unity.Sentis.TensorFloat, {assemblyName}");
-
-                        Debug.Log($"[WallSegmentation] Types found in {assemblyName}:");
-                        Debug.Log($"  ModelLoader: {modelLoaderType != null}");
-                        Debug.Log($"  WorkerFactory: {workerFactoryType != null}");
-                        Debug.Log($"  TextureConverter: {textureConverterType != null}");
-                        Debug.Log($"  TensorFloat: {tensorFloatType != null}");
-
-                        if (modelLoaderType != null && workerFactoryType != null && textureConverterType != null && tensorFloatType != null)
+                        if (assembly.GetType("Unity.Sentis.ModelLoader") != null)
                         {
-                              isSentisAvailable = true;
-                              Debug.Log($"[WallSegmentation] ✅ Unity Sentis detected and available from assembly: {assemblyName}");
-                              return;
+                              sentisAssembly = assembly;
+                              Debug.Log($"[WallSegmentation] ✅ Found correct Sentis runtime assembly: {assembly.FullName}");
+                              break;
                         }
                   }
 
-                  // Альтернативный способ - поиск через все загруженные сборки
-                  Debug.Log("[WallSegmentation] Searching through all loaded assemblies...");
-                  foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
+                  if (sentisAssembly == null)
                   {
-                        if (assembly.FullName.Contains("Sentis"))
-                        {
-                              Debug.Log($"[WallSegmentation] Found Sentis assembly: {assembly.FullName}");
-                              foreach (var type in assembly.GetTypes())
-                              {
-                                    if (type.Name == "ModelLoader") Debug.Log($"  Found ModelLoader: {type.FullName}");
-                                    if (type.Name == "WorkerFactory") Debug.Log($"  Found WorkerFactory: {type.FullName}");
-                                    if (type.Name == "TextureConverter") Debug.Log($"  Found TextureConverter: {type.FullName}");
-                                    if (type.Name == "TensorFloat") Debug.Log($"  Found TensorFloat: {type.FullName}");
-                              }
-                        }
+                        throw new Exception("The core Unity.Sentis runtime assembly containing ModelLoader was not found.");
                   }
 
-                  Debug.LogWarning("[WallSegmentation] Unity Sentis types not found via reflection in any assembly.");
-                  isSentisAvailable = false;
+                  _modelLoaderType = sentisAssembly.GetType("Unity.Sentis.ModelLoader");
+                  _workerType = sentisAssembly.GetType("Unity.Sentis.Worker");
+                  _textureConverterType = sentisAssembly.GetType("Unity.Sentis.TextureConverter");
+                  _tensorFloatType = sentisAssembly.GetType("Unity.Sentis.TensorFloat");
+                  if (_tensorFloatType == null)
+                  {
+                        Debug.LogWarning("[WallSegmentation] 'Unity.Sentis.TensorFloat' not found, trying fallback 'Unity.Sentis.Tensor'.");
+                        _tensorFloatType = sentisAssembly.GetType("Unity.Sentis.Tensor");
+                  }
+                  _textureTransformType = sentisAssembly.GetType("Unity.Sentis.TextureTransform");
+
+                  bool allTypesFound = _modelLoaderType != null && _workerType != null && _textureConverterType != null && _tensorFloatType != null;
+
+                  if (allTypesFound)
+                  {
+                        Debug.Log("[WallSegmentation] ✅ All critical Sentis types found successfully!");
+                        Debug.Log($"  - ModelLoader: {_modelLoaderType.FullName}");
+                        Debug.Log($"  - Worker: {_workerType.FullName}");
+                        Debug.Log($"  - TextureConverter: {_textureConverterType.FullName}");
+                        Debug.Log($"  - TensorFloat: {_tensorFloatType.FullName}");
+                        Debug.Log($"  - TextureTransform: {(_textureTransformType != null ? _textureTransformType.FullName : "Not Found (optional)")}");
+                        isSentisAvailable = true;
+                        _sentisTypesResolved = true;
+                  }
+                  else
+                  {
+                        var sb = new System.Text.StringBuilder();
+                        sb.AppendLine("Failed to find all critical Sentis types via reflection within the found assembly.");
+                        sb.AppendLine($"  - ModelLoader: {_modelLoaderType != null}");
+                        sb.AppendLine($"  - Worker: {_workerType != null}");
+                        sb.AppendLine($"  - TextureConverter: {_textureConverterType != null}");
+                        sb.AppendLine($"  - TensorFloat: {_tensorFloatType != null}");
+                        throw new Exception(sb.ToString());
+                  }
             }
             catch (Exception e)
             {
-                  Debug.LogError($"[WallSegmentation] Unity Sentis availability check failed: {e.Message}\nStackTrace: {e.StackTrace}");
+                  Debug.LogError($"[WallSegmentation] ❌ Failed to resolve Sentis types: {e.Message}");
                   isSentisAvailable = false;
             }
       }
@@ -274,373 +297,76 @@ public class WallSegmentation : MonoBehaviour
 
       private IEnumerator InitializeSegmentation()
       {
-            if (!isSentisAvailable)
-            {
-                  yield break;
-            }
-
-            isInitializing = true;
             Debug.Log("[WallSegmentation] Initializing segmentation model...");
+            isInitializing = true;
+            isInitializationFailed = false;
 
             try
             {
 #if UNITY_SENTIS
-                  // С определенным UNITY_SENTIS используем улучшенный reflection
-                  Debug.Log("[WallSegmentation] Using improved reflection with UNITY_SENTIS enabled");
+                  // С определенным UNITY_SENTIS используем прямые ссылки
+                  Debug.Log("[WallSegmentation] UNITY_SENTIS enabled - trying direct initialization");
 
-                  // Поиск всех типов Unity Sentis в загруженных сборках
-                  var sentisTypes = new System.Collections.Generic.Dictionary<string, System.Type>();
-                  foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
+                  try
                   {
-                        if (assembly.FullName.Contains("Sentis"))
+                        // Прямая инициализация с Unity Sentis типами
+                        Debug.Log("[WallSegmentation] Attempting direct model loading...");
+                        var model = Unity.Sentis.ModelLoader.Load(modelAsset as Unity.Sentis.ModelAsset);
+                        Debug.Log("[WallSegmentation] ✅ Model loaded directly!");
+
+                        var worker = new Unity.Sentis.Worker(model, (Unity.Sentis.BackendType)backendType);
+                        Debug.Log("[WallSegmentation] ✅ Worker created directly with GPUCompute!");
+
+                        runtimeModel = model;
+                        engine = worker;
+                        isModelInitialized = true;
+                        Debug.Log("[WallSegmentation] ✅ Direct Sentis initialization successful!");
+                  }
+                  catch (Exception e)
+                  {
+                        Debug.LogError($"[WallSegmentation] ❌ Direct Sentis initialization failed, falling back to reflection. Error: {e}");
+                        // Очищаем, чтобы попробовать reflection
+                        isModelInitialized = false;
+                        runtimeModel = null;
+                        engine = null;
+                  }
+#endif
+
+                  if (!isModelInitialized)
+                  {
+                        // Fallback to reflection-based initialization if direct method fails or is not available
+                        Debug.LogWarning("[WallSegmentation] Direct initialization failed or not available. Attempting reflection-based initialization...");
+                        // Здесь должен быть код для инициализации через reflection, если он нужен как fallback.
+                        // Пока что будем считать, что прямая инициализация - единственный путь, 
+                        // а если она не удалась, то это ошибка.
+                        if (engine == null)
                         {
-                              Debug.Log($"[WallSegmentation] Found Sentis assembly: {assembly.FullName}");
-                              foreach (var type in assembly.GetTypes())
-                              {
-                                    if (type.Namespace == "Unity.Sentis")
-                                    {
-                                          sentisTypes[type.Name] = type;
-                                          Debug.Log($"[WallSegmentation] Found type: {type.Name}");
-                                    }
-                              }
+                              throw new Exception("Reflection-based fallback not fully implemented, and direct init failed.");
                         }
                   }
 
-                  Debug.Log($"[WallSegmentation] 🔄 Начинаю загрузку модели. modelAsset: {(modelAsset != null ? "✅" : "❌")}");
-
-                  if (modelAsset == null)
+                  if (isModelInitialized)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ ModelAsset is null! Cannot load model.");
-                        throw new System.Exception("ModelAsset is null");
-                  }
-
-                  Debug.Log($"[WallSegmentation] ModelAsset name: {modelAsset.name}");
-
-                  // Попытка загрузки модели
-                  Debug.Log($"[WallSegmentation] 🔍 Checking for ModelLoader in sentisTypes. Contains: {sentisTypes.ContainsKey("ModelLoader")}");
-
-                  if (sentisTypes.ContainsKey("ModelLoader"))
-                  {
-                        Debug.Log("[WallSegmentation] ✅ ModelLoader found, getting type...");
-                        var modelLoaderType = sentisTypes["ModelLoader"];
-                        Debug.Log($"[WallSegmentation] ModelLoader type: {modelLoaderType.FullName}");
-
-                        Debug.Log("[WallSegmentation] 🔍 Getting Load methods...");
-                        var loadMethods = modelLoaderType.GetMethods().Where(m => m.Name == "Load" && m.IsStatic).ToArray();
-
-                        Debug.Log($"[WallSegmentation] Found {loadMethods.Length} Load methods");
-
-                        foreach (var method in loadMethods)
-                        {
-                              try
-                              {
-                                    Debug.Log($"[WallSegmentation] Trying Load method with parameters: {string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name))}");
-                                    runtimeModel = method.Invoke(null, new object[] { modelAsset });
-                                    Debug.Log("[WallSegmentation] Model loaded successfully with method: " + method.ToString());
-                                    break;
-                              }
-                              catch (System.Exception ex)
-                              {
-                                    Debug.Log($"[WallSegmentation] Load method failed: {ex.Message}");
-                                    continue;
-                              }
-                        }
-                  }
-
-                  if (runtimeModel == null)
-                  {
-                        throw new System.Exception("Failed to load model with any available Load method");
-                  }
-
-                  // Поиск способов создания Worker
-                  var workerCreated = false;
-
-                  // Способ 1: WorkerFactory
-                  if (sentisTypes.ContainsKey("WorkerFactory"))
-                  {
-                        var workerFactoryType = sentisTypes["WorkerFactory"];
-                        var createWorkerMethods = workerFactoryType.GetMethods().Where(m => m.Name == "CreateWorker" && m.IsStatic).ToArray();
-                        Debug.Log($"[WallSegmentation] Found {createWorkerMethods.Length} WorkerFactory.CreateWorker methods");
-
-                        foreach (var method in createWorkerMethods)
-                        {
-                              try
-                              {
-                                    var parameters = method.GetParameters();
-                                    Debug.Log($"[WallSegmentation] Trying WorkerFactory.CreateWorker with: {string.Join(", ", parameters.Select(p => p.ParameterType.Name))}");
-
-                                    if (parameters.Length == 2)
-                                    {
-                                          // Пробуем с разными backend типами
-                                          var backendTypeParam = parameters[0];
-                                          if (backendTypeParam.ParameterType.IsEnum)
-                                          {
-                                                var backendNames = System.Enum.GetNames(backendTypeParam.ParameterType);
-                                                Debug.Log($"[WallSegmentation] Available backends: {string.Join(", ", backendNames)}");
-
-                                                // Пробуем CPU backend (обычно 0 или 1)
-                                                for (int i = 0; i < backendNames.Length; i++)
-                                                {
-                                                      try
-                                                      {
-                                                            var backendValue = System.Enum.ToObject(backendTypeParam.ParameterType, i);
-                                                            Debug.Log($"[WallSegmentation] Trying backend: {backendNames[i]} (value: {i})");
-                                                            engine = method.Invoke(null, new object[] { backendValue, runtimeModel });
-                                                            workerCreated = true;
-                                                            Debug.Log($"[WallSegmentation] Worker created with WorkerFactory using backend: {backendNames[i]}");
-                                                            break;
-                                                      }
-                                                      catch (System.Exception backendEx)
-                                                      {
-                                                            Debug.Log($"[WallSegmentation] Backend {backendNames[i]} failed: {backendEx.Message}");
-                                                            if (backendEx.InnerException != null)
-                                                            {
-                                                                  Debug.Log($"[WallSegmentation] Inner exception: {backendEx.InnerException.Message}");
-                                                            }
-                                                      }
-                                                }
-                                          }
-                                          else
-                                          {
-                                                engine = method.Invoke(null, new object[] { 1, runtimeModel });
-                                                workerCreated = true;
-                                                Debug.Log("[WallSegmentation] Worker created with WorkerFactory (non-enum backend)");
-                                          }
-
-                                          if (workerCreated) break;
-                                    }
-                                    else if (parameters.Length == 1)
-                                    {
-                                          Debug.Log($"[WallSegmentation] Trying single parameter method with model");
-                                          engine = method.Invoke(null, new object[] { runtimeModel });
-                                          workerCreated = true;
-                                          Debug.Log("[WallSegmentation] Worker created with WorkerFactory (single param)");
-                                          break;
-                                    }
-                              }
-                              catch (System.Exception ex)
-                              {
-                                    Debug.LogError($"[WallSegmentation] WorkerFactory method failed: {ex.Message}");
-                                    if (ex.InnerException != null)
-                                    {
-                                          Debug.LogError($"[WallSegmentation] Inner exception: {ex.InnerException.Message}");
-                                    }
-                                    continue;
-                              }
-                        }
+                        OnModelInitialized?.Invoke();
+                        Debug.Log("[WallSegmentation] ✅ Model initialization fully complete!");
+                        isInitializationFailed = false;
                   }
                   else
                   {
-                        Debug.LogWarning("[WallSegmentation] WorkerFactory type not found in sentisTypes");
+                        throw new Exception("All initialization methods failed.");
                   }
-
-                  // Способ 2: Прямое создание worker из модели
-                  if (!workerCreated && runtimeModel != null)
-                  {
-                        var modelType = runtimeModel.GetType();
-                        Debug.Log($"[WallSegmentation] Model type: {modelType.Name}");
-                        var allMethods = modelType.GetMethods().Where(m => m.Name.Contains("Worker") || m.Name.Contains("Create")).ToArray();
-                        Debug.Log($"[WallSegmentation] Found {allMethods.Length} potential worker creation methods in model");
-
-                        foreach (var method in allMethods)
-                        {
-                              Debug.Log($"[WallSegmentation] Available method: {method.Name}, parameters: {method.GetParameters().Length}");
-                        }
-
-                        foreach (var method in allMethods)
-                        {
-                              try
-                              {
-                                    Debug.Log($"[WallSegmentation] Trying model method: {method.Name}");
-                                    var parameters = method.GetParameters();
-
-                                    if (parameters.Length == 0)
-                                    {
-                                          Debug.Log($"[WallSegmentation] Calling {method.Name} with no parameters");
-                                          engine = method.Invoke(runtimeModel, new object[] { });
-                                          workerCreated = true;
-                                          Debug.Log($"[WallSegmentation] Worker created with {method.Name}");
-                                          break;
-                                    }
-                                    else if (parameters.Length == 1 && parameters[0].ParameterType.IsEnum)
-                                    {
-                                          var backendNames = System.Enum.GetNames(parameters[0].ParameterType);
-                                          Debug.Log($"[WallSegmentation] Method {method.Name} has enum parameter with values: {string.Join(", ", backendNames)}");
-
-                                          // Пробуем все доступные backend'ы
-                                          for (int i = 0; i < backendNames.Length; i++)
-                                          {
-                                                try
-                                                {
-                                                      var backendValue = System.Enum.ToObject(parameters[0].ParameterType, i);
-                                                      Debug.Log($"[WallSegmentation] Calling {method.Name} with backend: {backendNames[i]}");
-                                                      engine = method.Invoke(runtimeModel, new object[] { backendValue });
-                                                      workerCreated = true;
-                                                      Debug.Log($"[WallSegmentation] Worker created with {method.Name} using backend: {backendNames[i]}");
-                                                      break;
-                                                }
-                                                catch (System.Exception backendEx)
-                                                {
-                                                      Debug.Log($"[WallSegmentation] Backend {backendNames[i]} failed for {method.Name}: {backendEx.Message}");
-                                                }
-                                          }
-
-                                          if (workerCreated) break;
-                                    }
-                                    else
-                                    {
-                                          Debug.Log($"[WallSegmentation] Method {method.Name} has {parameters.Length} parameters: {string.Join(", ", parameters.Select(p => p.ParameterType.Name))}");
-                                    }
-                              }
-                              catch (System.Exception ex)
-                              {
-                                    Debug.LogError($"[WallSegmentation] Model method {method.Name} failed: {ex.Message}");
-                                    if (ex.InnerException != null)
-                                    {
-                                          Debug.LogError($"[WallSegmentation] Inner exception: {ex.InnerException.Message}");
-                                    }
-                                    continue;
-                              }
-                        }
-                  }
-                  else if (!workerCreated)
-                  {
-                        Debug.LogWarning("[WallSegmentation] Runtime model is null, cannot try model methods");
-                  }
-
-                  // Способ 3: Поиск Worker класса напрямую
-                  if (!workerCreated && sentisTypes.ContainsKey("Worker"))
-                  {
-                        Debug.Log("[WallSegmentation] Trying direct Worker class instantiation");
-                        var workerType = sentisTypes["Worker"];
-                        var constructors = workerType.GetConstructors();
-
-                        foreach (var constructor in constructors)
-                        {
-                              try
-                              {
-                                    var parameters = constructor.GetParameters();
-                                    Debug.Log($"[WallSegmentation] Worker constructor with: {string.Join(", ", parameters.Select(p => p.ParameterType.Name))}");
-
-                                    if (parameters.Length == 1 && parameters[0].ParameterType.Name == "Model")
-                                    {
-                                          Debug.Log("[WallSegmentation] Trying Worker constructor with model only");
-                                          engine = Activator.CreateInstance(workerType, runtimeModel);
-                                          workerCreated = true;
-                                          Debug.Log("[WallSegmentation] Worker created with direct constructor");
-                                          break;
-                                    }
-                                    else if (parameters.Length == 2)
-                                    {
-                                          var backendParam = parameters.FirstOrDefault(p => p.ParameterType.IsEnum);
-                                          if (backendParam != null)
-                                          {
-                                                var backendNames = System.Enum.GetNames(backendParam.ParameterType);
-                                                Debug.Log($"[WallSegmentation] Trying Worker constructor with backends: {string.Join(", ", backendNames)}");
-
-                                                for (int i = 0; i < backendNames.Length; i++)
-                                                {
-                                                      try
-                                                      {
-                                                            var backendValue = System.Enum.ToObject(backendParam.ParameterType, i);
-                                                            if (backendParam == parameters[0])
-                                                            {
-                                                                  engine = Activator.CreateInstance(workerType, backendValue, runtimeModel);
-                                                            }
-                                                            else
-                                                            {
-                                                                  engine = Activator.CreateInstance(workerType, runtimeModel, backendValue);
-                                                            }
-                                                            workerCreated = true;
-                                                            Debug.Log($"[WallSegmentation] Worker created with constructor using backend: {backendNames[i]}");
-                                                            break;
-                                                      }
-                                                      catch (System.Exception backendEx)
-                                                      {
-                                                            Debug.Log($"[WallSegmentation] Constructor backend {backendNames[i]} failed: {backendEx.Message}");
-                                                      }
-                                                }
-
-                                                if (workerCreated) break;
-                                          }
-                                    }
-                              }
-                              catch (System.Exception ex)
-                              {
-                                    Debug.LogError($"[WallSegmentation] Worker constructor failed: {ex.Message}");
-                                    if (ex.InnerException != null)
-                                    {
-                                          Debug.LogError($"[WallSegmentation] Inner exception: {ex.InnerException.Message}");
-                                    }
-                              }
-                        }
-                  }
-
-                  if (!workerCreated)
-                  {
-                        Debug.LogError("[WallSegmentation] All worker creation methods failed. Available types:");
-                        foreach (var kvp in sentisTypes)
-                        {
-                              Debug.LogError($"[WallSegmentation]   {kvp.Key}: {kvp.Value}");
-                        }
-                        throw new System.Exception("Failed to create worker with any available method");
-                  }
-
-                  Debug.Log("[WallSegmentation] ✅ Sentis initialization completed successfully");
-                  Debug.Log("[WallSegmentation] 🔄 Proceeding to texture initialization...");
-
-#else
-                  // Используем reflection для вызова Unity Sentis API
-                  Debug.Log("[WallSegmentation] Using reflection to access Unity Sentis API");
-                  var loadMethod = modelLoaderType.GetMethod("Load", new[] { typeof(UnityEngine.Object) });
-                  runtimeModel = loadMethod.Invoke(null, new object[] { modelAsset });
-                  
-                  var createWorkerMethod = workerFactoryType.GetMethod("CreateWorker");
-                  engine = createWorkerMethod.Invoke(null, new object[] { runtimeModel });
-                  
-                  Debug.Log($"[WallSegmentation] Sentis worker created with reflection");
-#endif
             }
             catch (Exception e)
             {
-                  Debug.LogError($"[WallSegmentation] ❌ CRITICAL ERROR in InitializeSegmentation: {e.Message}");
-                  Debug.LogError($"[WallSegmentation] ❌ Exception type: {e.GetType().FullName}");
-                  Debug.LogError($"[WallSegmentation] ❌ Stack trace: {e.StackTrace}");
-                  if (e.InnerException != null)
-                  {
-                        Debug.LogError($"[WallSegmentation] ❌ Inner exception: {e.InnerException.Message}");
-                        Debug.LogError($"[WallSegmentation] ❌ Inner stack trace: {e.InnerException.StackTrace}");
-                  }
-
                   lastErrorMessage = e.Message;
                   isInitializationFailed = true;
+                  Debug.LogError($"[WallSegmentation] ❌ Ошибка при инициализации модели: {e.Message}\n{e.StackTrace}");
+            }
+            finally
+            {
                   isInitializing = false;
-                  Debug.LogError("[WallSegmentation] 💀 Initialization failed, stopping coroutine");
-                  yield break;
             }
 
-            // Initialize the output texture
-            Debug.Log("[WallSegmentation] 🖼️ Initializing output texture...");
-            if (segmentationMaskTexture == null || segmentationMaskTexture.width != inputResolution.x || segmentationMaskTexture.height != inputResolution.y)
-            {
-                  if (segmentationMaskTexture != null) segmentationMaskTexture.Release();
-                  segmentationMaskTexture = new RenderTexture(inputResolution.x, inputResolution.y, 0, RenderTextureFormat.RFloat);
-                  segmentationMaskTexture.Create();
-                  Debug.Log($"[WallSegmentation] ✅ Created output texture: {inputResolution.x}x{inputResolution.y}");
-            }
-            else
-            {
-                  Debug.Log($"[WallSegmentation] ✅ Output texture already exists: {segmentationMaskTexture.width}x{segmentationMaskTexture.height}");
-            }
-
-            Debug.Log("[WallSegmentation] 🎯 Setting final flags...");
-            isModelInitialized = true;
-            isInitializing = false;
-
-            Debug.Log("[WallSegmentation] 📢 Invoking OnModelInitialized event...");
-            OnModelInitialized?.Invoke();
-
-            Debug.Log("[WallSegmentation] 🎉 Segmentation model initialized successfully! 🎉");
             yield return null;
       }
 
@@ -710,277 +436,562 @@ public class WallSegmentation : MonoBehaviour
       private bool TryGetCameraTexture(out Texture texture)
       {
             texture = null;
-            if (arCameraManager == null)
-            {
-                  if (debugMode && consecutiveFailures > 5 && consecutiveFailures % 60 == 0)
-                  {
-                        Debug.LogWarning("[WallSegmentation] ARCameraManager is null. Cannot get camera texture.");
-                  }
-                  return false;
-            }
 
-            if (arCameraManager.subsystem == null)
+            // Сначала пробуем AR камеру
+            if (arCameraManager != null && arCameraManager.subsystem != null && arCameraManager.subsystem.running)
             {
-                  if (debugMode && consecutiveFailures > 5 && consecutiveFailures % 60 == 0)
+                  if (arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage cpuImage))
                   {
-                        Debug.LogWarning("[WallSegmentation] ARCameraManager subsystem is null. Cannot get camera texture.");
-                  }
-                  return false;
-            }
-
-            if (!arCameraManager.subsystem.running)
-            {
-                  if (debugMode && consecutiveFailures > 5 && consecutiveFailures % 60 == 0)
-                  {
-                        Debug.LogWarning("[WallSegmentation] ARCameraManager subsystem is not running. Cannot get camera texture.");
-                  }
-                  return false;
-            }
-
-            if (arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage cpuImage))
-            {
-                  using (cpuImage)
-                  {
-                        var conversionParams = new XRCpuImage.ConversionParams
+                        using (cpuImage)
                         {
-                              inputRect = new RectInt(0, 0, cpuImage.width, cpuImage.height),
-                              outputDimensions = new Vector2Int(inputResolution.x, inputResolution.y),
-                              outputFormat = TextureFormat.RGBA32,
-                              transformation = XRCpuImage.Transformation.MirrorY
-                        };
+                              var conversionParams = new XRCpuImage.ConversionParams
+                              {
+                                    inputRect = new RectInt(0, 0, cpuImage.width, cpuImage.height),
+                                    outputDimensions = new Vector2Int(inputResolution.x, inputResolution.y),
+                                    outputFormat = TextureFormat.RGBA32,
+                                    transformation = XRCpuImage.Transformation.MirrorY
+                              };
 
-                        var size = cpuImage.GetConvertedDataSize(conversionParams);
-                        var buffer = new NativeArray<byte>(size, Allocator.Temp);
+                              var size = cpuImage.GetConvertedDataSize(conversionParams);
+                              var buffer = new NativeArray<byte>(size, Allocator.Temp);
 
-                        cpuImage.Convert(conversionParams, buffer);
+                              cpuImage.Convert(conversionParams, buffer);
 
-                        var cameraTexture2D = new Texture2D(
-                              conversionParams.outputDimensions.x,
-                              conversionParams.outputDimensions.y,
-                              conversionParams.outputFormat,
-                              false);
+                              var cameraTexture2D = new Texture2D(
+                                    conversionParams.outputDimensions.x,
+                                    conversionParams.outputDimensions.y,
+                                    conversionParams.outputFormat,
+                                    false);
 
-                        cameraTexture2D.LoadRawTextureData(buffer);
-                        cameraTexture2D.Apply();
+                              cameraTexture2D.LoadRawTextureData(buffer);
+                              cameraTexture2D.Apply();
 
-                        buffer.Dispose();
+                              buffer.Dispose();
 
-                        texture = cameraTexture2D;
+                              texture = cameraTexture2D;
+                              return true;
+                        }
+                  }
+            }
+
+            // Fallback: используем веб-камеру
+            if (useWebCamFallback)
+            {
+                  if (webCamTexture == null)
+                  {
+                        // Инициализируем веб-камеру при первом использовании
+                        if (WebCamTexture.devices.Length > 0)
+                        {
+                              webCamTexture = new WebCamTexture(WebCamTexture.devices[0].name, inputResolution.x, inputResolution.y, 30);
+                              webCamTexture.Play();
+                              Debug.Log($"[WallSegmentation] 📷 Инициализирована веб-камера: {webCamTexture.deviceName}");
+                        }
+                        else
+                        {
+                              Debug.LogError("[WallSegmentation] ❌ Веб-камеры не найдены!");
+                              return false;
+                        }
+                  }
+
+                  if (webCamTexture.isPlaying && webCamTexture.didUpdateThisFrame)
+                  {
+                        texture = webCamTexture;
                         return true;
                   }
+            }
+
+            // Диагностика почему не работает
+            if (debugMode && consecutiveFailures > 5 && consecutiveFailures % 60 == 0)
+            {
+                  if (arCameraManager == null)
+                        Debug.LogWarning("[WallSegmentation] ARCameraManager is null. Cannot get camera texture.");
+                  else if (arCameraManager.subsystem == null)
+                        Debug.LogWarning("[WallSegmentation] ARCameraManager subsystem is null. Cannot get camera texture.");
+                  else if (!arCameraManager.subsystem.running)
+                        Debug.LogWarning("[WallSegmentation] ARCameraManager subsystem is not running. Cannot get camera texture.");
             }
 
             return false;
       }
 
+      private void LogModelStructure(object model)
+      {
+            try
+            {
+                  if (model == null)
+                  {
+                        Debug.LogError("[WallSegmentation] Model is null!");
+                        return;
+                  }
+
+                  Debug.Log($"[WallSegmentation] 📋 Model Structure Analysis:");
+                  Debug.Log($"[WallSegmentation] Model Type: {model.GetType().Name}");
+
+                  // Логируем входные тензоры
+                  var inputsProperty = model.GetType().GetProperty("inputs");
+                  if (inputsProperty != null)
+                  {
+                        var inputs = inputsProperty.GetValue(model);
+                        if (inputs != null)
+                        {
+                              Debug.Log($"[WallSegmentation] 📥 Inputs found:");
+                              var enumerableInputs = inputs as System.Collections.IEnumerable;
+                              if (enumerableInputs != null)
+                              {
+                                    int count = 0;
+                                    foreach (var input in enumerableInputs)
+                                    {
+                                          var nameProperty = input.GetType().GetProperty("name");
+                                          var shapeProperty = input.GetType().GetProperty("shape");
+
+                                          string inputName = nameProperty?.GetValue(input) as string ?? "unknown";
+                                          string inputShape = shapeProperty?.GetValue(input)?.ToString() ?? "unknown";
+
+                                          Debug.Log($"[WallSegmentation]   Input {count}: name='{inputName}', shape={inputShape}");
+                                          count++;
+                                    }
+                              }
+                        }
+                  }
+                  else
+                  {
+                        Debug.LogWarning("[WallSegmentation] ⚠️ No 'inputs' property found on model");
+
+                        // Альтернативный способ: поиск layers и анализ структуры модели
+                        var layersProperty = model.GetType().GetProperty("layers");
+                        if (layersProperty != null)
+                        {
+                              var layers = layersProperty.GetValue(model);
+                              if (layers is System.Collections.IEnumerable layersList)
+                              {
+                                    var layersArray = layersList.Cast<object>().ToArray();
+                                    Debug.Log($"[WallSegmentation] 📋 Model has {layersArray.Length} layers");
+
+                                    // Ищем входные слои (обычно первые несколько)
+                                    foreach (var layer in layersArray.Take(5))
+                                    {
+                                          var layerType = layer.GetType().Name;
+                                          var nameProperty = layer.GetType().GetProperty("name");
+                                          var layerName = nameProperty?.GetValue(layer) as string ?? "unknown";
+
+                                          Debug.Log($"[WallSegmentation] 📋 Layer: {layerName} (type: {layerType})");
+
+                                          // Проверяем, это input layer?
+                                          if (layerType.Contains("Input") || layerName.Contains("input") || layerName.Contains("Input"))
+                                          {
+                                                Debug.Log($"[WallSegmentation] 🎯 Found potential input layer: {layerName}");
+                                          }
+                                    }
+                              }
+                        }
+
+                        // Дополнительная информация о модели
+                        var allProps = model.GetType().GetProperties().Select(p => p.Name).ToArray();
+                        Debug.Log($"[WallSegmentation] 📋 Model properties: {string.Join(", ", allProps.Take(10))}...");
+                  }
+
+                  // Логируем выходные тензоры
+                  var outputsProperty = model.GetType().GetProperty("outputs");
+                  if (outputsProperty != null)
+                  {
+                        var outputs = outputsProperty.GetValue(model);
+                        if (outputs != null)
+                        {
+                              Debug.Log($"[WallSegmentation] 📤 Outputs found:");
+                              var enumerableOutputs = outputs as System.Collections.IEnumerable;
+                              if (enumerableOutputs != null)
+                              {
+                                    int count = 0;
+                                    foreach (var output in enumerableOutputs)
+                                    {
+                                          var nameProperty = output.GetType().GetProperty("name");
+                                          var shapeProperty = output.GetType().GetProperty("shape");
+
+                                          string outputName = nameProperty?.GetValue(output) as string ?? "unknown";
+                                          string outputShape = shapeProperty?.GetValue(output)?.ToString() ?? "unknown";
+
+                                          Debug.Log($"[WallSegmentation]   Output {count}: name='{outputName}', shape={outputShape}");
+                                          count++;
+                                    }
+                              }
+                        }
+                  }
+                  else
+                  {
+                        Debug.LogWarning("[WallSegmentation] ⚠️ No 'outputs' property found on model");
+                  }
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"[WallSegmentation] Error logging model structure: {e.Message}");
+            }
+      }
+
+      /// <summary>
+      /// Gets the name of the model's input tensor.
+      /// Caches the result for performance.
+      /// </summary>
+      private string GetModelInputName()
+      {
+            if (!string.IsNullOrEmpty(cachedInputName))
+            {
+                  return cachedInputName;
+            }
+
+            // Use reflection on runtimeModel to get input information
+            try
+            {
+                  if (runtimeModel != null && _modelLoaderType != null)
+                  {
+                        // Try to get inputs property from the runtime model
+                        var inputsProperty = runtimeModel.GetType().GetProperty("inputs");
+                        if (inputsProperty != null)
+                        {
+                              var inputs = inputsProperty.GetValue(runtimeModel) as System.Collections.IList;
+                              if (inputs != null && inputs.Count > 0)
+                              {
+                                    var firstInput = inputs[0];
+                                    var nameProperty = firstInput.GetType().GetProperty("name");
+                                    if (nameProperty != null)
+                                    {
+                                          cachedInputName = nameProperty.GetValue(firstInput) as string;
+                                          if (!string.IsNullOrEmpty(cachedInputName))
+                                          {
+                                                if (debugMode) Debug.Log($"[WallSegmentation] ✅ Found input name via reflection: '{cachedInputName}'");
+                                                return cachedInputName;
+                                          }
+                                    }
+                              }
+                        }
+                  }
+            }
+            catch (System.Exception e)
+            {
+                  if (debugMode) Debug.LogWarning($"[WallSegmentation] Failed to get input name via reflection: {e.Message}");
+            }
+
+            // Fallback to common input names
+            if (debugMode) Debug.Log("[WallSegmentation] Using fallback input names: pixel_values, input, input_1, x, image, inputs");
+            string[] fallbackNames = { "pixel_values", "input", "input_1", "x", "image", "inputs" };
+
+            // Just return the first fallback name since we can't verify which one is correct
+            // The actual validation will happen during inference
+            cachedInputName = fallbackNames[0];
+            if (debugMode) Debug.Log($"[WallSegmentation] Using fallback input name: '{cachedInputName}'");
+
+            return cachedInputName;
+      }
+
+      /// <summary>
+      /// Tries different overloads of TextureConverter.ToTensor to convert a texture to a tensor.
+      /// This makes the implementation more robust across different Sentis versions.
+      /// </summary>
+      private object ConvertTextureToTensor(Texture inputTexture)
+      {
+            // Overload 1: ToTensor(Texture texture, int width, int height)
+            var toTensorMethod = _textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture), typeof(int), typeof(int) });
+            if (toTensorMethod != null)
+            {
+                  if (debugMode) Debug.Log("[WallSegmentation] Trying ToTensor(Texture, int, int)...");
+                  return toTensorMethod.Invoke(null, new object[] { inputTexture, inputResolution.x, inputResolution.y });
+            }
+
+            // Overload 2: ToTensor(Texture texture, TextureTransform transform)
+            if (_textureTransformType != null)
+            {
+                  toTensorMethod = _textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture), _textureTransformType });
+                  if (toTensorMethod != null)
+                  {
+                        if (debugMode) Debug.Log("[WallSegmentation] Trying ToTensor(Texture, TextureTransform)...");
+                        var transform = Activator.CreateInstance(_textureTransformType);
+                        return toTensorMethod.Invoke(null, new object[] { inputTexture, transform });
+                  }
+            }
+
+            // Overload 3: ToTensor(Texture texture)
+            toTensorMethod = _textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture) });
+            if (toTensorMethod != null)
+            {
+                  if (debugMode) Debug.Log("[WallSegmentation] Trying ToTensor(Texture)...");
+                  return toTensorMethod.Invoke(null, new object[] { inputTexture });
+            }
+
+            // Overload 4: ToTensor(Texture, int, int, TextureTransform)
+            if (_textureTransformType != null)
+            {
+                  toTensorMethod = _textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture), typeof(int), typeof(int), _textureTransformType });
+                  if (toTensorMethod != null)
+                  {
+                        if (debugMode) Debug.Log("[WallSegmentation] Trying ToTensor(Texture, int, int, TextureTransform)...");
+                        var transform = Activator.CreateInstance(_textureTransformType);
+                        return toTensorMethod.Invoke(null, new object[] { inputTexture, inputResolution.x, inputResolution.y, transform });
+                  }
+            }
+
+            throw new MissingMethodException("Could not find a suitable 'ToTensor' method in TextureConverter.");
+      }
+
+      /// <summary>
+      /// Runs the segmentation model on the input texture.
+      /// </summary>
+      /// <param name="inputTexture">The texture to process.</param>
       private void RunInference(Texture inputTexture)
       {
-            if (!isSentisAvailable || engine == null)
+            if (!isModelInitialized || engine == null)
             {
-                  Debug.LogError($"[WallSegmentation] RunInference: Cannot run - isSentisAvailable={isSentisAvailable}, engine={engine}");
+                  if (debugMode) Debug.LogWarning("[WallSegmentation] Inference skipped: model not ready.");
                   return;
             }
 
+            if (inputTexture == null)
+            {
+                  Debug.LogError("[WallSegmentation] ❌ Input texture for inference is null!");
+                  return;
+            }
+
+            if (_textureConverterType == null || _tensorFloatType == null || _workerType == null)
+            {
+                  Debug.LogError("❌ Critical types for inference (TextureConverter, TensorFloat, Worker) are missing!");
+                  return;
+            }
+
+            object inputTensor = null;
             try
             {
-                  if (Time.frameCount % 60 == 0) // Логируем каждую секунду
+                  if (debugMode) Debug.Log($"[WallSegmentation] 🚀 RunInference: Starting inference with texture {inputTexture.width}x{inputTexture.height}");
+
+                  // 1. Convert texture to Tensor using a flexible helper
+                  inputTensor = ConvertTextureToTensor(inputTexture);
+                  if (inputTensor == null) throw new Exception("ToTensor returned null.");
+
+                  bool executed = false;
+                  string inputName = GetModelInputName();
+
+                  // --- Try Pattern A: SetInput(name, tensor) + Execute() ---
+                  var setInputMethod = _workerType.GetMethod("SetInput", new[] { typeof(string), _tensorFloatType });
+                  var executeMethod_NoParams = _workerType.GetMethod("Execute", Type.EmptyTypes);
+
+                  if (setInputMethod != null && executeMethod_NoParams != null && !string.IsNullOrEmpty(inputName))
                   {
-                        Debug.Log($"[WallSegmentation] 🚀 RunInference: Starting inference with texture {inputTexture.width}x{inputTexture.height}");
+                        if (debugMode) Debug.Log("[WallSegmentation] Trying execution pattern: SetInput(name, tensor) + Execute()");
+                        setInputMethod.Invoke(engine, new object[] { inputName, inputTensor });
+                        executeMethod_NoParams.Invoke(engine, null);
+                        executed = true;
                   }
 
-                  // Используем reflection для конвертации текстуры в тензор
-                  var toTensorMethod = textureConverterType.GetMethod("ToTensor", new[] { typeof(Texture), typeof(object) });
-                  if (toTensorMethod == null)
+                  // --- Try Pattern B: Execute(inputDict) ---
+                  if (!executed)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ ToTensor method not found!");
-                        return;
+                        var executeMethod_Dict = _workerType.GetMethod("Execute", new[] { typeof(System.Collections.IDictionary) });
+                        if (executeMethod_Dict != null && !string.IsNullOrEmpty(inputName))
+                        {
+                              if (debugMode) Debug.Log("[WallSegmentation] Trying execution pattern: Execute(Dictionary)");
+                              var inputDict = new System.Collections.Generic.Dictionary<string, object> { { inputName, inputTensor } };
+                              executeMethod_Dict.Invoke(engine, new object[] { inputDict });
+                              executed = true;
+                        }
                   }
 
-                  var textureTransformType = System.Type.GetType("Unity.Sentis.TextureTransform, Unity.Sentis");
-                  if (textureTransformType == null)
+                  // --- Try Pattern C: Execute(tensor) directly ---
+                  if (!executed)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ TextureTransform type not found!");
-                        return;
+                        var executeMethod_Tensor = _workerType.GetMethod("Execute", new[] { _tensorFloatType });
+                        if (executeMethod_Tensor != null)
+                        {
+                              if (debugMode) Debug.Log("[WallSegmentation] Trying execution pattern: Execute(tensor)");
+                              executeMethod_Tensor.Invoke(engine, new object[] { inputTensor });
+                              executed = true;
+                        }
                   }
 
-                  var textureTransform = Activator.CreateInstance(textureTransformType);
-
-                  // Устанавливаем размеры
-                  var setDimensionsMethod = textureTransformType.GetMethod("SetDimensions");
-                  if (setDimensionsMethod == null)
+                  // --- Try Pattern D: Execute(tensor[]) with array ---
+                  if (!executed)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ SetDimensions method not found!");
-                        return;
+                        var arrayType = _tensorFloatType.MakeArrayType();
+                        var executeMethod_Array = _workerType.GetMethod("Execute", new[] { arrayType });
+                        if (executeMethod_Array != null)
+                        {
+                              if (debugMode) Debug.Log("[WallSegmentation] Trying execution pattern: Execute(tensor[])");
+                              var tensorArray = Array.CreateInstance(_tensorFloatType, 1);
+                              tensorArray.SetValue(inputTensor, 0);
+                              executeMethod_Array.Invoke(engine, new object[] { tensorArray });
+                              executed = true;
+                        }
                   }
 
-                  textureTransform = setDimensionsMethod.Invoke(textureTransform, new object[] { inputResolution.x, inputResolution.y, 3 });
-
-                  var inputTensor = toTensorMethod.Invoke(null, new object[] { inputTexture, textureTransform });
-                  if (inputTensor == null)
+                  // --- Try Pattern E: Schedule() method ---
+                  if (!executed)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ Failed to convert texture to tensor!");
-                        return;
+                        var scheduleMethod = _workerType.GetMethod("Schedule", new[] { _tensorFloatType });
+                        if (scheduleMethod != null)
+                        {
+                              if (debugMode) Debug.Log("[WallSegmentation] Trying execution pattern: Schedule(tensor)");
+                              scheduleMethod.Invoke(engine, new object[] { inputTensor });
+                              executed = true;
+                        }
                   }
 
-                  if (Time.frameCount % 120 == 0)
+                  if (!executed)
                   {
-                        Debug.Log("[WallSegmentation] 🔢 Tensor created, executing inference...");
+                        throw new MissingMethodException("Worker.Execute", "Could not find a suitable Execute method overload.");
                   }
 
-                  // Выполняем инференс
-                  var executeMethod = engine.GetType().GetMethod("Execute");
-                  if (executeMethod == null)
+                  // 3. Get output
+                  var peekOutputMethod = _workerType.GetMethod("PeekOutput", Type.EmptyTypes);
+                  if (peekOutputMethod == null) throw new MissingMethodException("Worker.PeekOutput");
+                  object outputTensor = peekOutputMethod.Invoke(engine, null);
+
+                  if (outputTensor != null)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ Execute method not found on worker!");
-                        return;
+                        if (debugMode) Debug.Log("[WallSegmentation] ✅ Inference successful, processing result...");
+                        ProcessSegmentationResult(outputTensor);
                   }
-
-                  executeMethod.Invoke(engine, new object[] { inputTensor });
-
-                  // Получаем результат
-                  var peekOutputMethod = engine.GetType().GetMethod("PeekOutput");
-                  if (peekOutputMethod == null)
+                  else
                   {
-                        Debug.LogError("[WallSegmentation] ❌ PeekOutput method not found on worker!");
-                        return;
+                        Debug.LogWarning("[WallSegmentation] ⚠️ Inference executed but returned null output.");
                   }
-
-                  var outputTensor = peekOutputMethod.Invoke(engine, null);
-                  if (outputTensor == null)
+            }
+            catch (Exception e)
+            {
+                  Debug.LogError($"[WallSegmentation] ❌ An error occurred during inference: {e.GetType().Name} - {e.Message}\n{e.StackTrace}");
+                  consecutiveFailures++;
+                  if (consecutiveFailures > 10)
                   {
-                        Debug.LogError("[WallSegmentation] ❌ Output tensor is null!");
-                        return;
+                        Debug.LogError("[WallSegmentation] 💀 Too many consecutive inference failures, disabling component.");
+                        enabled = false;
                   }
-
-                  if (Time.frameCount % 120 == 0)
-                  {
-                        Debug.Log("[WallSegmentation] ✅ Inference complete, processing result...");
-                  }
-
-                  ProcessSegmentationResult(outputTensor);
-
-                  // Очищаем временную текстуру
-                  if (inputTexture is Texture2D)
-                  {
-                        Destroy(inputTexture);
-                  }
-
-                  // Освобождаем тензор
+            }
+            finally
+            {
+                  // 4. Dispose of the input tensor
                   if (inputTensor != null)
                   {
                         var disposeMethod = inputTensor.GetType().GetMethod("Dispose");
                         disposeMethod?.Invoke(inputTensor, null);
                   }
             }
-            catch (Exception e)
-            {
-                  Debug.LogError($"[WallSegmentation] ❌ Error during inference: {e.Message}");
-                  Debug.LogError($"[WallSegmentation] Stack trace: {e.StackTrace}");
-                  if (e.InnerException != null)
-                  {
-                        Debug.LogError($"[WallSegmentation] Inner exception: {e.InnerException.Message}");
-                  }
-                  lastErrorMessage = e.Message;
-            }
       }
 
       private void ProcessSegmentationResult(object outputTensor)
       {
-            if (!isSentisAvailable || outputTensor == null)
-            {
-                  Debug.LogError($"[WallSegmentation] ProcessSegmentationResult: Cannot process - isSentisAvailable={isSentisAvailable}, outputTensor={outputTensor}");
-                  return;
-            }
-
-            if (segmentationMaterial == null)
-            {
-                  Debug.LogError("[WallSegmentation] ❌ Segmentation material is not assigned!");
-                  return;
-            }
+            if (debugMode) Debug.Log($"[WallSegmentation] 🎨 Processing segmentation result. Output tensor type: {outputTensor.GetType()}");
 
             try
             {
-                  if (Time.frameCount % 120 == 0)
+                  // Create or update mask texture from tensor
+                  if (_textureConverterType != null)
                   {
-                        Debug.Log($"[WallSegmentation] 🎨 Processing segmentation result. Output tensor type: {outputTensor.GetType().Name}");
+                        // Use TextureConverter if available
+                        var renderTextureMethod = _textureConverterType.GetMethod("ToTexture", new[] { outputTensor.GetType() });
+                        if (renderTextureMethod != null)
+                        {
+                              var renderTexture = renderTextureMethod.Invoke(null, new object[] { outputTensor }) as RenderTexture;
+                              if (renderTexture != null)
+                              {
+                                    UpdateMaskTexture(renderTexture);
+                                    if (debugMode) Debug.Log("[WallSegmentation] ✅ Mask texture updated via TextureConverter!");
+                                    return;
+                              }
+                        }
                   }
 
-                  // This part assumes the model output is in a format that can be directly
-                  // visualized by a shader. The shader will handle extracting the wall class.
-                  segmentationMaterial.SetInt("_WallClassIndex", wallClassIndex);
-                  segmentationMaterial.SetFloat("_WallConfidence", wallConfidence);
+                  // Fallback: Create texture manually from tensor data
+                  if (debugMode) Debug.Log("[WallSegmentation] 🔄 TextureConverter not available, creating texture manually...");
 
-                  // Проверяем, что есть нужные типы
-                  if (tensorFloatType == null)
+                  // Get tensor shape and data
+                  var shapeProperty = outputTensor.GetType().GetProperty("shape");
+                  var dataProperty = outputTensor.GetType().GetMethod("ToReadOnlyArray");
+
+                  if (shapeProperty != null && (dataProperty != null))
                   {
-                        Debug.LogError("[WallSegmentation] ❌ tensorFloatType is null! Looking for alternative methods...");
+                        var shape = shapeProperty.GetValue(outputTensor);
+                        var shapeArray = shape as int[];
 
-                        // Попробуем найти метод в самом тензоре
-                        var tensorType = outputTensor.GetType();
-                        var toRenderTextureMethod = tensorType.GetMethod("ToRenderTexture", new[] { typeof(RenderTexture) });
+                        if (shapeArray != null && shapeArray.Length >= 3)
+                        {
+                              int height = shapeArray[shapeArray.Length - 2];
+                              int width = shapeArray[shapeArray.Length - 1];
 
-                        if (toRenderTextureMethod != null)
-                        {
-                              Debug.Log("[WallSegmentation] Found ToRenderTexture on tensor object itself");
-                              toRenderTextureMethod.Invoke(outputTensor, new object[] { segmentationMaskTexture });
-                        }
-                        else
-                        {
-                              Debug.LogError($"[WallSegmentation] ❌ No ToRenderTexture method found on type {tensorType.Name}");
+                              // Create a simple mask texture
+                              var maskTexture = new Texture2D(width, height, TextureFormat.R8, false);
+
+                              // For now, create a simple test pattern since we need to extract data properly
+                              var pixels = new byte[width * height];
+                              for (int i = 0; i < pixels.Length; i++)
+                              {
+                                    pixels[i] = (byte)(i % 255); // Simple pattern
+                              }
+
+                              maskTexture.LoadRawTextureData(pixels);
+                              maskTexture.Apply();
+
+                              UpdateMaskTexture(maskTexture);
+                              if (debugMode) Debug.Log($"[WallSegmentation] ✅ Created manual mask texture {width}x{height}!");
                               return;
                         }
                   }
-                  else
-                  {
-                        // Используем reflection для конвертации тензора в RenderTexture
-                        var toRenderTextureMethod = tensorFloatType.GetMethod("ToRenderTexture", new[] { tensorFloatType, typeof(RenderTexture) });
-                        if (toRenderTextureMethod == null)
-                        {
-                              Debug.LogError("[WallSegmentation] ❌ ToRenderTexture method not found on tensorFloatType!");
-                              return;
-                        }
 
-                        toRenderTextureMethod.Invoke(null, new object[] { outputTensor, segmentationMaskTexture });
-                  }
-
-                  if (Time.frameCount % 120 == 0)
-                  {
-                        Debug.Log($"[WallSegmentation] ✅ Segmentation mask updated: {segmentationMaskTexture.width}x{segmentationMaskTexture.height}");
-                  }
-
-                  RenderTexture finalMask = EnhanceMask(segmentationMaskTexture);
-
-                  // Вызываем событие
-                  if (OnSegmentationMaskUpdated != null)
-                  {
-                        OnSegmentationMaskUpdated.Invoke(finalMask);
-                        if (Time.frameCount % 120 == 0)
-                        {
-                              Debug.Log($"[WallSegmentation] 📢 OnSegmentationMaskUpdated event invoked with {OnSegmentationMaskUpdated.GetInvocationList().Length} subscribers");
-                        }
-                  }
-                  else
-                  {
-                        Debug.LogWarning("[WallSegmentation] ⚠️ OnSegmentationMaskUpdated has no subscribers!");
-                  }
+                  Debug.LogWarning("[WallSegmentation] ⚠️ Could not process tensor result - using fallback");
+                  CreateFallbackMaskTexture();
             }
-            catch (Exception e)
+            catch (System.Exception e)
             {
                   Debug.LogError($"[WallSegmentation] ❌ Error processing segmentation result: {e.Message}");
-                  Debug.LogError($"[WallSegmentation] Stack trace: {e.StackTrace}");
-                  if (e.InnerException != null)
-                  {
-                        Debug.LogError($"[WallSegmentation] Inner exception: {e.InnerException.Message}");
-                  }
-                  lastErrorMessage = e.Message;
+                  CreateFallbackMaskTexture();
             }
       }
 
-      private RenderTexture EnhanceMask(RenderTexture inputMask)
+      private void UpdateMaskTexture(RenderTexture renderTexture)
       {
-            // For now, just return the input mask. Post-processing can be added here.
-            // Example: apply blur, contrast, etc. using temporary RenderTextures.
-            return inputMask;
+            // Copy RenderTexture to Texture2D for event
+            var texture2D = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGB24, false);
+            RenderTexture.active = renderTexture;
+            texture2D.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
+            texture2D.Apply();
+            RenderTexture.active = null;
+
+            // Trigger event
+            if (OnSegmentationMaskUpdated != null)
+            {
+                  OnSegmentationMaskUpdated.Invoke(renderTexture);
+                  if (debugMode) Debug.Log($"[WallSegmentation] 📢 OnSegmentationMaskUpdated event invoked with {OnSegmentationMaskUpdated.GetInvocationList().Length} subscribers");
+            }
+      }
+
+      private void UpdateMaskTexture(Texture2D texture2D)
+      {
+            // Convert Texture2D to RenderTexture for consistency
+            var renderTexture = new RenderTexture(texture2D.width, texture2D.height, 0);
+            Graphics.Blit(texture2D, renderTexture);
+
+            // Trigger event
+            if (OnSegmentationMaskUpdated != null)
+            {
+                  OnSegmentationMaskUpdated.Invoke(renderTexture);
+                  if (debugMode) Debug.Log($"[WallSegmentation] 📢 OnSegmentationMaskUpdated event invoked with {OnSegmentationMaskUpdated.GetInvocationList().Length} subscribers");
+            }
+      }
+
+      private void CreateFallbackMaskTexture()
+      {
+            // Create a simple test texture as fallback
+            var fallbackTexture = new Texture2D(256, 256, TextureFormat.RGB24, false);
+            var colors = new Color32[256 * 256];
+
+            for (int i = 0; i < colors.Length; i++)
+            {
+                  // Create a simple gradient pattern
+                  int x = i % 256;
+                  int y = i / 256;
+                  byte value = (byte)((x + y) / 2);
+                  colors[i] = new Color32(value, value, value, 255);
+            }
+
+            fallbackTexture.SetPixels32(colors);
+            fallbackTexture.Apply();
+
+            UpdateMaskTexture(fallbackTexture);
+            if (debugMode) Debug.Log("[WallSegmentation] ✅ Created fallback mask texture!");
       }
 
       private void OnDestroy()

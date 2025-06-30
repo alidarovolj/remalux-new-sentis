@@ -3611,6 +3611,12 @@ public class ARManagerInitializer2 : MonoBehaviour
                   return;
             }
 
+            // Полностью отключаем AR меши, чтобы они не мешали видеть плоскости
+            meshManager.enabled = false;
+            Debug.Log("[ARManagerInitializer2] 🚫 ARMeshManager полностью отключен для лучшей видимости плоскостей");
+            return; // Ранний выход - остальной код не нужен
+
+            /*
             // Create a simple, slightly visible transparent material
             Shader urpShader = Shader.Find("Universal Render Pipeline/Lit");
             Material transparentMaterial;
@@ -3622,7 +3628,9 @@ public class ARManagerInitializer2 : MonoBehaviour
                         name = "AR_Mesh_Transparent_URP_Material"
                   };
                   transparentMaterial.SetFloat("_Surface", 1.0f); // Set Surface Type to Transparent
-                  transparentMaterial.SetColor("_BaseColor", new Color(0.6f, 0.8f, 1.0f, 0.1f)); // A faint blue
+                  transparentMaterial.SetColor("_BaseColor", new Color(0.6f, 0.8f, 1.0f, 0.0f)); // Полностью отключен
+                  // Устанавливаем render queue чтобы меши рендерились после плоскостей
+                  transparentMaterial.renderQueue = 3100; // После стандартных прозрачных объектов
             }
             else
             {
@@ -3637,7 +3645,8 @@ public class ARManagerInitializer2 : MonoBehaviour
                   {
                         name = "AR_Mesh_Transparent_Legacy_Material"
                   };
-                  transparentMaterial.SetColor("_Color", new Color(0.6f, 0.8f, 1.0f, 0.1f));
+                  transparentMaterial.SetColor("_Color", new Color(0.6f, 0.8f, 1.0f, 0.0f)); // Полностью отключен
+                  transparentMaterial.renderQueue = 3100; // После стандартных прозрачных объектов
             }
 
             // Assign the material to all current and future meshes managed by ARMeshManager
@@ -3675,5 +3684,6 @@ public class ARManagerInitializer2 : MonoBehaviour
             meshManager.meshesChanged += ApplyMaterialToMeshes;
 
             Debug.Log("[ARManagerInitializer2] ✅ ARMeshManager configured to use transparent materials for environment meshes.");
+            */
       }
 }

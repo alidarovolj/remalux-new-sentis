@@ -21,7 +21,9 @@ public class SegmentationPlaneDebugger : MonoBehaviour
 
       [Header("Статус системы")]
       [SerializeField] private bool isSegmentationInitialized = false;
+#pragma warning disable 0414 // Field assigned but never used - используется для отображения в инспекторе
       [SerializeField] private bool isReceivingMaskUpdates = false;
+#pragma warning restore 0414
       [SerializeField] private int maskUpdateCount = 0;
       [SerializeField] private int raycastHitCount = 0;
       [SerializeField] private int planesGeneratedCount = 0;
@@ -29,7 +31,9 @@ public class SegmentationPlaneDebugger : MonoBehaviour
       [Header("Последние результаты")]
       [SerializeField] private string lastMaskInfo = "Не получено";
       [SerializeField] private string lastRaycastResult = "Не выполнен";
+#pragma warning disable 0414 // Field assigned but never used - используется для отображения в инспекторе
       [SerializeField] private string lastPlaneGenerationResult = "Не создавались";
+#pragma warning restore 0414
 
       private void Start()
       {

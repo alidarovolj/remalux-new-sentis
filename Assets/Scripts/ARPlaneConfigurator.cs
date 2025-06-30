@@ -145,13 +145,16 @@ public class ARPlaneConfigurator : MonoBehaviour
         // Если нужно отключить обновления плоскостей после стабилизации
         if (disablePlaneUpdatesAfterStabilization && persistedCount > 0)
         {
+            // ВРЕМЕННО ОТКЛЮЧЕНО: Разрешаем непрерывное обнаружение плоскостей
             // Отключаем обновление плоскостей, но не сам PlaneManager
             // Сначала сохраняем текущий режим обнаружения, затем временно отключаем
-            PlaneDetectionMode currentMode = planeManager.requestedDetectionMode;
-            planeManager.requestedDetectionMode = PlaneDetectionMode.None;
+            // PlaneDetectionMode currentMode = planeManager.requestedDetectionMode;
+            // planeManager.requestedDetectionMode = PlaneDetectionMode.None;
 
-            // Через 1 секунду включаем обратно, но только для новых плоскостей
-            StartCoroutine(ReenableLimitedPlaneDetection(currentMode));
+            // // Через 1 секунду включаем обратно, но только для новых плоскостей
+            // StartCoroutine(ReenableLimitedPlaneDetection(currentMode));
+
+            Debug.Log("[ARPlaneConfigurator] 🔄 Стабилизация не блокирует обнаружение новых плоскостей (режим отладки)");
         }
     }
 
@@ -863,5 +866,36 @@ public class ARPlaneConfigurator : MonoBehaviour
         }
 
         return true;
+    }
+
+    private void Update()
+    {
+        // Принудительно поддерживаем обнаружение плоскостей каждые 5 секунд
+        if (Time.frameCount % 300 == 0 && planeManager != null) // Каждые 5 секунд при 60 FPS
+        {
+            PlaneDetectionMode expectedMode = PlaneDetectionMode.None;
+            if (enableVerticalPlanes) expectedMode |= PlaneDetectionMode.Vertical;
+            if (enableHorizontalPlanes) expectedMode |= PlaneDetectionMode.Horizontal;
+
+            if (planeManager.requestedDetectionMode != expectedMode)
+            {
+                Debug.Log($"[ARPlaneConfigurator] 🔄 Восстанавливаем режим обнаружения плоскостей: {expectedMode} (было: {planeManager.requestedDetectionMode})");
+                planeManager.requestedDetectionMode = expectedMode;
+            }
+
+            // Логируем статистику плоскостей
+            int totalPlanes = 0;
+            int verticalPlanes = 0;
+            foreach (ARPlane plane in planeManager.trackables)
+            {
+                totalPlanes++;
+                if (IsVerticalPlane(plane)) verticalPlanes++;
+            }
+
+            if (showDebugInfo && Time.frameCount % 900 == 0) // Каждые 15 секунд
+            {
+                Debug.Log($"[ARPlaneConfigurator] 📊 Статистика плоскостей: Всего={totalPlanes}, Вертикальных={verticalPlanes}, Стабильных={stablePlanes.Count}");
+            }
+        }
     }
 }

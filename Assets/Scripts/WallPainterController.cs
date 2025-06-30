@@ -80,11 +80,26 @@ public class WallPainterController : MonoBehaviour
 
       private void Awake()
       {
+            if (wallSegmentation == null)
+            {
+                  Debug.Log("[WallPainterController] WallSegmentation не назначен, пытаюсь найти в сцене...");
+                  wallSegmentation = FindObjectOfType<WallSegmentation>();
+                  if (wallSegmentation != null)
+                  {
+                        Debug.Log("[WallPainterController] ✅ WallSegmentation найден и назначен автоматически.");
+                  }
+                  else
+                  {
+                        Debug.LogError("[WallPainterController] ❌ Не удалось найти WallSegmentation в сцене! Компонент не может работать.");
+                        enabled = false;
+                        return;
+                  }
+            }
+
             if (raycastManager == null) raycastManager = GetComponent<ARRaycastManager>();
             if (m_AnchorManager == null) m_AnchorManager = GetComponent<ARAnchorManager>();
             if (planeManager == null) planeManager = GetComponent<ARPlaneManager>();
             if (arCamera == null) arCamera = Camera.main;
-            if (wallSegmentation == null) wallSegmentation = FindObjectOfType<WallSegmentation>();
       }
 
       private void Start()
@@ -639,7 +654,15 @@ internal class ManagedWall
             if (Anchor == null)
             {
                   var pose = new Pose(_positionFilter.GetState(), _rotationSmoother.GetState());
-                  Anchor = _anchorManager.AddAnchor(pose);
+
+                  // Создаем временный GameObject для якоря
+                  var tempAnchorObj = new GameObject("TempAnchor");
+                  tempAnchorObj.transform.position = pose.position;
+                  tempAnchorObj.transform.rotation = pose.rotation;
+
+                  // Добавляем компонент ARAnchor
+                  Anchor = tempAnchorObj.AddComponent<ARAnchor>();
+
                   if (Anchor != null) WallObject.transform.SetParent(Anchor.transform, false);
             }
             else

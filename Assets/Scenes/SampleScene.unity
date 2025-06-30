@@ -603,8 +603,8 @@ MonoBehaviour:
   wallSegmentation: {fileID: 956393578}
   arCamera: {fileID: 331264288}
   raycastManager: {fileID: 511383933}
-  planeManager: {fileID: 0}
-  m_AnchorManager: {fileID: 0}
+  planeManager: {fileID: 151853166}
+  m_AnchorManager: {fileID: 1004066124}
   wallPlanePrefab: {fileID: 3917181021891084353, guid: 5aa212ceb657e42f288aa70c17fcb592,
     type: 3}
   wallPaintMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4, type: 2}
@@ -887,7 +887,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   wallSegmentation: {fileID: 956393578}
-  wallPainterController: {fileID: 0}
+  wallPainterController: {fileID: 511383932}
   arManager: {fileID: 367304186}
   enableDebugLogging: 1
   visualizeRaycastResults: 1
@@ -944,11 +944,29 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e883d66876404ea4ea89b2bd73fe9657, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  segmentationMaskTexture: {fileID: 0}
+  modelAsset: {fileID: 5022602860645237092, guid: 7fb62a2f4059841628326f9c81eb8875,
+    type: 3}
+  backendType: 1
+  modelLoadTimeout: 30
+  wallClassIndex: 1
+  wallConfidence: 0.75
   inputResolution: {x: 224, y: 224}
-  arCameraManager: {fileID: 0}
+  arCameraManager: {fileID: 1019933338}
   arSessionManager: {fileID: 1288005832}
   xrOrigin: {fileID: 1004066121}
+  segmentationMaskTexture: {fileID: 0}
+  segmentationMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
+    type: 2}
+  applyBlur: 1
+  blurSize: 3
+  applySharpen: 0
+  sharpenStrength: 0.8
+  applyContrast: 1
+  contrastThreshold: 0.5
+  contrastMultiplier: 1.5
+  debugMode: 0
+  webCamTexture: {fileID: 0}
+  useWebCamFallback: 0
 --- !u!4 &956393579
 Transform:
   m_ObjectHideFlags: 0
@@ -1039,6 +1057,8 @@ GameObject:
   - component: {fileID: 1009996023}
   - component: {fileID: 1009996022}
   - component: {fileID: 1009996021}
+  - component: {fileID: 1009996024}
+  - component: {fileID: 1009996025}
   m_Layer: 5
   m_Name: RawImage
   m_TagString: Untagged
@@ -1077,6 +1097,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b147afcb63c6fa34997d9f9f16c82cc2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  enableMaskUpdates: 1
+  logUpdates: 1
+  segmentationDisplayMaterial: {fileID: 2100000, guid: ce622d43d1904ad489357a3495ab6ee4,
+    type: 2}
 --- !u!114 &1009996022
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1112,6 +1136,35 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1009996019}
   m_CullTransparentMesh: 1
+--- !u!114 &1009996024
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1009996019}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f1234567890abcdef1234567890abcde, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  enableTest: 1
+  color1: {r: 1, g: 0, b: 0, a: 1}
+  color2: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+--- !u!114 &1009996025
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1009996019}
+  m_Enabled: 0
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745b774419ab946caadc5812418751e2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  blockAllUpdates: 1
+  useAnimation: 1
 --- !u!114 &1019933337 stripped
 MonoBehaviour:
   m_CorrespondingSourceObject: {fileID: 2512387469002778310, guid: 48cb3fb68c91eb94999fd99957eb0cae,

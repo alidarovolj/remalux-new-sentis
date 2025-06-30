@@ -20,22 +20,28 @@ public class PreciseSurfaceMeasurement : MonoBehaviour
       [Tooltip("Эталонный объект для калибровки (например, стандартный лист A4 = 21см)")]
       [SerializeField] private float referenceObjectSize = 0.21f; // Размер эталонного объекта в метрах
       [SerializeField] private bool useAutomaticCalibration = true;
+#pragma warning disable 0414 // Field assigned but never used
       [SerializeField] private float calibrationTolerance = 0.05f; // 5см допустимая погрешность
 
       [Header("Измерение поверхностей")]
       [SerializeField] private bool useDepthData = true;
       [SerializeField] private bool usePointCloud = true;
-      [SerializeField] private bool useMultipleReferences = true;
+      [SerializeField] private bool useMultipleReferences = true; // Будет использоваться в будущих версиях
+#pragma warning restore 0414
       [SerializeField] private int minPointsForMeasurement = 50;
 
       [Header("Настройки точности")]
       [SerializeField] private float meshResolution = 0.02f; // 2см точность
+#pragma warning disable 0414 // Field assigned but never used
       [SerializeField] private float outlierThreshold = 0.1f; // 10см для фильтрации выбросов
+#pragma warning restore 0414
       [SerializeField] private bool smoothMeasurements = true;
 
       [Header("Отладка")]
       [SerializeField] private bool debugMode = true;
-      [SerializeField] private bool showMeasurementVisualization = true;
+#pragma warning disable 0414 // Field assigned but never used
+      [SerializeField] private bool showMeasurementVisualization = true; // Будет использоваться для UI
+#pragma warning restore 0414
       [SerializeField] private Material debugMaterial;
 
       // Приватные поля
