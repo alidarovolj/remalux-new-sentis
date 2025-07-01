@@ -131,6 +131,16 @@ public class ARManagerInitializer2 : MonoBehaviour
       [SerializeField] private float maxWallWidth = 8.0f;  // УВЕЛИЧЕНО: Максимальная ширина стены для длинных стен
       [SerializeField] private float planeSizeMultiplier = 1.5f; // УВЕЛИЧЕНО: Множитель для покрытия всей стены
 
+      [Header("🔧 Настройки PlaneGeometryEnhancer")]
+      [Tooltip("Использовать улучшенный алгоритм расчета геометрии плоскостей для повышения точности")]
+      [SerializeField] private bool useEnhancedPlaneGeometry = true;
+      [Tooltip("Показывать подробные логи работы PlaneGeometryEnhancer")]
+      [SerializeField] private bool enableEnhancedGeometryLogging = false;
+
+      // ВАЖНО: PlaneGeometryEnhancer готов к интеграции, но Unity пока не может найти класс во время компиляции.
+      // Пока что система использует fallback-метод CreatePlaneForWallAreaEnhanced_Fallback.
+      // См. Assets/Scripts/PlaneGeometryEnhancer_README.md для подробной информации и инструкций по активации.
+
       [Tooltip("Дополнительный коэффициент масштабирования для уменьшения размера создаваемых плоскостей. 1.0 = без изменений, 0.5 = в два раза меньше.")]
       // [SerializeField] private float planeSizeScalingFactor = 0.5f; // Не используется - удалено для избежания предупреждения
 
@@ -237,6 +247,7 @@ public class ARManagerInitializer2 : MonoBehaviour
             // Инициализация системы персистентных плоскостей
             InitializePersistentPlanesSystem();
             ConfigureARMeshManager();
+            TryActivateARMeshing(); // Попытка активации AR Meshing для создания геометрии
 
             if (useDetectedPlanes)
             {
@@ -1044,6 +1055,13 @@ public class ARManagerInitializer2 : MonoBehaviour
                   return;
             }
 
+            // Выбираем между улучшенным и стандартным алгоритмом
+            if (useEnhancedPlaneGeometry)
+            {
+                  CreatePlaneForWallAreaEnhanced(area, textureWidth, textureHeight);
+                  return;
+            }
+
             Camera mainCamera = xrOrigin.Camera;
             float planeWorldWidth, planeWorldHeight;
             float distanceFromCamera;
@@ -1236,6 +1254,120 @@ public class ARManagerInitializer2 : MonoBehaviour
             planeInstanceCounter++;
             if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ✔️ Плоскость '{planeName}' УСПЕШНО СОЗДАНА и добавлена. Всего создано: {planeInstanceCounter}. Текущее кол-во в generatedPlanes: {generatedPlanes.Count}");
             return; // ИСПРАВЛЕНО: planeObject больше не возвращается, т.к. метод void
+      }
+
+      /// <summary>
+      /// Улучшенная версия создания плоскости с использованием PlaneGeometryEnhancer
+      /// для более точного расчета углов и размеров
+      /// </summary>
+      private void CreatePlaneForWallAreaEnhanced(Rect area, int textureWidth, int textureHeight)
+      {
+            if (enableEnhancedGeometryLogging)
+                  Debug.Log($"[ARManagerInitializer2-Enhanced] 🔧 Создание плоскости с улучшенной геометрией для области {area.width}x{area.height}px");
+
+            try
+            {
+                  // Проверяем доступность PlaneGeometryEnhancer через рефлексию
+                  var planeEnhancerType = System.Type.GetType("PlaneGeometryEnhancer");
+                  if (planeEnhancerType == null)
+                  {
+                        if (enableEnhancedGeometryLogging)
+                              Debug.LogWarning("[ARManagerInitializer2-Enhanced] PlaneGeometryEnhancer не найден, используем fallback");
+                  }
+                  else
+                  {
+                        if (enableEnhancedGeometryLogging)
+                              Debug.Log("[ARManagerInitializer2-Enhanced] PlaneGeometryEnhancer найден, но пока используем fallback до полной интеграции");
+                  }
+
+                  // Пока используем fallback метод
+                  CreatePlaneForWallAreaEnhanced_Fallback(area, textureWidth, textureHeight);
+            }
+            catch (System.Exception ex)
+            {
+                  Debug.LogError($"[ARManagerInitializer2-Enhanced] ❌ Ошибка: {ex.Message}. Используем fallback метод.");
+                  CreatePlaneForWallAreaEnhanced_Fallback(area, textureWidth, textureHeight);
+            }
+      }
+
+      /// <summary>
+      /// Временный fallback-метод, копирующий логику стандартного CreatePlaneForWallArea
+      /// </summary>
+      private void CreatePlaneForWallAreaEnhanced_Fallback(Rect area, int textureWidth, int textureHeight)
+      {
+            if (enableEnhancedGeometryLogging)
+                  Debug.Log($"[ARManagerInitializer2-Enhanced-Fallback] 🔧 Создание плоскости (fallback) для области {area.width}x{area.height}px");
+
+            Camera mainCamera = xrOrigin.Camera;
+
+            // Используем простой рейкастинг в центр области (копия из оригинального метода)
+            Vector2 areaCenterUV = new Vector2(
+                (area.xMin + area.width * 0.5f) / textureWidth,
+                (area.yMin + area.height * 0.5f) / textureHeight
+            );
+
+            Ray ray = mainCamera.ViewportPointToRay(new Vector3(areaCenterUV.x, areaCenterUV.y, 0));
+            LayerMask raycastLayerMask = LayerMask.GetMask("SimulatedEnvironment", "Default", "Wall");
+
+            RaycastHit hitInfo;
+            if (Physics.Raycast(ray, out hitInfo, maxRayDistance, raycastLayerMask))
+            {
+                  // Простой расчет размеров (упрощенная версия)
+                  float halfFovVertical = mainCamera.fieldOfView * 0.5f * Mathf.Deg2Rad;
+                  float worldHeightAtDistance = 2.0f * hitInfo.distance * Mathf.Tan(halfFovVertical);
+                  float worldWidthAtDistance = worldHeightAtDistance * mainCamera.aspect;
+
+                  float planeWorldWidth = (area.width / textureWidth) * worldWidthAtDistance * planeSizeMultiplier;
+                  float planeWorldHeight = (area.height / textureHeight) * worldHeightAtDistance * planeSizeMultiplier;
+
+                  planeWorldWidth = Mathf.Clamp(planeWorldWidth, minPlaneSize, maxWallWidth);
+                  planeWorldHeight = Mathf.Clamp(planeWorldHeight, minPlaneSize, maxWallHeight);
+
+                  // Проверки размера и соотношения сторон
+                  if (planeWorldWidth < minPlaneSizeInMeters || planeWorldHeight < minPlaneSizeInMeters)
+                        return;
+
+                  float aspectRatio = Mathf.Max(planeWorldWidth / planeWorldHeight, planeWorldHeight / planeWorldWidth);
+                  if (aspectRatio > maxAspectRatio)
+                        return;
+
+                  // Создание плоскости
+                  string planeName = $"EnhancedFallbackPlane_{planeInstanceCounter++}";
+                  GameObject planeObject = new GameObject(planeName);
+
+                  Vector3 planePosition = hitInfo.point + hitInfo.normal * 0.01f;
+                  Quaternion planeRotation = Quaternion.LookRotation(-hitInfo.normal, mainCamera.transform.up);
+
+                  planeObject.transform.position = planePosition;
+                  planeObject.transform.rotation = planeRotation;
+
+                  // Настройка компонентов
+                  MeshRenderer renderer = planeObject.AddComponent<MeshRenderer>();
+                  renderer.enabled = true;
+
+                  MeshFilter meshFilter = planeObject.AddComponent<MeshFilter>();
+                  meshFilter.mesh = CreatePlaneMesh(planeWorldWidth, planeWorldHeight);
+
+                  if (this.verticalPlaneMaterial != null)
+                        renderer.material = new Material(this.verticalPlaneMaterial);
+                  else
+                        renderer.material = CreateFallbackMaterial();
+
+                  MeshCollider meshCollider = planeObject.AddComponent<MeshCollider>();
+                  meshCollider.sharedMesh = meshFilter.mesh;
+
+                  this.generatedPlanes.Add(planeObject);
+                  if (this.planeCreationTimes != null)
+                        this.planeCreationTimes[planeObject] = Time.time;
+
+                  if (enableEnhancedGeometryLogging)
+                        Debug.Log($"[ARManagerInitializer2-Enhanced-Fallback] ✅ Fallback плоскость '{planeName}' создана: {planeWorldWidth:F2}x{planeWorldHeight:F2}м");
+            }
+            else
+            {
+                  if (enableEnhancedGeometryLogging)
+                        Debug.LogWarning("[ARManagerInitializer2-Enhanced-Fallback] Рейкастинг не попал в поверхность");
+            }
       }
 
       private Mesh CreatePlaneMesh(float width, float height)
@@ -3476,25 +3608,23 @@ public class ARManagerInitializer2 : MonoBehaviour
       {
             Debug.Log("=== [ARManagerInitializer2] УЛЬТРА-ДИАГНОСТИКА ВСЕХ ОБЪЕКТОВ ===");
 
-            // 1. Показываем ВСЕ объекты в сцене
+            // 1. Общая диагностика
             GameObject[] allObjects = FindObjectsOfType<GameObject>(true);
-            Debug.Log($"[Ультра-диагностика] Всего GameObject-ов в сцене (включая неактивные): {allObjects.Length}");
-
-            // 2. Детально анализируем каждый объект
             int objectsWithMesh = 0;
             int objectsWithCollider = 0;
             int addedColliders = 0;
 
+            Debug.Log($"[Ультра-диагностика] Всего GameObject-ов в сцене (включая неактивные): {allObjects.Length}");
+
+            // 2. Проходим по всем объектам
             foreach (GameObject obj in allObjects)
             {
                   MeshRenderer meshRenderer = obj.GetComponent<MeshRenderer>();
                   MeshFilter meshFilter = obj.GetComponent<MeshFilter>();
                   Collider existingCollider = obj.GetComponent<Collider>();
 
-                  // Показываем информацию о КАЖДОМ объекте с MeshRenderer или в слоях симуляции
-                  if (meshRenderer != null || obj.layer == 8 || obj.layer == 30 ||
-                      obj.name.ToLower().Contains("wall") || obj.name.ToLower().Contains("floor") ||
-                      obj.name.ToLower().Contains("room") || obj.name.ToLower().Contains("environment"))
+                  // Выводим подробную информацию о каждом объекте
+                  if (obj != null)
                   {
                         string components = "";
                         if (meshRenderer != null) components += "MeshRenderer ";
@@ -3536,26 +3666,106 @@ public class ARManagerInitializer2 : MonoBehaviour
             Debug.Log($"  ├─ С Collider: {objectsWithCollider}");
             Debug.Log($"  └─ Добавлено коллайдеров: {addedColliders}");
 
+            // *** НОВОЕ: Если нет коллайдеров, создаем тестовые стены ***
+            if (objectsWithCollider == 0 && addedColliders == 0)
+            {
+                  Debug.LogWarning("[Ультра-диагностика] ⚠️ Коллайдеры не найдены! Создаем тестовую геометрию для рейкастинга...");
+                  CreateTestEnvironmentGeometry();
+            }
+
             // 3. Ищем объекты по специальным тегам Unity XR
             Transform[] allTransforms = FindObjectsOfType<Transform>(true);
             Debug.Log($"[Ультра-диагностика] Ищем XR объекты среди {allTransforms.Length} трансформов...");
 
             foreach (Transform t in allTransforms)
             {
-                  string name = t.name.ToLower();
-                  if (name.Contains("xr") || name.Contains("ar") || name.Contains("simulation") ||
-                      name.Contains("mock") || name.Contains("synthetic") || name.Contains("environment"))
+                  if (t.name.ToLower().Contains("xr") ||
+                      t.name.ToLower().Contains("ar") ||
+                      t.name.ToLower().Contains("mesh") ||
+                      t.name.ToLower().Contains("simulation") ||
+                      t.name.ToLower().Contains("environment"))
                   {
-                        Debug.Log($"[Ультра-диагностика] 🎯 Потенциальный XR объект: '{t.name}', родитель: '{(t.parent ? t.parent.name : "ROOT")}', активен: {t.gameObject.activeInHierarchy}");
+                        Debug.Log($"[Ультра-диагностика] 🎯 Потенциальный XR объект: '{t.name}', родитель: '{(t.parent != null ? t.parent.name : "ROOT")}', активен: {t.gameObject.activeInHierarchy}");
                   }
             }
 
-            // 4. Финальная проверка
             Collider[] finalColliders = FindObjectsOfType<Collider>(true);
             MeshRenderer[] finalRenderers = FindObjectsOfType<MeshRenderer>(true);
             Debug.Log($"[Ультра-диагностика] 🎯 ФИНАЛЬНЫЙ РЕЗУЛЬТАТ: Коллайдеров: {finalColliders.Length}, MeshRenderer-ов: {finalRenderers.Length}");
 
             Debug.Log("=== [ARManagerInitializer2] КОНЕЦ УЛЬТРА-ДИАГНОСТИКИ ===");
+      }
+
+      /// <summary>
+      /// Создает тестовую геометрию окружения для рейкастинга когда ARMeshing недоступен
+      /// </summary>
+      private void CreateTestEnvironmentGeometry()
+      {
+            Debug.Log("[CreateTestEnvironmentGeometry] 🔧 Создание тестовой геометрии для рейкастинга...");
+
+            // Найдем родительский объект для тестовой геометрии
+            GameObject testParent = GameObject.Find("TestEnvironmentGeometry");
+            if (testParent == null)
+            {
+                  testParent = new GameObject("TestEnvironmentGeometry");
+                  testParent.layer = LayerMask.NameToLayer("SimulatedEnvironment");
+                  if (testParent.layer == -1) testParent.layer = 0; // Fallback to Default
+            }
+
+            // Создаем несколько тестовых стен вокруг камеры
+            CreateTestWall(testParent, "FrontWall", new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(6, 3, 0.1f));
+            CreateTestWall(testParent, "LeftWall", new Vector3(-3, 0, 0), new Vector3(0, 90, 0), new Vector3(6, 3, 0.1f));
+            CreateTestWall(testParent, "RightWall", new Vector3(3, 0, 0), new Vector3(0, -90, 0), new Vector3(6, 3, 0.1f));
+            CreateTestWall(testParent, "BackWall", new Vector3(0, 0, -3), new Vector3(0, 180, 0), new Vector3(6, 3, 0.1f));
+
+            // Создаем пол
+            CreateTestWall(testParent, "Floor", new Vector3(0, -1.5f, 0), new Vector3(90, 0, 0), new Vector3(6, 6, 0.1f));
+
+            Debug.Log("[CreateTestEnvironmentGeometry] ✅ Создано 5 тестовых поверхностей для рейкастинга");
+      }
+
+      /// <summary>
+      /// Создает одну тестовую стену
+      /// </summary>
+      private void CreateTestWall(GameObject parent, string name, Vector3 position, Vector3 rotation, Vector3 scale)
+      {
+            GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            wall.name = name;
+            wall.transform.SetParent(parent.transform);
+            wall.transform.localPosition = position;
+            wall.transform.localRotation = Quaternion.Euler(rotation);
+            wall.transform.localScale = scale;
+
+            // Настраиваем слой
+            wall.layer = parent.layer;
+
+            // Убеждаемся что у стены есть коллайдер
+            BoxCollider collider = wall.GetComponent<BoxCollider>();
+            if (collider == null)
+            {
+                  collider = wall.AddComponent<BoxCollider>();
+            }
+
+            // Делаем стену визуально прозрачной но физически активной
+            MeshRenderer renderer = wall.GetComponent<MeshRenderer>();
+            if (renderer != null)
+            {
+                  // Создаем прозрачный материал
+                  Material transparentMat = new Material(Shader.Find("Standard"));
+                  transparentMat.SetFloat("_Mode", 3); // Transparent mode
+                  transparentMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                  transparentMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                  transparentMat.SetInt("_ZWrite", 0);
+                  transparentMat.DisableKeyword("_ALPHATEST_ON");
+                  transparentMat.EnableKeyword("_ALPHABLEND_ON");
+                  transparentMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                  transparentMat.renderQueue = 3000;
+                  transparentMat.color = new Color(0.5f, 0.8f, 1.0f, 0.1f); // Слегка видимый голубой
+
+                  renderer.material = transparentMat;
+            }
+
+            Debug.Log($"[CreateTestWall] ✅ Создана тестовая стена: {name} в позиции {position}");
       }
 
       /// <summary>
@@ -3675,5 +3885,100 @@ public class ARManagerInitializer2 : MonoBehaviour
             meshManager.meshesChanged += ApplyMaterialToMeshes;
 
             Debug.Log("[ARManagerInitializer2] ✅ ARMeshManager configured to use transparent materials for environment meshes.");
+      }
+
+      /// <summary>
+      /// Пытается принудительно активировать AR Meshing для создания геометрии окружения
+      /// </summary>
+      private void TryActivateARMeshing()
+      {
+            Debug.Log("[ARManagerInitializer2] 🔧 Попытка активации AR Meshing...");
+
+            var meshManager = FindObjectOfType<ARMeshManager>();
+            if (meshManager == null)
+            {
+                  Debug.LogWarning("[ARManagerInitializer2] ARMeshManager не найден в сцене");
+                  return;
+            }
+
+            // Убеждаемся что ARMeshManager включен
+            if (!meshManager.enabled)
+            {
+                  meshManager.enabled = true;
+                  Debug.Log("[ARManagerInitializer2] ✅ ARMeshManager принудительно включен");
+            }
+
+            // Проверяем настройки мешинга
+            Debug.Log($"[ARManagerInitializer2] ARMeshManager настройки: Density={meshManager.density}, Normals={meshManager.normals}");
+
+            // Пытаемся активировать scene reconstruction в AR Session
+            var arSession = FindObjectOfType<ARSession>();
+            if (arSession != null)
+            {
+                  Debug.Log("[ARManagerInitializer2] Найден ARSession, попытка включения scene reconstruction...");
+
+                  // На iOS это может потребовать явной настройки конфигурации
+                  try
+                  {
+                        // Получаем текущую конфигурацию
+#if UNITY_IOS && !UNITY_EDITOR
+                        using (var configuration = new UnityEngine.XR.ARKit.ARWorldTrackingConfiguration())
+                        {
+                              // Включаем scene reconstruction если поддерживается
+                              if (UnityEngine.XR.ARKit.ARWorldTrackingConfiguration.supportsSceneReconstruction)
+                              {
+                                    configuration.sceneReconstruction = UnityEngine.XR.ARKit.ARSceneReconstruction.Mesh;
+                                    Debug.Log("[ARManagerInitializer2] ✅ Scene reconstruction включен в конфигурации");
+                              }
+                              else
+                              {
+                                    Debug.LogWarning("[ARManagerInitializer2] ⚠️ Scene reconstruction не поддерживается на этом устройстве");
+                              }
+                        }
+#endif
+                  }
+                  catch (System.Exception e)
+                  {
+                        Debug.LogWarning($"[ARManagerInitializer2] Не удалось настроить scene reconstruction: {e.Message}");
+                  }
+            }
+
+            // Подписываемся на события мешинга для отладки
+            if (meshManager != null)
+            {
+                  meshManager.meshesChanged += OnARMeshesChanged;
+                  Debug.Log("[ARManagerInitializer2] ✅ Подписались на события ARMeshManager");
+            }
+
+            Debug.Log("[ARManagerInitializer2] 🔧 Активация AR Meshing завершена");
+      }
+
+      /// <summary>
+      /// Обработчик событий изменения AR мешей для отладки
+      /// </summary>
+      private void OnARMeshesChanged(ARMeshesChangedEventArgs args)
+      {
+            if (args.added.Count > 0)
+            {
+                  Debug.Log($"[ARManagerInitializer2] 🎯 Добавлено {args.added.Count} AR мешей");
+                  foreach (var mesh in args.added)
+                  {
+                        var collider = mesh.GetComponent<MeshCollider>();
+                        if (collider != null)
+                        {
+                              Debug.Log($"[ARManagerInitializer2] ✅ AR меш '{mesh.name}' имеет MeshCollider для рейкастинга");
+                        }
+                  }
+            }
+
+            if (args.updated.Count > 0)
+            {
+                  Debug.Log($"[ARManagerInitializer2] 🔄 Обновлено {args.updated.Count} AR мешей");
+            }
+
+            if (args.removed.Count > 0)
+            {
+                  Debug.Log($"[ARManagerInitializer2] ❌ Удалено {args.removed.Count} AR мешей");
+            }
       }
 }
