@@ -620,7 +620,7 @@ public class WallSegmentation : MonoBehaviour
       /// </summary>
       private void Start()
       {
-            this.debugFlags = DebugFlags.None; // FORCEFULLY DISABLE DEBUG LOGS
+            // this.debugFlags = DebugFlags.None; // FORCEFULLY DISABLE DEBUG LOGS - ЗАКОММЕНТИРОВАНО ДЛЯ ОТЛАДКИ
             Debug.Log("[WallSegmentation] ➡️ Start() вызван. Начало инициализации...");
 
             // Устанавливаем значения по умолчанию
