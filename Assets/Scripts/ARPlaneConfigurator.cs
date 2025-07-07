@@ -46,6 +46,15 @@ public class ARPlaneConfigurator : MonoBehaviour
 
     private void Awake()
     {
+        // Если в сцене есть ARManagerInitializer2, этот компонент должен быть отключен,
+        // так как он конфликтует с кастомной логикой создания плоскостей.
+        if (FindObjectOfType<ARManagerInitializer2>() != null)
+        {
+            Debug.LogWarning("ARPlaneConfigurator: Обнаружен ARManagerInitializer2. Этот компонент будет отключен, чтобы избежать конфликтов.");
+            enabled = false;
+            return;
+        }
+
         if (planeManager == null)
         {
             planeManager = FindObjectOfType<ARPlaneManager>();

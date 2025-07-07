@@ -40,23 +40,177 @@ public class ARManagerInitializer2 : MonoBehaviour
       public bool useDetectedPlanes = false; // ИЗМЕНЕНО: по умолчанию false, чтобы использовать сегментацию
 
       [Tooltip("Минимальный размер плоскости для создания (в метрах)")]
-      [SerializeField] private float minPlaneSizeInMeters = 0.1f;
+      [SerializeField] private float minPlaneSizeInMeters = 0.6f; // УВЕЛИЧЕНО: с 0.1f до 0.6f для фильтрации мелких деталей
 
       [Tooltip("Минимальный размер области в пикселях (ширина И высота) для её учета")]
-      [SerializeField] private int minPixelsDimensionForArea = 1; // было minAreaSize
+      [SerializeField] private int minPixelsDimensionForArea = 20; // УВЕЛИЧЕНО: с 1 до 20 для фильтрации мелких областей
 
       [Tooltip("Минимальная площадь области в пикселях для её учета")]
-      [SerializeField] private int minAreaSizeInPixels = 150; // БЫЛО 1500. Новое поле, раньше было minAreaSize = 2*2=4 или 50
+      [SerializeField] private int minAreaSizeInPixels = 1500; // УВЕЛИЧЕНО: с 150 до 1500 для создания более крупных плоскостей
 
       [Tooltip("Разрешение, до которого будет уменьшена маска сегментации перед анализом на CPU (для повышения производительности). Меньшее значение = быстрее, но менее точно.")]
-      [SerializeField] private int maskProcessingResolution = 128;
+      [SerializeField] private int maskProcessingResolution = 256; // УВЕЛИЧЕНО: с 128 до 256 для лучшей точности
 
       [Tooltip("Порог значения красного канала (0-255) для пикселя, чтобы считать его частью области стены при поиске связных областей.")]
       [SerializeField] private byte wallPixelThreshold = 120; // Увеличено с 30 до 60 для лучшей фильтрации шума, ЗАТЕМ ДО 120
 
+      [Header("🔧 Адаптивные фильтры областей")]
+      [Tooltip("Минимальное соотношение пикселей стены к общей площади области (0.0-1.0)")]
+      [SerializeField, Range(0.1f, 1.0f)] private float minWallRatio = 0.6f; // УВЕЛИЧЕНО: с 0.4f до 0.6f для более качественных областей
+      [Tooltip("Максимальное соотношение сторон (ширина/высота) для областей")]
+      [SerializeField, Range(2.0f, 20.0f)] private float maxAreaAspectRatio = 5.0f; // УМЕНЬШЕНО: с 8.0f до 5.0f для более квадратных областей
+      [Tooltip("Включить адаптивную настройку порогов на основе качества маски")]
+      [SerializeField] private bool useAdaptiveThresholds = true;
+      [Tooltip("Коэффициент ослабления фильтров для зашумлённых масок (чем ниже качество, тем мягче фильтры)")]
+      [SerializeField, Range(0.5f, 1.5f)] private float noiseToleranceFactor = 1.2f;
+
+      [Header("🎯 Новая система контуров (Уровень 2)")]
+      [Tooltip("Использовать новую систему поиска контуров вместо FindWallAreas")]
+      [SerializeField] private bool useContourBasedDetection = false; // ВРЕМЕННО ОТКЛЮЧЕНО из-за зацикливания
+      [Tooltip("Минимальная длина контура для создания плоскости (в пикселях)")]
+      [SerializeField, Range(10, 500)] private int minContourLength = 8;
+      [Tooltip("Максимальная погрешность упрощения контура (алгоритм Дугласа-Пекера)")]
+      [SerializeField, Range(0.5f, 10.0f)] private float contourSimplificationEpsilon = 2.0f;
+      [Tooltip("Минимальная площадь контура для создания плоскости")]
+      [SerializeField, Range(100, 5000)] private int minContourArea = 10;
+      [Tooltip("Максимальное количество точек в одном контуре (защита от переполнения памяти)")]
+      [SerializeField, Range(500, 10000)] private int maxContourPoints = 5000;
+      [Tooltip("Максимальное количество итераций трассировки контура (защита от зацикливания)")]
+      [SerializeField, Range(1000, 20000)] private int maxContourIterations = 10000;
+
+      [Header("🧮 PCA-регрессия для плоскостей (Уровень 2)")]
+      [Tooltip("Использовать PCA для определения оптимальной ориентации плоскостей")]
+      [SerializeField] private bool usePCAForPlaneOrientation = true;
+      [Tooltip("Минимальное количество точек для PCA анализа")]
+      [SerializeField, Range(10, 1000)] private int minPointsForPCA = 50;
+      [Tooltip("Максимальное расстояние точки от плоскости для включения в PCA (в метрах)")]
+      [SerializeField, Range(0.01f, 0.5f)] private float pcaOutlierThreshold = 0.1f;
+      [Tooltip("Процент точек для исключения как выбросы при робастной регрессии")]
+      [SerializeField, Range(0.0f, 0.3f)] private float pcaOutlierPercentage = 0.15f;
+
+      [Header("📦 OBB геометрически точные размеры (Уровень 2)")]
+      [Tooltip("Использовать OBB для точного определения размеров плоскостей")]
+      [SerializeField] private bool useOBBForPlaneSizing = true;
+      [Tooltip("Коэффициент расширения OBB для учёта погрешностей (1.0 = точный размер)")]
+      [SerializeField, Range(1.0f, 1.5f)] private float obbExpansionFactor = 1.1f;
+      [Tooltip("Минимальная толщина OBB в направлении нормали плоскости (в метрах)")]
+      [SerializeField, Range(0.001f, 0.1f)] private float obbMinThickness = 0.02f;
+      [Tooltip("Адаптивный размер: использовать плотность точек для масштабирования")]
+      [SerializeField] private bool useAdaptiveOBBSizing = true;
+
+      [Header("⚡ Асинхронная обработка GPU (Уровень 2)")]
+      [Tooltip("Использовать AsyncGPUReadback для неблокирующего чтения данных")]
+      [SerializeField] private bool useAsyncGPUReadback = true;
+      [Tooltip("Максимальное количество одновременных асинхронных операций")]
+      [SerializeField, Range(1, 8)] private int maxConcurrentReadbacks = 3;
+      [Tooltip("Таймаут для асинхронных операций (в секундах)")]
+      [SerializeField, Range(0.1f, 5.0f)] private float asyncReadbackTimeout = 1.0f;
+      [Tooltip("Использовать пул текстур для экономии памяти")]
+      [SerializeField] private bool useTexturePooling = true;
+      [Tooltip("Размер пула текстур")]
+      [SerializeField, Range(2, 16)] private int texturePoolSize = 4;
+
+      // ⚡ Асинхронная обработка GPU - приватные поля системы
+      private Queue<AsyncReadbackRequest> readbackRequestQueue = new Queue<AsyncReadbackRequest>();
+      private List<AsyncReadbackOperation> activeReadbackOperations = new List<AsyncReadbackOperation>();
+      private Dictionary<int, Texture2D> texturePool = new Dictionary<int, Texture2D>();
+      private Queue<Texture2D> availableTextures = new Queue<Texture2D>();
+      private System.Action<Texture2D> onAsyncMaskReady;
+      private int totalAsyncOperations = 0;
+      private int successfulAsyncOperations = 0;
+      private int failedAsyncOperations = 0;
+      private int timedOutAsyncOperations = 0;
+      private float avgAsyncProcessingTime = 0f;
+      private Queue<float> asyncProcessingTimes = new Queue<float>();
+      private const int maxAsyncTimeSamples = 50;
+
+      // События для асинхронной архитектуры
+      public System.Action<Texture2D> OnAsyncMaskProcessed;
+      public System.Action<string> OnAsyncOperationFailed;
+      public System.Action<AsyncOperationStats> OnAsyncStatsUpdated;
+
+      // Структуры для асинхронной обработки
+      [System.Serializable]
+      public class AsyncReadbackRequest
+      {
+            public RenderTexture sourceTexture;
+            public int targetWidth;
+            public int targetHeight;
+            public TextureFormat format;
+            public System.Action<Texture2D> callback;
+            public float requestTime;
+            public string operationId;
+            public int priority; // 0 = highest, higher numbers = lower priority
+
+            public AsyncReadbackRequest(RenderTexture source, int width, int height,
+                TextureFormat format, System.Action<Texture2D> callback, int priority = 5)
+            {
+                  this.sourceTexture = source;
+                  this.targetWidth = width;
+                  this.targetHeight = height;
+                  this.format = format;
+                  this.callback = callback;
+                  this.priority = priority;
+                  this.requestTime = Time.time;
+                  this.operationId = System.Guid.NewGuid().ToString("N").Substring(0, 8);
+            }
+      }
+
+      [System.Serializable]
+      public class AsyncReadbackOperation
+      {
+            public UnityEngine.Rendering.AsyncGPUReadbackRequest gpuRequest;
+            public AsyncReadbackRequest originalRequest;
+            public float startTime;
+            public bool isCompleted;
+            public bool hasError;
+            public string errorMessage;
+
+            public float ElapsedTime => Time.time - startTime;
+            public bool IsTimedOut(float timeout) => ElapsedTime > timeout;
+
+            public AsyncReadbackOperation(UnityEngine.Rendering.AsyncGPUReadbackRequest gpuRequest,
+                AsyncReadbackRequest originalRequest)
+            {
+                  this.gpuRequest = gpuRequest;
+                  this.originalRequest = originalRequest;
+                  this.startTime = Time.time;
+                  this.isCompleted = false;
+                  this.hasError = false;
+            }
+      }
+
+      [System.Serializable]
+      public class AsyncOperationStats
+      {
+            public int totalOperations;
+            public int successfulOperations;
+            public int failedOperations;
+            public int timedOutOperations;
+            public int activeOperations;
+            public int queuedOperations;
+            public float averageProcessingTime;
+            public float successRate;
+            public float currentQueueWaitTime;
+
+            public AsyncOperationStats(int total, int successful, int failed, int timedOut,
+                int active, int queued, float avgTime)
+            {
+                  totalOperations = total;
+                  successfulOperations = successful;
+                  failedOperations = failed;
+                  timedOutOperations = timedOut;
+                  activeOperations = active;
+                  queuedOperations = queued;
+                  averageProcessingTime = avgTime;
+                  successRate = total > 0 ? (float)successful / total : 0f;
+                  currentQueueWaitTime = queued > 0 ? (queued * avgTime) : 0f;
+            }
+      }
+
       [Header("Настройки Рейкастинга для Плоскостей")]
       [Tooltip("Включить подробное логирование процесса рейкастинга и фильтрации попаданий.")]
-      [SerializeField] private bool enableDetailedRaycastLogging = false; // ADDED/ENSURED
+      [SerializeField] private bool enableDetailedRaycastLogging = false; // ОТКЛЮЧЕНО для лучшей производительности
       [Tooltip("Максимальное расстояние для рейкастов при поиске поверхностей")]
       [SerializeField] private float maxRayDistance = 15f; // Увеличено с 10 до 15 метров
       [Tooltip("Маска слоев для рейкастинга (например, Default, SimulatedEnvironment, Wall)")]
@@ -85,6 +239,10 @@ public class ARManagerInitializer2 : MonoBehaviour
       // Добавляем защиту от удаления недавно созданных плоскостей
       private Dictionary<GameObject, float> planeCreationTimes = new Dictionary<GameObject, float>();
       private Dictionary<GameObject, float> planeLastVisitedTime = new Dictionary<GameObject, float>();
+
+      // 🛡️ Система гистерезиса для стабилизации плоскостей
+      private Dictionary<GameObject, int> planeMissedFrames = new Dictionary<GameObject, int>(); // Количество пропущенных кадров для каждой плоскости
+      private int maskProcessingFrameCounter = 0; // Счетчик кадров для частоты обработки
 
       [Tooltip("Материал для вертикальных плоскостей")]
       [SerializeField] private Material verticalPlaneMaterial; // Должно быть private
@@ -116,6 +274,14 @@ public class ARManagerInitializer2 : MonoBehaviour
       private float lastSuccessfulSegmentationTime = 0f;
       private float segmentationTimeoutSeconds = 10f; // Тайм-аут для определения "потери" сегментации
 
+      // Диагностические счётчики для событий сегментации
+      private int totalSegmentationEvents = 0;
+      private int successfulSegmentationEvents = 0;
+      private int failedSegmentationEvents = 0;
+      private float lastEventTime = 0f;
+      private float avgEventInterval = 0f;
+      private Queue<float> eventIntervals = new Queue<float>();
+
       // Переменная для хранения InstanceID TrackablesParent из Start()
       private int trackablesParentInstanceID_FromStart = 0;
 
@@ -125,17 +291,77 @@ public class ARManagerInitializer2 : MonoBehaviour
                                                                            // [Tooltip("Включить логирование параметров камеры при получении данных сегментации")]
                                                                            // [SerializeField] private bool enableGetCameraParametersLogging = false; // Не используется
       [Tooltip("Включить логирование подробных логов о создании плоскостей")]
-      [SerializeField] private bool enableCustomPlaneCreationLogging = false; // Отключено после исправления проблемы с рейкастами
+      [SerializeField] private bool enableCustomPlaneCreationLogging = false; // ОТКЛЮЧЕНО для лучшей производительности
       [Tooltip("Включить логирование подробных логов о чистке старых плоскостей")]
       [SerializeField] private bool enableVerboseLoggingCleanup = false; // Ensured false by default
+      [Tooltip("Включить диагностику событий сегментации (частота, успешность, тайм-ауты)")]
+      [SerializeField] private bool enableSegmentationEventDiagnostics = false; // Включено для отладки Проблемы 3
 
       [Header("📏 Размеры и геометрия")]
-      [SerializeField] private float maxPlaneSize = 2.5f; // УМЕНЬШЕНО: Реалистичный максимальный размер плоскости
-      [SerializeField] private float minPlaneSize = 0.5f; // ИСПРАВЛЕНО: Минимальный размер плоскости
-      [SerializeField] private float maxAspectRatio = 4.0f; // ИСПРАВЛЕНО: Более строгое соотношение сторон
-      [SerializeField] private float maxWallHeight = 2.5f; // УМЕНЬШЕНО: Реалистичная максимальная высота стены
-      [SerializeField] private float maxWallWidth = 3.0f;  // УМЕНЬШЕНО: Реалистичная максимальная ширина стены
-      [SerializeField] private float planeSizeMultiplier = 0.4f; // УМЕНЬШЕНО: Более агрессивное уменьшение размеров
+      [SerializeField] private float maxPlaneSize = 4.0f; // УВЕЛИЧЕНО: Реалистичный максимальный размер плоскости для больших стен
+      [SerializeField] private float minPlaneSize = 0.8f; // УВЕЛИЧЕНО: с 0.3f до 0.8f для создания более крупных плоскостей
+      [SerializeField] private float maxAspectRatio = 4.0f; // УМЕНЬШЕНО: с 6.0f до 4.0f для более квадратных плоскостей
+      [SerializeField] private float maxWallHeight = 3.0f; // УВЕЛИЧЕНО: Реалистичная максимальная высота стены
+      [SerializeField] private float maxWallWidth = 4.0f;  // УВЕЛИЧЕНО: Реалистичная максимальная ширина стены
+      [SerializeField] private float planeSizeMultiplier = 1.0f; // ИСПРАВЛЕНО: Полный размер плоскостей без уменьшения
+
+      [Header("🔧 Дополнительные настройки размеров")]
+      [SerializeField]
+      [Tooltip("Включить точное соответствие размеров плоскостей обнаруженным поверхностям (отключает коэффициенты уменьшения)")]
+      private bool accurateSizing = true; // Новый параметр для точного соответствия размеров
+      [SerializeField]
+      [Tooltip("Включить улучшенное позиционирование плоскостей по центру обнаруженной поверхности")]
+      private bool accuratePositioning = true; // Новый параметр для точного позиционирования
+
+      [SerializeField]
+      [Tooltip("Использовать одиночный точный рейкаст в центре каждой области (убирает множественные красные линии)")]
+      private bool useSinglePreciseRaycast = true; // Новый параметр для одиночных рейкастов
+
+      [SerializeField]
+      [Tooltip("Автоматически сливать близкие плоскости в одну (уменьшает количество плоскостей)")]
+      private bool enablePlaneMerging = true; // Новый параметр для слияния плоскостей
+
+      [SerializeField]
+      [Range(0.1f, 2.0f)]
+      [Tooltip("Максимальное расстояние между плоскостями для их слияния (в метрах)")]
+      private float planeMergingDistance = 0.5f; // Расстояние слияния
+
+      [SerializeField]
+      [Tooltip("Включить динамическое слияние всех плоскостей в крупные области")]
+      private bool enableDynamicMerging = false; // ОТКЛЮЧЕНО по умолчанию для стабильности
+
+      [SerializeField]
+      [Range(0.5f, 3.0f)]
+      [Tooltip("Радиус поиска плоскостей для динамического слияния (в метрах)")]
+      private float dynamicMergingRadius = 1.5f;
+
+      [SerializeField]
+      [Range(5, 50)]
+      [Tooltip("Минимальное количество плоскостей для запуска динамического слияния")]
+      private int minPlanesForDynamicMerging = 10;
+
+      [SerializeField]
+      [Range(0.5f, 10.0f)]
+      [Tooltip("Интервал между запусками динамического слияния (в секундах)")]
+      private float dynamicMergingInterval = 2.0f;
+
+      // Время последнего слияния
+      private float lastDynamicMergingTime = 0f;
+
+      // Количество плоскостей при последнем слиянии
+      private int lastMergingPlaneCount = 0;
+
+      [SerializeField]
+      [Range(0.1f, 1.0f)]
+      [Tooltip("Коэффициент уменьшения размеров плоскостей. 0.8 = 80% от исходного размера для более точного соответствия")]
+      private float sizeReductionFactor = 0.95f; // УВЕЛИЧЕНО: с 0.8f до 0.95f для сохранения полного размера
+      [SerializeField]
+      [Range(0.05f, 3.0f)]
+      [Tooltip("Максимальный размер плоскости в метрах после применения всех коэффициентов")]
+      private float maxPlaneClampSize = 3.0f; // УВЕЛИЧЕНО: с 2.5f до 3.0f для реалистичных стен
+
+      [Tooltip("Коэффициент подгонки плоскостей к стенам. Уменьшает размер плоскостей чтобы они не выходили за пределы стен. 1.0 = без изменений, 0.5 = уменьшение на 50%")]
+      [SerializeField] private float wallFitMultiplier = 0.8f; // УВЕЛИЧЕНО: с 0.5f до 0.8f для сохранения размера
 
       [Tooltip("Дополнительный коэффициент масштабирования для уменьшения размера создаваемых плоскостей. 1.0 = без изменений, 0.5 = в два раза меньше.")]
       // [SerializeField] private float planeSizeScalingFactor = 0.5f; // Не используется - удалено для избежания предупреждения
@@ -166,7 +392,7 @@ public class ARManagerInitializer2 : MonoBehaviour
 
             // Force disable verbose logs to override Inspector values if necessary
             this.enableDetailedRaycastLogging = true; // ВРЕМЕННО включено для тестирования фильтрации пола
-            this.enableCustomPlaneCreationLogging = false; // ОТКЛЮЧЕНО после решения проблемы с рейкастами
+            // this.enableCustomPlaneCreationLogging = false; // ОТКЛЮЧЕНО после решения проблемы с рейкастами
             this.enableVerboseLoggingCleanup = false;
             Debug.Log("[ARManagerInitializer2-Awake] Verbose logging flags forcefully DISABLED for clean console.");
 
@@ -216,6 +442,9 @@ public class ARManagerInitializer2 : MonoBehaviour
             // Инициализация материалов ДО подписки на события
             InitializeMaterials();
 
+            // Валидация настроек слоёв
+            ValidateLayerMask();
+
             // Ensure we have reference to ARPlaneConfigurator
             if (planeConfigurator == null)
             {
@@ -242,7 +471,19 @@ public class ARManagerInitializer2 : MonoBehaviour
 
             // Инициализация системы персистентных плоскостей
             InitializePersistentPlanesSystem();
+
+            // 🛡️ ПРИНУДИТЕЛЬНАЯ АКТИВАЦИЯ СИСТЕМЫ СТАБИЛИЗАЦИИ
+            Debug.Log("[ARManagerInitializer2] 🛡️ Принудительная активация системы стабилизации при старте...");
+            ApplyStabilizationSettings();
+
             ConfigureARMeshManager();
+
+            // ⚡ УРОВЕНЬ 2: Инициализация асинхронной системы GPU
+            if (useAsyncGPUReadback)
+            {
+                  InitializeAsyncSystem();
+                  Debug.Log("✅ AsyncGPUReadback система инициализирована");
+            }
 
             // ПРИНУДИТЕЛЬНО устанавливаем правильные настройки для работы с сегментацией
             useDetectedPlanes = false;
@@ -257,25 +498,26 @@ public class ARManagerInitializer2 : MonoBehaviour
             {
                   Debug.Log("[ARManagerInitializer2-Start] useDetectedPlanes is false. Disabling ARFoundation visualizers.");
                   DisableARFoundationVisualizers();
+                  DisableOtherARVisualizers();
             }
 
-            // Попытка отключить стандартный ARPlaneManager, если он есть и мы используем кастомную генерацию
-            if (planeManager != null && useDetectedPlanes)
+            // Попытка отключить стандартный ARPlaneManager, если он есть и мы НЕ используем ARFoundation плоскости
+            if (planeManager != null && !useDetectedPlanes)
             {
-                  // Debug.LogWarning("[ARManagerInitializer2] Попытка отключить ARPlaneManager.");
-                  // planeManager.enabled = false;
-                  // if (!planeManager.enabled)
-                  // {
-                  //     Debug.Log("[ARManagerInitializer2] ARPlaneManager успешно отключен.");
-                  // }
-                  // else
-                  // {
-                  //     Debug.LogWarning("[ARManagerInitializer2] Не удалось отключить ARPlaneManager.");
-                  // }
+                  Debug.LogWarning("[ARManagerInitializer2] Попытка отключить ARPlaneManager.");
+                  planeManager.enabled = false;
+                  if (!planeManager.enabled)
+                  {
+                        Debug.Log("[ARManagerInitializer2] ARPlaneManager успешно отключен.");
+                  }
+                  else
+                  {
+                        Debug.LogWarning("[ARManagerInitializer2] Не удалось отключить ARPlaneManager.");
+                  }
             }
-            else if (planeManager == null && useDetectedPlanes)
+            else if (planeManager == null && !useDetectedPlanes)
             {
-                  // Debug.LogWarning("[ARManagerInitializer2] planeManager не назначен, но useDetectedPlanes=true. Нечего отключать.");
+                  // Debug.LogWarning("[ARManagerInitializer2] planeManager не назначен, но useDetectedPlanes=false. Нечего отключать.");
             }
 
 
@@ -319,6 +561,24 @@ public class ARManagerInitializer2 : MonoBehaviour
                   HandlePlaneCreationInput();
             }
 
+            // ДИАГНОСТИКА: Проверяем тайм-аут событий сегментации
+            if (enableSegmentationEventDiagnostics && !useDetectedPlanes)
+            {
+                  float timeSinceLastEvent = Time.time - lastSuccessfulSegmentationTime;
+
+                  // Периодически проверяем тайм-аут (каждые 5 секунд)
+                  if (timeSinceLastEvent > segmentationTimeoutSeconds && Time.time % 5.0f < Time.deltaTime)
+                  {
+                        DiagnoseSegmentationProblem($"Segmentation timeout: {timeSinceLastEvent:F1}s since last successful event");
+                  }
+            }
+
+            // ⚡ УРОВЕНЬ 2: Обновление асинхронных операций GPU
+            if (useAsyncGPUReadback)
+            {
+                  UpdateAsyncOperations();
+            }
+
             if (useDetectedPlanes)
             {
                   // Логика для работы с плоскостями ARFoundation, если требуется
@@ -326,9 +586,30 @@ public class ARManagerInitializer2 : MonoBehaviour
             }
             else if (maskUpdated)
             {
-                  Debug.Log("[ARManagerInitializer2-Update] 🎯 maskUpdated=true, запускаем ProcessSegmentationMask()");
-                  ProcessSegmentationMask();
-                  maskUpdated = false;
+                  // 🛡️ СИСТЕМА ГИСТЕРЕЗИСА: Обрабатываем маску только через определенные интервалы
+                  maskProcessingFrameCounter++;
+
+                  if (enablePlaneHysteresis)
+                  {
+                        if (maskProcessingFrameCounter >= maskProcessingInterval)
+                        {
+                              Debug.Log($"[ARManagerInitializer2-Update] 🛡️ Гистерезис: Обрабатываем маску (кадр {maskProcessingFrameCounter}/{maskProcessingInterval})");
+                              ProcessSegmentationMask();
+                              maskProcessingFrameCounter = 0; // Сброс счетчика
+                              maskUpdated = false;
+                        }
+                        else
+                        {
+                              Debug.Log($"[ARManagerInitializer2-Update] 🛡️ Гистерезис: Пропускаем кадр ({maskProcessingFrameCounter}/{maskProcessingInterval})");
+                              // maskUpdated НЕ сбрасываем - будем проверять в следующем кадре
+                        }
+                  }
+                  else
+                  {
+                        Debug.Log("[ARManagerInitializer2-Update] 🎯 maskUpdated=true, запускаем ProcessSegmentationMask()");
+                        ProcessSegmentationMask();
+                        maskUpdated = false;
+                  }
             }
             else
             {
@@ -672,17 +953,72 @@ public class ARManagerInitializer2 : MonoBehaviour
       // Обработка обновления маски сегментации
       private void OnSegmentationMaskUpdated(RenderTexture mask)
       {
+            // Диагностические метрики
+            float currentTime = Time.time;
+            totalSegmentationEvents++;
+
+            if (enableSegmentationEventDiagnostics)
+            {
+                  // Вычисляем интервал между событиями
+                  if (lastEventTime > 0)
+                  {
+                        float interval = currentTime - lastEventTime;
+                        eventIntervals.Enqueue(interval);
+
+                        // Сохраняем только последние 10 интервалов для усреднения
+                        if (eventIntervals.Count > 10)
+                        {
+                              eventIntervals.Dequeue();
+                        }
+
+                        // Вычисляем средний интервал
+                        avgEventInterval = eventIntervals.Average();
+                  }
+                  lastEventTime = currentTime;
+            }
+
             if (mask == null)
             {
-                  Debug.LogWarning("[ARManagerInitializer2] Получена null маска сегментации.");
+                  failedSegmentationEvents++;
+                  Debug.LogWarning($"[ARManagerInitializer2] ❌ Получена null маска сегментации. События: {successfulSegmentationEvents}/{totalSegmentationEvents}");
+
+                  if (enableSegmentationEventDiagnostics)
+                  {
+                        DiagnoseSegmentationProblem("Null mask received");
+                  }
                   return;
             }
 
-            Debug.Log($"[ARManagerInitializer2-OnSegmentationMaskUpdated] ✅ Маска сегментации получена: {mask.width}x{mask.height}, maskUpdated будет установлен в true");
+            // Валидация размеров маски
+            if (mask.width <= 0 || mask.height <= 0)
+            {
+                  failedSegmentationEvents++;
+                  Debug.LogError($"[ARManagerInitializer2] ❌ Маска сегментации имеет некорректные размеры: {mask.width}x{mask.height}");
+
+                  if (enableSegmentationEventDiagnostics)
+                  {
+                        DiagnoseSegmentationProblem($"Invalid mask dimensions: {mask.width}x{mask.height}");
+                  }
+                  return;
+            }
+
+            successfulSegmentationEvents++;
             currentSegmentationMask = mask;
             maskUpdated = true;
             hadValidSegmentationResult = true;
-            lastSuccessfulSegmentationTime = Time.time;
+            lastSuccessfulSegmentationTime = currentTime;
+
+            // Логируем только важные события (не каждый кадр)
+            if (enableSegmentationEventDiagnostics && totalSegmentationEvents % 20 == 1)
+            {
+                  Debug.Log($"[ARManagerInitializer2-OnSegmentationMaskUpdated] ✅ Маска сегментации получена: {mask.width}x{mask.height} | " +
+                           $"События: {successfulSegmentationEvents}/{totalSegmentationEvents} | " +
+                           $"Успешность: {(successfulSegmentationEvents / (float)totalSegmentationEvents * 100):F1}% | " +
+                           $"Сред.интервал: {avgEventInterval:F2}с");
+            }
+
+            // Не логируем каждый кадр - только для отладки
+            // Debug.Log($"[ARManagerInitializer2-OnSegmentationMaskUpdated] ✅ Маска сегментации получена: {mask.width}x{mask.height}");
 
             if (отображениеМаскиUI != null)
             {
@@ -693,6 +1029,23 @@ public class ARManagerInitializer2 : MonoBehaviour
             else
             {
                   // Debug.LogWarning("[ARManagerInitializer2] отображениеМаскиUI не установлено, некуда выводить маску.");
+            }
+
+            // 🛡️ Система гистерезиса: обрабатываем маску с заданной частотой для стабильности
+            if (enablePlaneHysteresis)
+            {
+                  maskProcessingFrameCounter++;
+                  if (maskProcessingFrameCounter >= maskProcessingInterval)
+                  {
+                        maskProcessingFrameCounter = 0;
+                        frameCounter = 0; // Обрабатываем маску только через интервал
+                  }
+                  // Если не время обрабатывать маску, не сбрасываем frameCounter
+            }
+            else
+            {
+                  // Стандартное поведение: обрабатываем каждую маску
+                  frameCounter = 0;
             }
       }
 
@@ -705,7 +1058,7 @@ public class ARManagerInitializer2 : MonoBehaviour
                   return;
             }
 
-            Debug.Log($"[ARManagerInitializer2-ProcessSegmentationMask] ✅ Обработка маски сегментации {currentSegmentationMask.width}x{currentSegmentationMask.height}");
+            // Debug.Log($"[ARManagerInitializer2-ProcessSegmentationMask] ✅ Обработка маски сегментации {currentSegmentationMask.width}x{currentSegmentationMask.height}");
 
             int procWidth, procHeight;
             if (currentSegmentationMask.width == 0 || currentSegmentationMask.height == 0)
@@ -785,79 +1138,515 @@ public class ARManagerInitializer2 : MonoBehaviour
             return texture;
       }
 
-      // Создание плоскостей на основе маски сегментации
-      private void CreatePlanesFromMask(Texture2D maskTexture)
+      // ⚡ AsyncGPUReadback система - основные методы
+
+      /// <summary>
+      /// Асинхронная обработка маски сегментации с использованием GPU readback
+      /// </summary>
+      private void ProcessSegmentationMaskAsync()
       {
-            Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ✅ Начало создания плоскостей из маски. Размеры маски: {maskTexture.width}x{maskTexture.height}");
-            Color32[] textureData = maskTexture.GetPixels32();
-            // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Получено {textureData.Length} пикселей из маски.");
-
-            // if (textureData.Length == 0)
-            // {
-            //     Debug.LogWarning("[ARManagerInitializer2-CreatePlanesFromMask] Данные текстуры пусты. Невозможно создать плоскости.");
-            //     return;
-            // }
-
-            // int activePixelCount = 0;
-            // for (int i = 0; i < textureData.Length; i++)
-            // {
-            //     if (textureData[i].r > 10) // Используем низкий порог для подсчета "активных" пикселей
-            //     {
-            //         activePixelCount++;
-            //     }
-            // }
-            // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Количество потенциально активных пикселей (r > 10) в маске: {activePixelCount} из {textureData.Length}");
-
-
-            List<Rect> wallAreas = FindWallAreas(textureData, maskTexture.width, maskTexture.height, wallPixelThreshold);
-            Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Найдено областей (wallAreas.Count): {wallAreas.Count}");
-
-            // Словарь для отслеживания "посещенных" (обновленных или подтвержденных) плоскостей в этом кадре
-            Dictionary<GameObject, bool> visitedPlanes = new Dictionary<GameObject, bool>();
-
-            // Очищаем старые плоскости перед созданием новых (или обновлением существующих)
-            // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Очистка старых плоскостей ({generatedPlanes.Count}) перед созданием новых.");
-            // CleanupOldPlanes(visitedPlanes); // Теперь очистка происходит в UpdateOrCreatePlaneForWallArea
-
-            // Сортируем области по размеру (площади), чтобы сначала обрабатывать большие
-            // Это необязательно, если мы обновляем/создаем для всех, но может быть полезно для отладки или лимитов
-            var significantAreas = wallAreas
-                .OrderByDescending(area => area.width * area.height)
-                .ToList();
-
-            // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] После сортировки осталось {significantAreas.Count} областей для потенциального создания.");
-
-            int planesCreatedThisFrame = 0;
-            // float normalizedMinPlaneSize = minPlaneSizeInMeters * minPlaneSizeInMeters; // Площадь в метрах
-            float normalizedMinPlaneSize = (minPlaneSizeInMeters / (Camera.main.orthographic ? Camera.main.orthographicSize * 2f : Mathf.Tan(Camera.main.fieldOfView * Mathf.Deg2Rad / 2f) * 2f * 2f)); // Примерный перевод метров в "нормализованный размер" относительно FOV
-            normalizedMinPlaneSize *= normalizedMinPlaneSize; // Сравниваем площади
-
-            foreach (Rect area in significantAreas)
+            if (currentSegmentationMask == null || !useAsyncGPUReadback)
             {
-                  float normalizedAreaSize = (area.width / (float)maskTexture.width) * (area.height / (float)maskTexture.height);
-                  Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Обработка области: x={area.xMin}, y={area.yMin}, w={area.width}, h={area.height}, normSize={normalizedAreaSize:F4}, pixelArea={area.width * area.height}");
+                  // Fallback к синхронной обработке
+                  ProcessSegmentationMask();
+                  return;
+            }
 
-                  // if (normalizedAreaSize >= normalizedMinPlaneSize) // Фильтр по минимальному размеру
-                  if (area.width * area.height >= minAreaSizeInPixels) // Используем пиксельный размер для фильтрации областей
+            // Вычисляем целевое разрешение для обработки
+            int procWidth, procHeight;
+            CalculateProcessingResolution(currentSegmentationMask, out procWidth, out procHeight);
+
+            // Создаем запрос на асинхронное чтение
+            var request = new AsyncReadbackRequest(
+                  currentSegmentationMask,
+                  procWidth,
+                  procHeight,
+                  TextureFormat.RGBA32,
+                  OnAsyncMaskProcessingComplete,
+                  1 // Высокий приоритет для обработки маски
+            );
+
+            // Добавляем запрос в очередь
+            EnqueueAsyncReadbackRequest(request);
+      }
+
+      /// <summary>
+      /// Вычисляет оптимальное разрешение для обработки маски
+      /// </summary>
+      private void CalculateProcessingResolution(RenderTexture mask, out int procWidth, out int procHeight)
+      {
+            if (mask.width >= mask.height)
+            {
+                  procWidth = maskProcessingResolution;
+                  procHeight = Mathf.Max(16, Mathf.RoundToInt((float)maskProcessingResolution * mask.height / mask.width));
+            }
+            else
+            {
+                  procHeight = maskProcessingResolution;
+                  procWidth = Mathf.Max(16, Mathf.RoundToInt((float)maskProcessingResolution * mask.width / mask.height));
+            }
+      }
+
+      /// <summary>
+      /// Добавляет запрос в очередь асинхронного чтения с учетом приоритета и лимитов
+      /// </summary>
+      private void EnqueueAsyncReadbackRequest(AsyncReadbackRequest request)
+      {
+            // Проверяем лимит активных операций
+            if (activeReadbackOperations.Count >= maxConcurrentReadbacks)
+            {
+                  // Добавляем в очередь
+                  readbackRequestQueue.Enqueue(request);
+
+                  if (enableSegmentationEventDiagnostics)
                   {
-                        Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ✅ Область прошла фильтр размера: {area.width * area.height} >= {minAreaSizeInPixels}. Пытаемся создать плоскость...");
-                        // Вместо CreatePlaneForWallArea вызываем UpdateOrCreatePlaneForWallArea
-                        if (UpdateOrCreatePlaneForWallArea(area, maskTexture.width, maskTexture.height, visitedPlanes))
-                        {
-                              planesCreatedThisFrame++;
-                        }
-                        Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ✅ Попытка создания/обновления плоскости для области normSize={normalizedAreaSize:F4}. Создано/обновлено в этом кадре: {planesCreatedThisFrame}. Общее количество плоскостей после вызова: {generatedPlanes.Count}");
+                        Debug.Log($"[ARManagerInitializer2] ⚡ Запрос {request.operationId} добавлен в очередь. Активных операций: {activeReadbackOperations.Count}, В очереди: {readbackRequestQueue.Count}");
                   }
-                  else
+                  return;
+            }
+
+            // Запускаем операцию немедленно
+            StartAsyncReadbackOperation(request);
+      }
+
+      /// <summary>
+      /// Запускает асинхронную операцию чтения GPU
+      /// </summary>
+      private void StartAsyncReadbackOperation(AsyncReadbackRequest request)
+      {
+            try
+            {
+                  // Создаем временную RT для downscaling если нужно
+                  RenderTexture sourceRT = request.sourceTexture;
+                  bool needsDownscaling = sourceRT.width != request.targetWidth || sourceRT.height != request.targetHeight;
+
+                  if (needsDownscaling)
                   {
-                        Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ❌ Область слишком мала: {area.width * area.height} < {minAreaSizeInPixels} пикс. Плоскость не создана.");
+                        RenderTexture downscaledRT = RenderTexture.GetTemporary(
+                              request.targetWidth,
+                              request.targetHeight,
+                              0,
+                              sourceRT.format,
+                              RenderTextureReadWrite.Default
+                        );
+                        Graphics.Blit(sourceRT, downscaledRT);
+                        sourceRT = downscaledRT;
+                  }
+
+                  // Запрашиваем асинхронное чтение
+                  var gpuRequest = UnityEngine.Rendering.AsyncGPUReadback.Request(
+                        sourceRT,
+                        0,
+                        request.format
+                  );
+
+                  // Создаем операцию для отслеживания
+                  var operation = new AsyncReadbackOperation(gpuRequest, request);
+                  activeReadbackOperations.Add(operation);
+
+                  totalAsyncOperations++;
+
+                  if (enableSegmentationEventDiagnostics)
+                  {
+                        Debug.Log($"[ARManagerInitializer2] ⚡ Запущена асинхронная операция {request.operationId}. Активных: {activeReadbackOperations.Count}");
+                  }
+            }
+            catch (System.Exception ex)
+            {
+                  Debug.LogError($"[ARManagerInitializer2] ❌ Ошибка запуска AsyncGPUReadback: {ex.Message}");
+                  failedAsyncOperations++;
+                  OnAsyncOperationFailed?.Invoke($"Ошибка запуска операции {request.operationId}: {ex.Message}");
+            }
+      }
+
+      /// <summary>
+      /// Обновляет состояние асинхронных операций (вызывается каждый кадр)
+      /// </summary>
+      private void UpdateAsyncOperations()
+      {
+            if (!useAsyncGPUReadback) return;
+
+            // Проверяем завершенные операции
+            for (int i = activeReadbackOperations.Count - 1; i >= 0; i--)
+            {
+                  var operation = activeReadbackOperations[i];
+
+                  if (operation.gpuRequest.done)
+                  {
+                        ProcessCompletedAsyncOperation(operation);
+                        activeReadbackOperations.RemoveAt(i);
+                  }
+                  else if (operation.IsTimedOut(asyncReadbackTimeout))
+                  {
+                        ProcessTimedOutAsyncOperation(operation);
+                        activeReadbackOperations.RemoveAt(i);
                   }
             }
 
-            // Окончательная очистка плоскостей, которые не были "посещены" (т.е. для них не нашлось подходящей области в новой маске)
+            // Запускаем новые операции из очереди
+            while (readbackRequestQueue.Count > 0 && activeReadbackOperations.Count < maxConcurrentReadbacks)
+            {
+                  var request = readbackRequestQueue.Dequeue();
+                  StartAsyncReadbackOperation(request);
+            }
+
+            // Обновляем статистику
+            UpdateAsyncStatistics();
+      }
+
+      /// <summary>
+      /// Обрабатывает завершенную асинхронную операцию
+      /// </summary>
+      private void ProcessCompletedAsyncOperation(AsyncReadbackOperation operation)
+      {
+            try
+            {
+                  if (operation.gpuRequest.hasError)
+                  {
+                        Debug.LogWarning($"[ARManagerInitializer2] ⚠️ AsyncGPUReadback операция {operation.originalRequest.operationId} завершена с ошибкой");
+                        failedAsyncOperations++;
+                        OnAsyncOperationFailed?.Invoke($"Операция {operation.originalRequest.operationId} завершена с ошибкой");
+                        return;
+                  }
+
+                  // Получаем данные и создаем Texture2D
+                  var data = operation.gpuRequest.GetData<Color32>();
+                  if (data.IsCreated && data.Length > 0)
+                  {
+                        Texture2D texture = GetTextureFromPool(operation.originalRequest.targetWidth, operation.originalRequest.targetHeight);
+                        texture.SetPixelData(data, 0);
+                        texture.Apply(false);
+
+                        // Обновляем статистику производительности
+                        float processingTime = operation.ElapsedTime;
+                        UpdateProcessingTimeStatistics(processingTime);
+
+                        successfulAsyncOperations++;
+
+                        // Выполняем callback
+                        operation.originalRequest.callback?.Invoke(texture);
+
+                        if (enableSegmentationEventDiagnostics)
+                        {
+                              Debug.Log($"[ARManagerInitializer2] ✅ Асинхронная операция {operation.originalRequest.operationId} завершена успешно за {processingTime:F3}с");
+                        }
+                  }
+                  else
+                  {
+                        Debug.LogError($"[ARManagerInitializer2] ❌ Получены некорректные данные от AsyncGPUReadback операции {operation.originalRequest.operationId}");
+                        failedAsyncOperations++;
+                  }
+            }
+            catch (System.Exception ex)
+            {
+                  Debug.LogError($"[ARManagerInitializer2] ❌ Ошибка обработки завершенной операции {operation.originalRequest.operationId}: {ex.Message}");
+                  failedAsyncOperations++;
+                  OnAsyncOperationFailed?.Invoke($"Ошибка обработки операции {operation.originalRequest.operationId}: {ex.Message}");
+            }
+      }
+
+      /// <summary>
+      /// Обрабатывает операцию с таймаутом
+      /// </summary>
+      private void ProcessTimedOutAsyncOperation(AsyncReadbackOperation operation)
+      {
+            Debug.LogWarning($"[ARManagerInitializer2] ⏱️ AsyncGPUReadback операция {operation.originalRequest.operationId} превысила таймаут ({asyncReadbackTimeout}s)");
+            timedOutAsyncOperations++;
+            OnAsyncOperationFailed?.Invoke($"Операция {operation.originalRequest.operationId} превысила таймаут");
+      }
+
+      /// <summary>
+      /// Callback для завершенной асинхронной обработки маски
+      /// </summary>
+      private void OnAsyncMaskProcessingComplete(Texture2D maskTexture)
+      {
+            if (maskTexture != null)
+            {
+                  // Запускаем создание плоскостей
+                  CreatePlanesFromMask(maskTexture);
+
+                  // Уведомляем подписчиков
+                  OnAsyncMaskProcessed?.Invoke(maskTexture);
+
+                  // Возвращаем текстуру в пул
+                  ReturnTextureToPool(maskTexture);
+            }
+      }
+
+      /// <summary>
+      /// Получает текстуру из пула или создает новую
+      /// </summary>
+      private Texture2D GetTextureFromPool(int width, int height)
+      {
+            if (!useTexturePooling)
+            {
+                  return new Texture2D(width, height, TextureFormat.RGBA32, false);
+            }
+
+            int key = GetTexturePoolKey(width, height);
+
+            if (texturePool.ContainsKey(key))
+            {
+                  return texturePool[key];
+            }
+
+            if (availableTextures.Count > 0)
+            {
+                  var texture = availableTextures.Dequeue();
+                  if (texture.width == width && texture.height == height)
+                  {
+                        return texture;
+                  }
+                  else
+                  {
+                        // Размер не подходит, пересоздаем
+                        Destroy(texture);
+                  }
+            }
+
+            // Создаем новую текстуру
+            var newTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            texturePool[key] = newTexture;
+            return newTexture;
+      }
+
+      /// <summary>
+      /// Возвращает текстуру в пул для повторного использования
+      /// </summary>
+      private void ReturnTextureToPool(Texture2D texture)
+      {
+            if (!useTexturePooling || texture == null)
+            {
+                  if (texture != null) Destroy(texture);
+                  return;
+            }
+
+            if (availableTextures.Count < texturePoolSize)
+            {
+                  availableTextures.Enqueue(texture);
+            }
+            else
+            {
+                  // Пул переполнен, уничтожаем текстуру
+                  Destroy(texture);
+            }
+      }
+
+      /// <summary>
+      /// Генерирует ключ для пула текстур на основе размеров
+      /// </summary>
+      private int GetTexturePoolKey(int width, int height)
+      {
+            return width * 10000 + height;
+      }
+
+      /// <summary>
+      /// Обновляет статистику времени обработки
+      /// </summary>
+      private void UpdateProcessingTimeStatistics(float processingTime)
+      {
+            asyncProcessingTimes.Enqueue(processingTime);
+
+            if (asyncProcessingTimes.Count > maxAsyncTimeSamples)
+            {
+                  asyncProcessingTimes.Dequeue();
+            }
+
+            // Вычисляем среднее время
+            float sum = 0f;
+            foreach (float time in asyncProcessingTimes)
+            {
+                  sum += time;
+            }
+            avgAsyncProcessingTime = sum / asyncProcessingTimes.Count;
+      }
+
+      /// <summary>
+      /// Обновляет и публикует статистику асинхронных операций
+      /// </summary>
+      private void UpdateAsyncStatistics()
+      {
+            var stats = new AsyncOperationStats(
+                  totalAsyncOperations,
+                  successfulAsyncOperations,
+                  failedAsyncOperations,
+                  timedOutAsyncOperations,
+                  activeReadbackOperations.Count,
+                  readbackRequestQueue.Count,
+                  avgAsyncProcessingTime
+            );
+
+            OnAsyncStatsUpdated?.Invoke(stats);
+      }
+
+      /// <summary>
+      /// Инициализирует асинхронную систему
+      /// </summary>
+      private void InitializeAsyncSystem()
+      {
+            if (!useAsyncGPUReadback) return;
+
+            // Инициализируем пул текстур
+            if (useTexturePooling)
+            {
+                  for (int i = 0; i < texturePoolSize; i++)
+                  {
+                        var texture = new Texture2D(maskProcessingResolution, maskProcessingResolution, TextureFormat.RGBA32, false);
+                        availableTextures.Enqueue(texture);
+                  }
+            }
+
+            // Подписываемся на события
+            onAsyncMaskReady = OnAsyncMaskProcessingComplete;
+
+            Debug.Log($"[ARManagerInitializer2] ⚡ Асинхронная система инициализирована. Пул текстур: {texturePoolSize}, Макс. операций: {maxConcurrentReadbacks}");
+      }
+
+      /// <summary>
+      /// Очищает ресурсы асинхронной системы
+      /// </summary>
+      private void CleanupAsyncSystem()
+      {
+            // Очищаем активные операции
+            activeReadbackOperations.Clear();
+            readbackRequestQueue.Clear();
+
+            // Очищаем пул текстур
+            while (availableTextures.Count > 0)
+            {
+                  var texture = availableTextures.Dequeue();
+                  if (texture != null) Destroy(texture);
+            }
+
+            foreach (var kvp in texturePool)
+            {
+                  if (kvp.Value != null) Destroy(kvp.Value);
+            }
+            texturePool.Clear();
+
+            Debug.Log("[ARManagerInitializer2] ⚡ Асинхронная система очищена");
+      }
+
+      /// <summary>
+      /// Получает текущую статистику асинхронных операций
+      /// </summary>
+      public AsyncOperationStats GetAsyncOperationStats()
+      {
+            return new AsyncOperationStats(
+                  totalAsyncOperations,
+                  successfulAsyncOperations,
+                  failedAsyncOperations,
+                  timedOutAsyncOperations,
+                  activeReadbackOperations.Count,
+                  readbackRequestQueue.Count,
+                  avgAsyncProcessingTime
+            );
+      }
+
+      // Создание плоскостей на основе маски сегментации
+      private void CreatePlanesFromMask(Texture2D maskTexture)
+      {
+            // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ✅ Начало создания плоскостей из маски. Размеры маски: {maskTexture.width}x{maskTexture.height}");
+            Color32[] textureData = maskTexture.GetPixels32();
+
+            // Используем красный канал для определения стен
+            byte redChannelThreshold = (byte)wallPixelThreshold;
+
+            // Отслеживаем какие плоскости были обновлены в этом кадре
+            Dictionary<GameObject, bool> visitedPlanes = new Dictionary<GameObject, bool>();
+
+            foreach (GameObject plane in generatedPlanes)
+            {
+                  visitedPlanes[plane] = false;
+            }
+
+            int planesCreatedThisFrame = 0;
+
+            // 🎯 УРОВЕНЬ 2: Выбираем алгоритм обнаружения областей
+            if (useContourBasedDetection)
+            {
+                  try
+                  {
+                        // Новый метод: поиск контуров
+                        List<Contour> contours = FindContours(textureData, maskTexture.width, maskTexture.height, redChannelThreshold);
+
+                        // Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] 🎯 Найдено {contours.Count} контуров (новый алгоритм)");
+
+                        // Сортируем контуры по площади (сначала большие)
+                        var significantContours = contours
+                            .Where(c => !c.isHole) // Игнорируем дыры
+                            .OrderByDescending(c => c.area)
+                            .ToList();
+
+                        // Создаём плоскости из контуров
+                        foreach (Contour contour in significantContours)
+                        {
+                              if (UpdateOrCreatePlaneForContour(contour, maskTexture.width, maskTexture.height, visitedPlanes))
+                              {
+                                    planesCreatedThisFrame++;
+                              }
+
+                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] 🎯 Контур с {contour.points.Count} точками и площадью {contour.area:F1} обработан. Создано в кадре: {planesCreatedThisFrame}");
+                        }
+                  }
+                  catch (System.Exception ex)
+                  {
+                        Debug.LogError($"[ARManagerInitializer2-CreatePlanesFromMask] ❌ Ошибка в системе контуров: {ex.Message}. Переключаемся на старую систему областей.");
+                        Debug.LogError($"[ARManagerInitializer2-CreatePlanesFromMask] Stack trace: {ex.StackTrace}");
+
+                        // 🛡️ FALLBACK: временно переключаемся на старую систему областей при ошибке
+                        useContourBasedDetection = false;
+
+                        // Продолжаем выполнение с новым флагом - код старой системы выполнится ниже
+                  }
+            }
+            else
+            {
+                  // Старый метод: поиск прямоугольных областей
+                  List<Rect> wallAreas = FindWallAreas(textureData, maskTexture.width, maskTexture.height, redChannelThreshold);
+
+                  Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] 🔧 Используем старый алгоритм. Найдено {wallAreas.Count} областей стен");
+
+                  // Сортируем области по размеру (площади)
+                  var significantAreas = wallAreas
+                      .OrderByDescending(area => area.width * area.height)
+                      .ToList();
+
+                  // Для каждой области стены проверяем, можно ли обновить существующую плоскость или нужно создать новую
+                  foreach (Rect area in significantAreas)
+                  {
+                        if (area.width * area.height >= minAreaSizeInPixels) // Фильтр по минимальному размеру
+                        {
+                              if (UpdateOrCreatePlaneForWallArea(area, maskTexture.width, maskTexture.height, visitedPlanes))
+                              {
+                                    planesCreatedThisFrame++;
+                              }
+
+                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] Область {areaToString(area)} обработана. Создано в кадре: {planesCreatedThisFrame}");
+                        }
+                        else
+                        {
+                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ❌ Область слишком мала: {area.width * area.height} < {minAreaSizeInPixels} пикс.");
+                        }
+                  }
+            }
+
+            // Удаляем плоскости, которые не были обновлены в текущем кадре (потеряны)
             CleanupOldPlanes(visitedPlanes);
 
-            Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ✅ Завершено. Обновлено/Создано {planesCreatedThisFrame} плоскостей из {significantAreas.Count} рассмотренных областей. Всего активных плоскостей: {generatedPlanes.Count}");
+            // 🔄 Выполняем динамическое слияние плоскостей с контролем частоты
+            if (enableDynamicMerging && ShouldPerformDynamicMerging())
+            {
+                  PerformDynamicPlaneMerging();
+                  lastDynamicMergingTime = Time.time;
+                  lastMergingPlaneCount = generatedPlanes.Count;
+            }
+
+            // Логируем только когда есть изменения
+            if (planesCreatedThisFrame > 0 || generatedPlanes.Count != lastPlaneCount)
+            {
+                  Debug.Log($"[ARManagerInitializer2-CreatePlanesFromMask] ✅ Завершено. Создано: {planesCreatedThisFrame} плоскостей. Всего активных: {generatedPlanes.Count}");
+            }
 
             lastPlaneCount = generatedPlanes.Count;
       }
@@ -994,10 +1783,10 @@ public class ARManagerInitializer2 : MonoBehaviour
       {
             List<Rect> result = new List<Rect>();
 
-            // Определяем максимальные размеры для одной плоскости (в пикселях)
-            int maxAreaWidth = 64;  // Максимум 64 пикселя в ширину (~50% от 128)
-            int maxAreaHeight = 64; // Максимум 64 пикселя в высоту (~50% от 128)
-            float maxAreaRatio = 0.5f; // Максимум 50% от общего размера маски
+            // 🎯 УМНОЕ РАЗДЕЛЕНИЕ: Увеличиваем лимиты чтобы создавать МЕНЬШЕ областей (2 стены = 2 плоскости)
+            int maxAreaWidth = Mathf.RoundToInt(width * 0.8f);   // Максимум 80% от ширины маски (была 40%)
+            int maxAreaHeight = Mathf.RoundToInt(height * 0.8f); // Максимум 80% от высоты маски (была 40%)
+            float maxAreaRatio = 0.6f;  // Максимум 60% от общего размера маски (была 25%)
 
             int maxTotalArea = Mathf.RoundToInt(width * height * maxAreaRatio);
 
@@ -1005,18 +1794,20 @@ public class ARManagerInitializer2 : MonoBehaviour
             if (area.width <= maxAreaWidth && area.height <= maxAreaHeight && area.width * area.height <= maxTotalArea)
             {
                   result.Add(area);
-                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Область {areaToString(area)} не требует разбиения");
+                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Область {areaToString(area)} не требует разбиения (размер: {area.width * area.height}, лимит: {maxTotalArea})");
                   return result;
             }
 
-            if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Разбиваем большую область {areaToString(area)} (размер: {area.width * area.height}, лимит: {maxTotalArea})");
+            if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] 🔄 Разбиваем большую область {areaToString(area)} (размер: {area.width * area.height}, лимит: {maxTotalArea})");
 
-            // Стратегия 1: Разбиение по сетке
-            int subdivisionX = Mathf.CeilToInt(area.width / maxAreaWidth);
-            int subdivisionY = Mathf.CeilToInt(area.height / maxAreaHeight);
+            // Стратегия 1: Умное разбиение по сетке (создаем области для отдельных стен)
+            int subdivisionX = Mathf.Max(2, Mathf.CeilToInt(area.width / maxAreaWidth));
+            int subdivisionY = Mathf.Max(2, Mathf.CeilToInt(area.height / maxAreaHeight));
 
             float subWidth = area.width / subdivisionX;
             float subHeight = area.height / subdivisionY;
+
+            if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Разбиваем на сетку {subdivisionX}x{subdivisionY}, размер подобластей: {subWidth:F1}x{subHeight:F1}");
 
             for (int y = 0; y < subdivisionY; y++)
             {
@@ -1033,23 +1824,79 @@ public class ARManagerInitializer2 : MonoBehaviour
                         if (ValidateSubarea(subarea, pixels, width, height, threshold))
                         {
                               result.Add(subarea);
-                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Добавлена валидная подобласть: {areaToString(subarea)}");
+                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] ✅ Добавлена валидная подобласть: {areaToString(subarea)} (пикселей стены: {CountWallPixelsInArea(subarea, pixels, width, height, threshold)})");
                         }
                         else
                         {
-                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Отклонена подобласть (недостаточно пикселей стены): {areaToString(subarea)}");
+                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] ❌ Отклонена подобласть: {areaToString(subarea)} (недостаточно пикселей стены)");
                         }
                   }
             }
 
-            // Если не получилось разбить, возвращаем исходную область
+            // Если не получилось разбить, создаем более мелкие области принудительно
+            if (result.Count == 0)
+            {
+                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] ⚠️ Принудительное разбиение на мелкие области");
+
+                  // Создаем более мелкие области (по 4 части в каждом направлении)
+                  int forceSubdivisionX = 4;
+                  int forceSubdivisionY = 4;
+
+                  subWidth = area.width / forceSubdivisionX;
+                  subHeight = area.height / forceSubdivisionY;
+
+                  for (int y = 0; y < forceSubdivisionY; y++)
+                  {
+                        for (int x = 0; x < forceSubdivisionX; x++)
+                        {
+                              float startX = area.x + x * subWidth;
+                              float startY = area.y + y * subHeight;
+                              float endX = Mathf.Min(startX + subWidth, area.x + area.width);
+                              float endY = Mathf.Min(startY + subHeight, area.y + area.height);
+
+                              Rect subarea = new Rect(startX, startY, endX - startX, endY - startY);
+
+                              // Более мягкая проверка для принудительного разбиения
+                              if (CountWallPixelsInArea(subarea, pixels, width, height, threshold) > 10)
+                              {
+                                    result.Add(subarea);
+                                    if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] 🔧 Принудительно добавлена: {areaToString(subarea)}");
+                              }
+                        }
+                  }
+            }
+
+            // Если всё равно не получилось, возвращаем исходную область
             if (result.Count == 0)
             {
                   result.Add(area);
-                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] Не удалось разбить область, возвращаем исходную");
+                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] 🚨 Не удалось разбить область, возвращаем исходную");
             }
 
+            if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-SubdivideOversizedArea] 🎯 Результат: {result.Count} подобластей из исходной области {areaToString(area)}");
             return result;
+      }
+
+      // Вспомогательный метод для подсчета пикселей стены в области
+      private int CountWallPixelsInArea(Rect area, Color32[] pixels, int width, int height, byte threshold)
+      {
+            int wallPixels = 0;
+
+            for (int y = Mathf.FloorToInt(area.yMin); y < Mathf.CeilToInt(area.yMax) && y < height; y++)
+            {
+                  for (int x = Mathf.FloorToInt(area.xMin); x < Mathf.CeilToInt(area.xMax) && x < width; x++)
+                  {
+                        if (x >= 0 && y >= 0 && x < width && y < height)
+                        {
+                              if (pixels[y * width + x].r >= threshold)
+                              {
+                                    wallPixels++;
+                              }
+                        }
+                  }
+            }
+
+            return wallPixels;
       }
 
       // Проверяет, содержит ли подобласть достаточно пикселей стены
@@ -1057,8 +1904,42 @@ public class ARManagerInitializer2 : MonoBehaviour
       {
             int wallPixels = 0;
             int totalPixels = 0;
-            float minWallRatio = 0.3f; // Минимум 30% пикселей должны быть стеной
 
+            // ИСПРАВЛЕНО: Используем адаптивные настройки вместо жёстких порогов
+            float currentMinWallRatio = minWallRatio;
+            float currentMaxAspectRatio = maxAreaAspectRatio;
+
+            // Адаптивная настройка порогов на основе качества маски
+            if (useAdaptiveThresholds && currentSegmentationMask != null)
+            {
+                  // Анализируем качество маски в данной области
+                  float maskQuality = AnalyzeLocalMaskQuality(area, pixels, width, height, threshold);
+
+                  // Ослабляем фильтры для зашумлённых областей
+                  if (maskQuality < 0.7f) // Если качество маски низкое
+                  {
+                        currentMinWallRatio *= (1.0f / noiseToleranceFactor); // Уменьшаем требования
+                        currentMaxAspectRatio *= noiseToleranceFactor; // Разрешаем более вытянутые области
+
+                        if (enableCustomPlaneCreationLogging)
+                        {
+                              Debug.Log($"[ARManagerInitializer2-ValidateSubarea] Адаптивные пороги: качество={maskQuality:F2}, minWallRatio={currentMinWallRatio:F2}, maxAspectRatio={currentMaxAspectRatio:F1}");
+                        }
+                  }
+            }
+
+            // Проверка соотношения сторон
+            float aspectRatio = Mathf.Max(area.width / area.height, area.height / area.width);
+            if (aspectRatio > currentMaxAspectRatio)
+            {
+                  if (enableCustomPlaneCreationLogging)
+                  {
+                        Debug.Log($"[ARManagerInitializer2-ValidateSubarea] Область {areaToString(area)} отклонена по соотношению сторон: {aspectRatio:F1} > {currentMaxAspectRatio:F1}");
+                  }
+                  return false;
+            }
+
+            // Подсчёт пикселей стены
             for (int y = Mathf.FloorToInt(area.yMin); y < Mathf.CeilToInt(area.yMax) && y < height; y++)
             {
                   for (int x = Mathf.FloorToInt(area.xMin); x < Mathf.CeilToInt(area.xMax) && x < width; x++)
@@ -1074,12 +1955,23 @@ public class ARManagerInitializer2 : MonoBehaviour
                   }
             }
 
-            bool isValid = totalPixels > 0 && (float)wallPixels / totalPixels >= minWallRatio &&
-                          area.width >= minPixelsDimensionForArea && area.height >= minPixelsDimensionForArea;
+            float actualWallRatio = totalPixels > 0 ? (float)wallPixels / totalPixels : 0f;
+            bool isValid = totalPixels > 0 &&
+                          actualWallRatio >= currentMinWallRatio &&
+                          area.width >= minPixelsDimensionForArea &&
+                          area.height >= minPixelsDimensionForArea;
 
             if (enableCustomPlaneCreationLogging && !isValid)
             {
-                  Debug.Log($"[ARManagerInitializer2-ValidateSubarea] Область {areaToString(area)} отклонена: wallPixels={wallPixels}, totalPixels={totalPixels}, ratio={((float)wallPixels / totalPixels):F2}, minRatio={minWallRatio}, width={area.width}, height={area.height}");
+                  Debug.Log($"[ARManagerInitializer2-ValidateSubarea] Область {areaToString(area)} отклонена: " +
+                           $"wallPixels={wallPixels}, totalPixels={totalPixels}, ratio={actualWallRatio:F2}, " +
+                           $"minRatio={currentMinWallRatio:F2}, width={area.width}, height={area.height}, " +
+                           $"aspectRatio={aspectRatio:F1}, maxAspectRatio={currentMaxAspectRatio:F1}");
+            }
+            else if (enableCustomPlaneCreationLogging && isValid)
+            {
+                  Debug.Log($"[ARManagerInitializer2-ValidateSubarea] ✅ Область {areaToString(area)} принята: " +
+                           $"ratio={actualWallRatio:F2}, aspectRatio={aspectRatio:F1}");
             }
 
             return isValid;
@@ -1089,6 +1981,1776 @@ public class ARManagerInitializer2 : MonoBehaviour
       private string areaToString(Rect area)
       {
             return $"Rect(x:{area.xMin:F0}, y:{area.yMin:F0}, w:{area.width:F0}, h:{area.height:F0})";
+      }
+
+      /// <summary>
+      /// Анализирует качество маски в локальной области
+      /// Возвращает значение от 0.0 (плохое качество) до 1.0 (отличное качество)
+      /// </summary>
+      private float AnalyzeLocalMaskQuality(Rect area, Color32[] pixels, int width, int height, byte threshold)
+      {
+            if (pixels == null || area.width < 1 || area.height < 1)
+                  return 0.0f;
+
+            int totalPixels = 0;
+            int wallPixels = 0;
+            int edgePixels = 0; // Пиксели на границе между стеной и фоном
+
+            // Анализируем область
+            for (int y = Mathf.FloorToInt(area.yMin); y < Mathf.CeilToInt(area.yMax) && y < height; y++)
+            {
+                  for (int x = Mathf.FloorToInt(area.xMin); x < Mathf.CeilToInt(area.xMax) && x < width; x++)
+                  {
+                        if (x >= 0 && y >= 0 && x < width && y < height)
+                        {
+                              totalPixels++;
+                              byte pixelValue = pixels[y * width + x].r;
+
+                              if (pixelValue >= threshold)
+                              {
+                                    wallPixels++;
+                              }
+
+                              // Проверяем, является ли пиксель граничным (переход между стеной и фоном)
+                              if (IsEdgePixel(x, y, pixels, width, height, threshold))
+                              {
+                                    edgePixels++;
+                              }
+                        }
+                  }
+            }
+
+            if (totalPixels == 0) return 0.0f;
+
+            // Вычисляем метрики качества
+            float wallDensity = (float)wallPixels / totalPixels;
+            float edgeRatio = (float)edgePixels / totalPixels;
+
+            // Высокое качество = много пикселей стены, мало переходных зон
+            // Низкое качество = много переходных зон (зашумлённость)
+            float quality = wallDensity * (1.0f - Mathf.Min(edgeRatio * 2.0f, 0.8f));
+
+            return Mathf.Clamp01(quality);
+      }
+
+      /// <summary>
+      /// Проверяет, является ли пиксель граничным (находится на переходе между стеной и фоном)
+      /// </summary>
+      private bool IsEdgePixel(int x, int y, Color32[] pixels, int width, int height, byte threshold)
+      {
+            byte centerValue = pixels[y * width + x].r;
+            bool centerIsWall = centerValue >= threshold;
+
+            // Проверяем соседние пиксели
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                  for (int dx = -1; dx <= 1; dx++)
+                  {
+                        if (dx == 0 && dy == 0) continue; // Пропускаем центральный пиксель
+
+                        int nx = x + dx;
+                        int ny = y + dy;
+
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                        {
+                              byte neighborValue = pixels[ny * width + nx].r;
+                              bool neighborIsWall = neighborValue >= threshold;
+
+                              // Если соседний пиксель отличается по типу, это граничный пиксель
+                              if (centerIsWall != neighborIsWall)
+                              {
+                                    return true;
+                              }
+                        }
+                  }
+            }
+
+            return false;
+      }
+
+      /// <summary>
+      /// Диагностирует проблемы с системой сегментации
+      /// Решает Проблему 3: отсутствие событий OnSegmentationMaskUpdated
+      /// </summary>
+      private void DiagnoseSegmentationProblem(string issue)
+      {
+            if (!enableSegmentationEventDiagnostics) return;
+
+            Debug.LogError($"[ARManagerInitializer2-DiagnoseSegmentationProblem] 🔍 ДИАГНОСТИКА: {issue}");
+
+            // Проверяем состояние компонентов сегментации
+            var wallSegmentation = FindObjectOfType<WallSegmentation>();
+            if (wallSegmentation == null)
+            {
+                  Debug.LogError("❌ WallSegmentation компонент не найден в сцене!");
+                  return;
+            }
+
+            Debug.Log($"✅ WallSegmentation найден: {wallSegmentation.gameObject.name}");
+
+            // Проверяем подписку на события (через reflection для избежания ошибок компиляции)
+            bool hasSubscription = true; // Предполагаем, что подписка есть
+            try
+            {
+                  var eventInfo = typeof(WallSegmentation).GetEvent("OnSegmentationMaskUpdated");
+                  hasSubscription = eventInfo != null;
+            }
+            catch (System.Exception ex)
+            {
+                  Debug.LogWarning($"⚠️ Не удалось проверить подписку на события: {ex.Message}");
+                  hasSubscription = false;
+            }
+            Debug.Log($"📡 Подписка на события: {(hasSubscription ? "✅ Активна" : "❌ Отсутствует")}");
+
+            // Проверяем состояние AR Session
+            if (ARSession.state != ARSessionState.SessionTracking)
+            {
+                  Debug.LogWarning($"⚠️ AR Session не в состоянии отслеживания: {ARSession.state}");
+            }
+            else
+            {
+                  Debug.Log("✅ AR Session в состоянии отслеживания");
+            }
+
+            // Проверяем XR Simulation
+            bool isSimulation = IsRunningInXRSimulation();
+            Debug.Log($"🎯 Режим XR Simulation: {(isSimulation ? "✅ Активен" : "❌ Отключён")}");
+
+            if (isSimulation)
+            {
+                  // Проверяем наличие XRSimulationCameraFeed через поиск по имени класса
+                  var xrSimulationCameraFeed = FindObjectOfType<MonoBehaviour>();
+                  bool foundXRSimulationCameraFeed = false;
+
+                  // Ищем компонент XRSimulationCameraFeed среди всех MonoBehaviour
+                  var allMonoBehaviours = FindObjectsOfType<MonoBehaviour>();
+                  foreach (var mb in allMonoBehaviours)
+                  {
+                        if (mb.GetType().Name == "XRSimulationCameraFeed")
+                        {
+                              foundXRSimulationCameraFeed = true;
+                              Debug.Log($"✅ XRSimulationCameraFeed найден: {mb.gameObject.name}");
+                              break;
+                        }
+                  }
+
+                  if (!foundXRSimulationCameraFeed)
+                  {
+                        Debug.LogError("❌ XRSimulationCameraFeed не найден! Это может быть причиной проблемы.");
+                        Debug.LogError("💡 Решение: Добавьте XRSimulationCameraFeed компонент в сцену.");
+                  }
+            }
+
+            // Статистика событий
+            float successRate = totalSegmentationEvents > 0 ? (successfulSegmentationEvents / (float)totalSegmentationEvents * 100) : 0f;
+            float timeSinceLastSuccess = Time.time - lastSuccessfulSegmentationTime;
+
+            Debug.Log($"📊 СТАТИСТИКА СОБЫТИЙ:");
+            Debug.Log($"   - Всего событий: {totalSegmentationEvents}");
+            Debug.Log($"   - Успешных: {successfulSegmentationEvents}");
+            Debug.Log($"   - Неудачных: {failedSegmentationEvents}");
+            Debug.Log($"   - Успешность: {successRate:F1}%");
+            Debug.Log($"   - Время с последнего успешного события: {timeSinceLastSuccess:F1}с");
+            Debug.Log($"   - Средний интервал между событиями: {avgEventInterval:F2}с");
+
+            if (timeSinceLastSuccess > segmentationTimeoutSeconds)
+            {
+                  Debug.LogError($"❌ ТАЙМ-АУТ: Последнее успешное событие было {timeSinceLastSuccess:F1}с назад (лимит: {segmentationTimeoutSeconds}с)");
+            }
+      }
+
+      /// <summary>
+      /// Проверяет, работает ли система в режиме XR Simulation
+      /// </summary>
+      private bool IsRunningInXRSimulation()
+      {
+            // Проверяем различные признаки XR Simulation
+#if UNITY_EDITOR
+            return true; // В редакторе обычно используется симуляция
+#else
+            return false; // На устройстве - реальный AR
+#endif
+      }
+
+      /// <summary>
+      /// Класс для представления контура
+      /// </summary>
+      [System.Serializable]
+      public class Contour
+      {
+            public List<Vector2Int> points;
+            public float area;
+            public Rect boundingRect;
+            public bool isHole;
+            public int parentIndex;
+
+            public Contour()
+            {
+                  points = new List<Vector2Int>();
+                  area = 0f;
+                  boundingRect = new Rect();
+                  isHole = false;
+                  parentIndex = -1;
+            }
+
+            public void CalculateProperties()
+            {
+                  if (points.Count < 3)
+                  {
+                        area = 0f;
+                        return;
+                  }
+
+                  // Вычисляем площадь по формуле Шнурования (Shoelace formula)
+                  area = 0f;
+                  for (int i = 0; i < points.Count; i++)
+                  {
+                        int next = (i + 1) % points.Count;
+                        area += points[i].x * points[next].y - points[next].x * points[i].y;
+                  }
+                  area = Mathf.Abs(area) / 2.0f;
+
+                  // Вычисляем ограничивающий прямоугольник
+                  if (points.Count > 0)
+                  {
+                        int minX = points[0].x, maxX = points[0].x;
+                        int minY = points[0].y, maxY = points[0].y;
+
+                        for (int i = 1; i < points.Count; i++)
+                        {
+                              minX = Mathf.Min(minX, points[i].x);
+                              maxX = Mathf.Max(maxX, points[i].x);
+                              minY = Mathf.Min(minY, points[i].y);
+                              maxY = Mathf.Max(maxY, points[i].y);
+                        }
+
+                        boundingRect = new Rect(minX, minY, maxX - minX, maxY - minY);
+                  }
+            }
+      }
+
+      /// <summary>
+      /// Класс для хранения результатов PCA анализа
+      /// </summary>
+      [System.Serializable]
+      public class PCAResult
+      {
+            public Vector3 centroid;           // Центр масс облака точек
+            public Vector3 primaryAxis;       // Главная компонента (наибольший eigenvalue)
+            public Vector3 secondaryAxis;     // Вторая компонента
+            public Vector3 normalAxis;        // Нормаль к плоскости (наименьший eigenvalue)
+            public float[] eigenvalues;       // Собственные значения [λ1, λ2, λ3]
+            public float planarity;           // Мера плоскостности (0-1)
+            public int inlierCount;           // Количество точек-инлайеров
+            public float averageDistance;     // Среднее расстояние от точек до плоскости
+
+            public PCAResult()
+            {
+                  centroid = Vector3.zero;
+                  primaryAxis = Vector3.forward;
+                  secondaryAxis = Vector3.right;
+                  normalAxis = Vector3.up;
+                  eigenvalues = new float[3];
+                  planarity = 0f;
+                  inlierCount = 0;
+                  averageDistance = 0f;
+            }
+
+            /// <summary>
+            /// Вычисляет качество плоскости на основе PCA результатов
+            /// </summary>
+            public float GetPlaneQuality()
+            {
+                  // Плоскостность: отношение наименьшего eigenvalue к сумме всех
+                  float totalVariance = eigenvalues[0] + eigenvalues[1] + eigenvalues[2];
+                  if (totalVariance > 0.001f)
+                  {
+                        planarity = 1.0f - (eigenvalues[2] / totalVariance);
+                  }
+                  else
+                  {
+                        planarity = 0f;
+                  }
+
+                  // Учитываем количество точек и среднее расстояние
+                  float pointDensityFactor = Mathf.Clamp01(inlierCount / 100.0f);
+                  float distanceFactor = Mathf.Clamp01(1.0f - averageDistance);
+
+                  return planarity * pointDensityFactor * distanceFactor;
+            }
+      }
+
+      /// <summary>
+      /// Класс для представления Oriented Bounding Box (OBB)
+      /// </summary>
+      [System.Serializable]
+      public class OrientedBoundingBox
+      {
+            public Vector3 center;              // Центр OBB
+            public Vector3 rightAxis;           // Локальная ось X (правая)
+            public Vector3 upAxis;              // Локальная ось Y (вверх)
+            public Vector3 forwardAxis;         // Локальная ось Z (вперёд)
+            public Vector3 extents;             // Полуразмеры по каждой оси
+            public float volume;                // Объём OBB
+            public int pointCount;              // Количество точек внутри OBB
+            public float pointDensity;          // Плотность точек (точек на м³)
+
+            public OrientedBoundingBox()
+            {
+                  center = Vector3.zero;
+                  rightAxis = Vector3.right;
+                  upAxis = Vector3.up;
+                  forwardAxis = Vector3.forward;
+                  extents = Vector3.one;
+                  volume = 0f;
+                  pointCount = 0;
+                  pointDensity = 0f;
+            }
+
+            /// <summary>
+            /// Создаёт OBB из PCA результатов и облака точек
+            /// </summary>
+            public static OrientedBoundingBox FromPCAAndPoints(PCAResult pca, List<Vector3> points)
+            {
+                  OrientedBoundingBox obb = new OrientedBoundingBox();
+
+                  // Устанавливаем центр и оси из PCA
+                  obb.center = pca.centroid;
+                  obb.rightAxis = pca.primaryAxis;
+                  obb.upAxis = pca.secondaryAxis;
+                  obb.forwardAxis = pca.normalAxis;
+
+                  // Вычисляем границы в локальной системе координат
+                  Vector3 minBounds = Vector3.zero;
+                  Vector3 maxBounds = Vector3.zero;
+
+                  foreach (Vector3 point in points)
+                  {
+                        Vector3 localPoint = obb.WorldToLocal(point);
+
+                        minBounds.x = Mathf.Min(minBounds.x, localPoint.x);
+                        minBounds.y = Mathf.Min(minBounds.y, localPoint.y);
+                        minBounds.z = Mathf.Min(minBounds.z, localPoint.z);
+
+                        maxBounds.x = Mathf.Max(maxBounds.x, localPoint.x);
+                        maxBounds.y = Mathf.Max(maxBounds.y, localPoint.y);
+                        maxBounds.z = Mathf.Max(maxBounds.z, localPoint.z);
+                  }
+
+                  // Вычисляем полуразмеры и корректируем центр
+                  Vector3 size = maxBounds - minBounds;
+                  obb.extents = size * 0.5f;
+
+                  // Корректируем центр в мировых координатах
+                  Vector3 localCenter = (minBounds + maxBounds) * 0.5f;
+                  obb.center = obb.LocalToWorld(localCenter);
+
+                  // Вычисляем метрики
+                  obb.volume = size.x * size.y * size.z;
+                  obb.pointCount = points.Count;
+                  obb.pointDensity = obb.volume > 0.001f ? obb.pointCount / obb.volume : 0f;
+
+                  return obb;
+            }
+
+            /// <summary>
+            /// Преобразует мировые координаты в локальные координаты OBB
+            /// </summary>
+            public Vector3 WorldToLocal(Vector3 worldPoint)
+            {
+                  Vector3 offset = worldPoint - center;
+                  return new Vector3(
+                        Vector3.Dot(offset, rightAxis),
+                        Vector3.Dot(offset, upAxis),
+                        Vector3.Dot(offset, forwardAxis)
+                  );
+            }
+
+            /// <summary>
+            /// Преобразует локальные координаты OBB в мировые координаты
+            /// </summary>
+            public Vector3 LocalToWorld(Vector3 localPoint)
+            {
+                  return center +
+                         rightAxis * localPoint.x +
+                         upAxis * localPoint.y +
+                         forwardAxis * localPoint.z;
+            }
+
+            /// <summary>
+            /// Проверяет, содержится ли точка внутри OBB
+            /// </summary>
+            public bool ContainsPoint(Vector3 worldPoint)
+            {
+                  Vector3 localPoint = WorldToLocal(worldPoint);
+                  return Mathf.Abs(localPoint.x) <= extents.x &&
+                         Mathf.Abs(localPoint.y) <= extents.y &&
+                         Mathf.Abs(localPoint.z) <= extents.z;
+            }
+
+            /// <summary>
+            /// Получает размеры OBB (полные размеры, не полуразмеры)
+            /// </summary>
+            public Vector3 GetSize()
+            {
+                  return extents * 2f;
+            }
+
+            /// <summary>
+            /// Получает ориентацию OBB как кватернион
+            /// </summary>
+            public Quaternion GetRotation()
+            {
+                  // Создаём матрицу поворота из осей
+                  Matrix4x4 rotationMatrix = Matrix4x4.identity;
+                  rotationMatrix.SetColumn(0, new Vector4(rightAxis.x, rightAxis.y, rightAxis.z, 0));
+                  rotationMatrix.SetColumn(1, new Vector4(upAxis.x, upAxis.y, upAxis.z, 0));
+                  rotationMatrix.SetColumn(2, new Vector4(forwardAxis.x, forwardAxis.y, forwardAxis.z, 0));
+
+                  return rotationMatrix.rotation;
+            }
+
+            /// <summary>
+            /// Оценивает качество OBB на основе плотности точек и геометрии
+            /// </summary>
+            public float GetQuality()
+            {
+                  // Фактор плотности точек
+                  float densityFactor = Mathf.Clamp01(pointDensity / 100f); // Нормализуем к ~100 точкам на м³
+
+                  // Фактор соотношения сторон (предпочитаем не слишком вытянутые формы)
+                  Vector3 size = GetSize();
+                  float aspectRatio = Mathf.Max(size.x, size.y, size.z) / Mathf.Min(size.x, size.y, size.z);
+                  float aspectFactor = Mathf.Clamp01(5.0f / aspectRatio); // Хорошо до 5:1
+
+                  // Фактор размера (предпочитаем разумные размеры)
+                  float avgSize = (size.x + size.y + size.z) / 3f;
+                  float sizeFactor = Mathf.Clamp01(avgSize / 2.0f); // Оптимально около 2м
+
+                  return densityFactor * aspectFactor * sizeFactor;
+            }
+      }
+
+      /// <summary>
+      /// Новый метод поиска контуров (Уровень 2) - замена FindWallAreas()
+      /// Использует алгоритм Сузуки-Абэ для точного определения границ
+      /// </summary>
+      private List<Contour> FindContours(Color32[] pixels, int width, int height, byte threshold)
+      {
+            List<Contour> contours = new List<Contour>();
+
+            // Создаём бинарную маску
+            bool[,] binaryMask = new bool[height, width];
+            for (int y = 0; y < height; y++)
+            {
+                  for (int x = 0; x < width; x++)
+                  {
+                        binaryMask[y, x] = pixels[y * width + x].r >= threshold;
+                  }
+            }
+
+            // Добавляем границы из нулей для корректной работы алгоритма
+            bool[,] paddedMask = new bool[height + 2, width + 2];
+            for (int y = 0; y < height; y++)
+            {
+                  for (int x = 0; x < width; x++)
+                  {
+                        paddedMask[y + 1, x + 1] = binaryMask[y, x];
+                  }
+            }
+
+            // Алгоритм Сузуки-Абэ для поиска контуров
+            int[,] labels = new int[height + 2, width + 2]; // 0 = не обработан, 1 = внешний, 2 = дыра
+
+            for (int y = 1; y <= height; y++)
+            {
+                  for (int x = 1; x <= width; x++)
+                  {
+                        // Ищем начальную точку внешнего контура
+                        if (paddedMask[y, x] && !paddedMask[y, x - 1] && labels[y, x] == 0)
+                        {
+                              Contour contour = TraceContour(paddedMask, labels, x, y, width + 2, height + 2, false);
+                              if (contour != null && contour.points.Count >= 3)
+                              {
+                                    // Корректируем координаты (убираем padding)
+                                    for (int i = 0; i < contour.points.Count; i++)
+                                    {
+                                          contour.points[i] = new Vector2Int(contour.points[i].x - 1, contour.points[i].y - 1);
+                                    }
+                                    contour.CalculateProperties();
+                                    contours.Add(contour);
+                              }
+                        }
+                        // Ищем начальную точку дыры
+                        else if (!paddedMask[y, x] && paddedMask[y, x - 1] && labels[y, x] == 0)
+                        {
+                              Contour hole = TraceContour(paddedMask, labels, x - 1, y, width + 2, height + 2, true);
+                              if (hole != null && hole.points.Count >= 3)
+                              {
+                                    // Корректируем координаты (убираем padding)
+                                    for (int i = 0; i < hole.points.Count; i++)
+                                    {
+                                          hole.points[i] = new Vector2Int(hole.points[i].x - 1, hole.points[i].y - 1);
+                                    }
+                                    hole.isHole = true;
+                                    hole.CalculateProperties();
+                                    contours.Add(hole);
+                              }
+                        }
+                  }
+            }
+
+            // Фильтруем контуры по размеру и упрощаем их
+            List<Contour> filteredContours = new List<Contour>();
+            foreach (var contour in contours)
+            {
+                  if (contour.points.Count >= minContourLength && contour.area >= minContourArea)
+                  {
+                        // Упрощаем контур алгоритмом Дугласа-Пекера
+                        contour.points = SimplifyContour(contour.points, contourSimplificationEpsilon);
+                        contour.CalculateProperties();
+
+                        if (contour.points.Count >= 3) // После упрощения всё ещё должно быть >= 3 точек
+                        {
+                              filteredContours.Add(contour);
+                        }
+                  }
+            }
+
+            // Детальная диагностика фильтрации контуров
+            Debug.Log($"[ARManagerInitializer2-FindContours] 🔍 Найдено контуров: {contours.Count}, после фильтрации: {filteredContours.Count}");
+
+            if (contours.Count > 0 && filteredContours.Count == 0)
+            {
+                  Debug.LogWarning("[ARManagerInitializer2-FindContours] ⚠️ ВСЕ КОНТУРЫ ОТФИЛЬТРОВАНЫ! Диагностика:");
+                  Debug.LogWarning($"  Фильтры: minContourLength={minContourLength}, minContourArea={minContourArea}");
+
+                  for (int i = 0; i < Mathf.Min(5, contours.Count); i++)
+                  {
+                        var c = contours[i];
+                        Debug.LogWarning($"  Контур #{i}: точек={c.points.Count}, площадь={c.area:F1}, прошёл_длину={c.points.Count >= minContourLength}, прошёл_площадь={c.area >= minContourArea}");
+                  }
+
+                  if (contours.Count > 5)
+                        Debug.LogWarning($"  ... и ещё {contours.Count - 5} контуров");
+            }
+
+            return filteredContours;
+      }
+
+      /// <summary>
+      /// Трассировка контура с начальной точки
+      /// </summary>
+      private Contour TraceContour(bool[,] mask, int[,] labels, int startX, int startY, int width, int height, bool isHole)
+      {
+            // Направления обхода (8-связность): E, NE, N, NW, W, SW, S, SE
+            int[] dx = { 1, 1, 0, -1, -1, -1, 0, 1 };
+            int[] dy = { 0, -1, -1, -1, 0, 1, 1, 1 };
+
+            Contour contour = new Contour();
+            contour.isHole = isHole;
+
+            int x = startX;
+            int y = startY;
+            int dir = isHole ? 0 : 6; // Начальное направление поиска
+
+            // 🛡️ ЗАЩИТА ОТ ПЕРЕПОЛНЕНИЯ ПАМЯТИ
+            int MAX_CONTOUR_POINTS = maxContourPoints; // Используем настройку из инспектора
+            int MAX_ITERATIONS = maxContourIterations; // Используем настройку из инспектора
+            int iterations = 0;
+            var visitedStates = new HashSet<(int, int, int)>(); // (x, y, dir) для обнаружения циклов
+
+            do
+            {
+                  // Проверка на превышение лимитов
+                  if (contour.points.Count >= MAX_CONTOUR_POINTS)
+                  {
+                        if (enableCustomPlaneCreationLogging)
+                              Debug.LogWarning($"[ARManagerInitializer2-TraceContour] ⚠️ Достигнут лимит точек контура: {MAX_CONTOUR_POINTS}. Прерывание трассировки.");
+                        break;
+                  }
+
+                  if (++iterations >= MAX_ITERATIONS)
+                  {
+                        if (enableCustomPlaneCreationLogging)
+                              Debug.LogWarning($"[ARManagerInitializer2-TraceContour] ⚠️ Достигнут лимит итераций: {MAX_ITERATIONS}. Возможно зацикливание.");
+                        break;
+                  }
+
+                  // Проверка на зацикливание состояния (позиция + направление)
+                  var currentState = (x, y, dir);
+                  if (contour.points.Count > 2 && visitedStates.Contains(currentState))
+                  {
+                        if (enableCustomPlaneCreationLogging)
+                              // Debug.LogWarning($"[ARManagerInitializer2-TraceContour] ⚠️ Обнаружено зацикливание в позиции ({x}, {y}) с направлением {dir}"); // ОТКЛЮЧЕНО: слишком много предупреждений
+                              break;
+                  }
+                  visitedStates.Add(currentState);
+
+                  contour.points.Add(new Vector2Int(x, y));
+                  labels[y, x] = isHole ? 2 : 1;
+
+                  // Ищем следующую точку контура
+                  int nextDir = FindNextDirection(mask, x, y, dir, dx, dy, width, height, isHole);
+                  if (nextDir == -1)
+                  {
+                        if (enableCustomPlaneCreationLogging)
+                              Debug.Log($"[ARManagerInitializer2-TraceContour] Завершение: не найдено следующее направление в ({x}, {y})");
+                        break; // Не найдено следующей точки
+                  }
+
+                  // Проверка границ для следующей позиции
+                  int nextX = x + dx[nextDir];
+                  int nextY = y + dy[nextDir];
+                  if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height)
+                  {
+                        if (enableCustomPlaneCreationLogging)
+                              Debug.LogWarning($"[ARManagerInitializer2-TraceContour] ⚠️ Выход за границы: ({nextX}, {nextY}) при размере ({width}, {height})");
+                        break;
+                  }
+
+                  x = nextX;
+                  y = nextY;
+                  dir = (nextDir + 4) % 8; // Направление для поиска от следующей точки
+
+                  // Проверка завершения контура (вернулись в начальную точку с минимальным количеством точек)
+                  if (contour.points.Count >= 3 && x == startX && y == startY)
+                  {
+                        if (enableCustomPlaneCreationLogging)
+                              Debug.Log($"[ARManagerInitializer2-TraceContour] ✅ Контур замкнулся: {contour.points.Count} точек, {iterations} итераций");
+                        break;
+                  }
+
+            } while (true);
+
+            // Логирование результата трассировки
+            if (enableCustomPlaneCreationLogging)
+            {
+                  Debug.Log($"[ARManagerInitializer2-TraceContour] Трассировка завершена: {contour.points.Count} точек, {iterations} итераций, дыра={isHole}");
+            }
+
+            return contour;
+      }
+
+      /// <summary>
+      /// Находит следующее направление для трассировки контура
+      /// </summary>
+      private int FindNextDirection(bool[,] mask, int x, int y, int startDir, int[] dx, int[] dy, int width, int height, bool isHole)
+      {
+            for (int i = 0; i < 8; i++)
+            {
+                  int dir = (startDir + i) % 8;
+                  int nx = x + dx[dir];
+                  int ny = y + dy[dir];
+
+                  if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                  {
+                        bool hasPixel = mask[ny, nx];
+                        if ((!isHole && hasPixel) || (isHole && !hasPixel))
+                        {
+                              return dir;
+                        }
+                  }
+            }
+            return -1;
+      }
+
+      /// <summary>
+      /// Упрощает контур алгоритмом Дугласа-Пекера
+      /// </summary>
+      private List<Vector2Int> SimplifyContour(List<Vector2Int> points, float epsilon)
+      {
+            if (points.Count <= 2) return points;
+
+            List<Vector2Int> simplified = new List<Vector2Int>();
+            DouglasPeucker(points, 0, points.Count - 1, epsilon, simplified);
+
+            // Добавляем последнюю точку если она не была добавлена
+            if (simplified.Count == 0 || simplified[simplified.Count - 1] != points[points.Count - 1])
+            {
+                  simplified.Add(points[points.Count - 1]);
+            }
+
+            return simplified;
+      }
+
+      /// <summary>
+      /// Алгоритм Дугласа-Пекера для упрощения полигона
+      /// </summary>
+      private void DouglasPeucker(List<Vector2Int> points, int start, int end, float epsilon, List<Vector2Int> result)
+      {
+            if (end <= start + 1)
+            {
+                  if (result.Count == 0 || result[result.Count - 1] != points[start])
+                  {
+                        result.Add(points[start]);
+                  }
+                  return;
+            }
+
+            // Находим точку с максимальным расстоянием от линии start-end
+            float maxDistance = 0f;
+            int maxIndex = start;
+
+            for (int i = start + 1; i < end; i++)
+            {
+                  float distance = PerpendicularDistance(points[start], points[end], points[i]);
+                  if (distance > maxDistance)
+                  {
+                        maxDistance = distance;
+                        maxIndex = i;
+                  }
+            }
+
+            // Если максимальное расстояние больше epsilon, рекурсивно упрощаем
+            if (maxDistance > epsilon)
+            {
+                  DouglasPeucker(points, start, maxIndex, epsilon, result);
+                  DouglasPeucker(points, maxIndex, end, epsilon, result);
+            }
+            else
+            {
+                  if (result.Count == 0 || result[result.Count - 1] != points[start])
+                  {
+                        result.Add(points[start]);
+                  }
+            }
+      }
+
+      /// <summary>
+      /// Вычисляет перпендикулярное расстояние от точки до линии
+      /// </summary>
+      private float PerpendicularDistance(Vector2Int lineStart, Vector2Int lineEnd, Vector2Int point)
+      {
+            float dx = lineEnd.x - lineStart.x;
+            float dy = lineEnd.y - lineStart.y;
+
+            if (dx == 0 && dy == 0)
+            {
+                  return Vector2.Distance(new Vector2(lineStart.x, lineStart.y), new Vector2(point.x, point.y));
+            }
+
+            float t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (dx * dx + dy * dy);
+            t = Mathf.Clamp01(t);
+
+            float projX = lineStart.x + t * dx;
+            float projY = lineStart.y + t * dy;
+
+            return Vector2.Distance(new Vector2(projX, projY), new Vector2(point.x, point.y));
+      }
+
+      /// <summary>
+      /// Новый метод для обновления или создания плоскости из контура (Уровень 2)
+      /// </summary>
+      private bool UpdateOrCreatePlaneForContour(Contour contour, int textureWidth, int textureHeight, Dictionary<GameObject, bool> visitedPlanes)
+      {
+            // Вычисляем центр контура через центр масс
+            Vector2 contourCenter = CalculateContourCenterOfMass(contour, textureWidth, textureHeight);
+
+            // Переводим 2D координаты в 3D пространство
+            Vector3 centerWorldPosition = GetWorldPositionFromScreenCoordinates(contourCenter, textureWidth, textureHeight);
+
+            if (centerWorldPosition == Vector3.zero)
+            {
+                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-UpdateOrCreatePlaneForContour] ❌ Не удалось определить позицию в мире для контура с площадью {contour.area}");
+                  return false;
+            }
+
+            // Проверяем, есть ли близкая существующая плоскость
+            var (closestPlane, distance, angle) = FindClosestExistingPlane(centerWorldPosition, Vector3.forward, 0.3f, 45f);
+
+            if (closestPlane != null)
+            {
+                  // Обновляем существующую плоскость
+                  UpdatePlaneFromContour(closestPlane, contour, centerWorldPosition, textureWidth, textureHeight);
+                  visitedPlanes[closestPlane] = true;
+
+                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-UpdateOrCreatePlaneForContour] 🔄 Обновлена существующая плоскость {closestPlane.name} для контура с {contour.points.Count} точками");
+                  return true;
+            }
+            else
+            {
+                  // Создаём новую плоскость
+                  GameObject newPlane = CreatePlaneFromContour(contour, centerWorldPosition, textureWidth, textureHeight);
+
+                  if (newPlane != null)
+                  {
+                        visitedPlanes[newPlane] = true;
+
+                        if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-UpdateOrCreatePlaneForContour] ✅ Создана новая плоскость {newPlane.name} для контура с {contour.points.Count} точками и площадью {contour.area}");
+                        return true;
+                  }
+                  else
+                  {
+                        if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-UpdateOrCreatePlaneForContour] ❌ Не удалось создать плоскость для контура");
+                        return false;
+                  }
+            }
+      }
+
+      /// <summary>
+      /// Вычисляет центр масс контура с учётом инверсии Y-координат
+      /// </summary>
+      private Vector2 CalculateContourCenterOfMass(Contour contour, int textureWidth, int textureHeight)
+      {
+            if (contour.points.Count == 0)
+            {
+                  // Fallback: используем центр ограничивающего прямоугольника
+                  float fallbackCenterX = contour.boundingRect.x + contour.boundingRect.width / 2f;
+                  float fallbackCenterY = contour.boundingRect.y + contour.boundingRect.height / 2f;
+
+                  // ❗ БЕЗ ИНВЕРСИИ Y для ViewportPointToRay
+                  return new Vector2(fallbackCenterX / textureWidth, fallbackCenterY / textureHeight);
+            }
+
+            // Вычисляем центр масс полигона
+            float totalArea = 0f;
+            float centerX = 0f;
+            float centerY = 0f;
+
+            for (int i = 0; i < contour.points.Count; i++)
+            {
+                  int next = (i + 1) % contour.points.Count;
+                  Vector2Int p1 = contour.points[i];
+                  Vector2Int p2 = contour.points[next];
+
+                  float crossProduct = p1.x * p2.y - p2.x * p1.y;
+                  totalArea += crossProduct;
+
+                  centerX += (p1.x + p2.x) * crossProduct;
+                  centerY += (p1.y + p2.y) * crossProduct;
+            }
+
+            totalArea *= 0.5f;
+
+            if (Mathf.Abs(totalArea) < 0.001f) // Предотвращаем деление на ноль
+            {
+                  // Fallback: арифметическое среднее точек
+                  centerX = (float)contour.points.Average(p => p.x);
+                  centerY = (float)contour.points.Average(p => p.y);
+            }
+            else
+            {
+                  centerX /= (6f * totalArea);
+                  centerY /= (6f * totalArea);
+            }
+
+            // Нормализуем БЕЗ инверсии Y для ViewportPointToRay
+            float normalizedX = centerX / textureWidth;
+            float normalizedY = centerY / textureHeight; // ❗ БЕЗ ИНВЕРСИИ Y
+
+            return new Vector2(normalizedX, normalizedY);
+      }
+
+      /// <summary>
+      /// Обновляет существующую плоскость на основе контура
+      /// </summary>
+      private void UpdatePlaneFromContour(GameObject plane, Contour contour, Vector3 centerWorldPosition, int textureWidth, int textureHeight)
+      {
+            // Обновляем позицию плоскости
+            plane.transform.position = centerWorldPosition;
+
+            // Обновляем размеры плоскости на основе ограничивающего прямоугольника
+            float worldWidth = (contour.boundingRect.width / (float)textureWidth) * planeSizeMultiplier;
+            float worldHeight = (contour.boundingRect.height / (float)textureHeight) * planeSizeMultiplier;
+
+            // Применяем ограничения размеров
+            worldWidth = Mathf.Clamp(worldWidth, minPlaneSize, maxWallWidth);
+            worldHeight = Mathf.Clamp(worldHeight, minPlaneSize, maxWallHeight);
+
+            // Обновляем размеры плоскости
+            plane.transform.localScale = new Vector3(worldWidth, worldHeight, 1f);
+
+            // Обновляем время последнего посещения
+            planeLastVisitedTime[plane] = Time.time;
+      }
+
+      /// <summary>
+      /// Создаёт новую плоскость из контура с PCA оптимизацией
+      /// </summary>
+      private GameObject CreatePlaneFromContour(Contour contour, Vector3 centerWorldPosition, int textureWidth, int textureHeight)
+      {
+            Vector3 finalPosition = centerWorldPosition;
+            Quaternion finalRotation = Quaternion.identity;
+            float worldWidth, worldHeight;
+
+            // 🧮 УРОВЕНЬ 2: Используем PCA для точной ориентации плоскости
+            if (usePCAForPlaneOrientation)
+            {
+                  // Собираем облако точек из контура
+                  List<Vector3> pointCloud = CollectPointCloudFromContour(contour, textureWidth, textureHeight);
+
+                  if (pointCloud.Count >= minPointsForPCA)
+                  {
+                        // Выполняем PCA анализ
+                        PCAResult pcaResult = PerformPCAAnalysis(pointCloud);
+
+                        // Проверяем качество плоскости
+                        float planeQuality = pcaResult.GetPlaneQuality();
+
+                        if (planeQuality > 0.3f) // Минимальный порог качества
+                        {
+                              // Используем результаты PCA для позиционирования
+                              finalPosition = pcaResult.centroid;
+
+                              // Создаём ориентацию на основе главных компонент
+                              Vector3 forward = pcaResult.normalAxis;
+                              Vector3 up = pcaResult.secondaryAxis;
+
+                              // Убеждаемся, что оси ортогональны
+                              Vector3 right = Vector3.Cross(up, forward).normalized;
+                              up = Vector3.Cross(forward, right).normalized;
+
+                              finalRotation = Quaternion.LookRotation(forward, up);
+
+                              // 📦 УРОВЕНЬ 2: Используем OBB для точных размеров
+                              if (useOBBForPlaneSizing)
+                              {
+                                    OrientedBoundingBox obb = OrientedBoundingBox.FromPCAAndPoints(pcaResult, pointCloud);
+
+                                    // Проверяем качество OBB
+                                    float obbQuality = obb.GetQuality();
+
+                                    if (obbQuality > 0.2f) // Минимальный порог для OBB
+                                    {
+                                          // Используем размеры OBB
+                                          Vector3 obbSize = obb.GetSize();
+
+                                          // Применяем коэффициент расширения
+                                          worldWidth = obbSize.x * obbExpansionFactor;
+                                          worldHeight = obbSize.y * obbExpansionFactor;
+
+                                          // Адаптивное масштабирование на основе плотности точек
+                                          if (useAdaptiveOBBSizing)
+                                          {
+                                                float densityMultiplier = Mathf.Clamp(obb.pointDensity / 50f, 0.8f, 1.2f);
+                                                worldWidth *= densityMultiplier;
+                                                worldHeight *= densityMultiplier;
+                                          }
+
+                                          // Используем более точную позицию и ориентацию из OBB
+                                          finalPosition = obb.center;
+                                          finalRotation = obb.GetRotation();
+
+                                          if (enableCustomPlaneCreationLogging)
+                                          {
+                                                Debug.Log($"[ARManagerInitializer2-CreatePlaneFromContour] 📦 OBB результат: качество={obbQuality:F3}, плотность={obb.pointDensity:F1}, размер={worldWidth:F2}x{worldHeight:F2}");
+                                          }
+                                    }
+                                    else
+                                    {
+                                          // Fallback к PCA eigenvalues
+                                          float primaryLength = Mathf.Sqrt(pcaResult.eigenvalues[0]) * 2f;
+                                          float secondaryLength = Mathf.Sqrt(pcaResult.eigenvalues[1]) * 2f;
+
+                                          worldWidth = primaryLength;
+                                          worldHeight = secondaryLength;
+
+                                          if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlaneFromContour] ⚠️ Низкое качество OBB: {obbQuality:F3}, используем PCA eigenvalues");
+                                    }
+                              }
+                              else
+                              {
+                                    // Размеры на основе PCA eigenvalues (без OBB)
+                                    float primaryLength = Mathf.Sqrt(pcaResult.eigenvalues[0]) * 2f; // 2 стандартных отклонения
+                                    float secondaryLength = Mathf.Sqrt(pcaResult.eigenvalues[1]) * 2f;
+
+                                    worldWidth = primaryLength;
+                                    worldHeight = secondaryLength;
+                              }
+
+                              // Применяем общие ограничения размеров
+                              worldWidth = Mathf.Clamp(worldWidth, minPlaneSize, maxWallWidth);
+                              worldHeight = Mathf.Clamp(worldHeight, minPlaneSize, maxWallHeight);
+
+                              if (enableCustomPlaneCreationLogging)
+                              {
+                                    Debug.Log($"[ARManagerInitializer2-CreatePlaneFromContour] 🧮 PCA результат: качество={planeQuality:F3}, точек={pcaResult.inlierCount}, финальный размер={worldWidth:F2}x{worldHeight:F2}");
+                              }
+                        }
+                        else
+                        {
+                              if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlaneFromContour] ⚠️ Низкое качество PCA: {planeQuality:F3}, используем fallback");
+
+                              // Fallback к стандартному методу
+                              worldWidth = (contour.boundingRect.width / (float)textureWidth) * planeSizeMultiplier;
+                              worldHeight = (contour.boundingRect.height / (float)textureHeight) * planeSizeMultiplier;
+                              worldWidth = Mathf.Clamp(worldWidth, minPlaneSize, maxWallWidth);
+                              worldHeight = Mathf.Clamp(worldHeight, minPlaneSize, maxWallHeight);
+                        }
+                  }
+                  else
+                  {
+                        if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlaneFromContour] ⚠️ Недостаточно точек для PCA: {pointCloud.Count} < {minPointsForPCA}");
+
+                        // Fallback к стандартному методу
+                        worldWidth = (contour.boundingRect.width / (float)textureWidth) * planeSizeMultiplier;
+                        worldHeight = (contour.boundingRect.height / (float)textureHeight) * planeSizeMultiplier;
+                        worldWidth = Mathf.Clamp(worldWidth, minPlaneSize, maxWallWidth);
+                        worldHeight = Mathf.Clamp(worldHeight, minPlaneSize, maxWallHeight);
+                  }
+            }
+            else
+            {
+                  // Стандартный метод без PCA
+                  worldWidth = (contour.boundingRect.width / (float)textureWidth) * planeSizeMultiplier;
+                  worldHeight = (contour.boundingRect.height / (float)textureHeight) * planeSizeMultiplier;
+                  worldWidth = Mathf.Clamp(worldWidth, minPlaneSize, maxWallWidth);
+                  worldHeight = Mathf.Clamp(worldHeight, minPlaneSize, maxWallHeight);
+            }
+
+            // Проверяем соотношение сторон
+            float aspectRatio = Mathf.Max(worldWidth, worldHeight) / Mathf.Min(worldWidth, worldHeight);
+            if (aspectRatio > maxAspectRatio)
+            {
+                  if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-CreatePlaneFromContour] ❌ Контур отклонён из-за соотношения сторон: {aspectRatio:F2} > {maxAspectRatio}");
+                  return null;
+            }
+
+            // Создаём GameObject для плоскости
+            string planeName;
+            if (usePCAForPlaneOrientation && useOBBForPlaneSizing)
+            {
+                  planeName = $"GeneratedPlane_PCA_OBB_{++planeInstanceCounter}";
+            }
+            else if (usePCAForPlaneOrientation)
+            {
+                  planeName = $"GeneratedPlane_PCA_{++planeInstanceCounter}";
+            }
+            else
+            {
+                  planeName = $"GeneratedPlane_Contour_{++planeInstanceCounter}";
+            }
+            GameObject plane = new GameObject(planeName);
+            plane.transform.position = finalPosition;
+            plane.transform.rotation = finalRotation;
+            plane.transform.localScale = new Vector3(worldWidth, worldHeight, 1f);
+
+            // Добавляем MeshRenderer и MeshFilter
+            MeshRenderer meshRenderer = plane.AddComponent<MeshRenderer>();
+            MeshFilter meshFilter = plane.AddComponent<MeshFilter>();
+
+            // Создаём меш
+            meshFilter.mesh = CreatePlaneMesh(worldWidth, worldHeight);
+
+            // Назначаем материал
+            meshRenderer.material = verticalPlaneMaterial != null ? verticalPlaneMaterial : CreateFallbackMaterial();
+
+            // Добавляем коллайдер
+            BoxCollider collider = plane.AddComponent<BoxCollider>();
+            collider.size = new Vector3(worldWidth, worldHeight, 0.01f);
+
+            // Устанавливаем слой
+            if (!string.IsNullOrEmpty(planesLayerName))
+            {
+                  int layerIndex = LayerMask.NameToLayer(planesLayerName);
+                  if (layerIndex != -1)
+                  {
+                        plane.layer = layerIndex;
+                  }
+            }
+
+            // Добавляем в список созданных плоскостей
+            generatedPlanes.Add(plane);
+            planeCreationTimes[plane] = Time.time;
+            planeLastVisitedTime[plane] = Time.time;
+
+            return plane;
+      }
+
+      /// <summary>
+      /// Вспомогательный метод для получения мировых координат из экранных (для контуров)
+      /// </summary>
+      private Vector3 GetWorldPositionFromScreenCoordinates(Vector2 screenCoords, int textureWidth, int textureHeight)
+      {
+            if (xrOrigin == null || xrOrigin.Camera == null)
+            {
+                  Debug.LogError("[ARManagerInitializer2-GetWorldPositionFromScreenCoordinates] XROrigin or Camera is null");
+                  return Vector3.zero;
+            }
+
+            Camera mainCamera = xrOrigin.Camera;
+
+            // Создаём луч из камеры через точку экрана
+            Ray ray = mainCamera.ViewportPointToRay(new Vector3(screenCoords.x, screenCoords.y, 0));
+
+            // 🎯 Первая попытка: рейкаст по настроенной маске слоёв
+            RaycastHit hitInfo;
+            if (Physics.Raycast(ray, out hitInfo, maxRayDistance, hitLayerMask, QueryTriggerInteraction.Ignore))
+            {
+                  Debug.DrawRay(ray.origin, ray.direction * hitInfo.distance, Color.green, 1.0f);
+                  Debug.Log($"[ARManagerInitializer2] ✅ Raycast попал в {hitInfo.collider.name} (слой {hitInfo.collider.gameObject.layer}) на расстоянии {hitInfo.distance:F2}м");
+                  return hitInfo.point + hitInfo.normal * 0.02f; // Небольшое смещение от поверхности
+            }
+            else
+            {
+                  // 🟡 Вторая попытка: рейкаст по всем стандартным слоям
+                  if (Physics.Raycast(ray, out hitInfo, maxRayDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                  {
+                        Debug.LogWarning($"[ARManagerInitializer2] ⚠️ Основной Raycast промахнулся, но дополнительный попал в {hitInfo.collider.name} (слой {hitInfo.collider.gameObject.layer}). Проверьте настройки hitLayerMask!");
+                        Debug.DrawRay(ray.origin, ray.direction * hitInfo.distance, Color.yellow, 1.0f);
+                        return hitInfo.point + hitInfo.normal * 0.02f;
+                  }
+                  else
+                  {
+                        // 🔴 Окончательный fallback: фиксированное расстояние перед камерой
+                        Debug.DrawRay(ray.origin, ray.direction * maxRayDistance, Color.red, 1.0f);
+                        Debug.LogWarning($"[ARManagerInitializer2] ❌ Все Raycast промахнулись! UV=({screenCoords.x:F3},{screenCoords.y:F3}) → используем fallback позицию");
+                        return mainCamera.transform.position + mainCamera.transform.forward * 2.0f;
+                  }
+            }
+      }
+
+      /// <summary>
+      /// Выполняет PCA анализ для облака точек контура
+      /// </summary>
+      private PCAResult PerformPCAAnalysis(List<Vector3> worldPoints)
+      {
+            PCAResult result = new PCAResult();
+
+            if (worldPoints == null || worldPoints.Count < minPointsForPCA)
+            {
+                  Debug.LogWarning($"[ARManagerInitializer2-PerformPCAAnalysis] Недостаточно точек для PCA: {worldPoints?.Count ?? 0} < {minPointsForPCA}");
+                  return result;
+            }
+
+            // 1. Вычисляем центр масс
+            result.centroid = Vector3.zero;
+            foreach (Vector3 point in worldPoints)
+            {
+                  result.centroid += point;
+            }
+            result.centroid /= worldPoints.Count;
+
+            // 2. Центрируем точки относительно центра масс
+            List<Vector3> centeredPoints = new List<Vector3>();
+            foreach (Vector3 point in worldPoints)
+            {
+                  centeredPoints.Add(point - result.centroid);
+            }
+
+            // 3. Вычисляем ковариационную матрицу 3x3
+            float[,] covarianceMatrix = ComputeCovarianceMatrix(centeredPoints);
+
+            // 4. Находим собственные значения и векторы
+            var eigenResults = ComputeEigenvalues(covarianceMatrix);
+            result.eigenvalues = eigenResults.values;
+            Vector3[] eigenvectors = eigenResults.vectors;
+
+            // 5. Сортируем по убыванию собственных значений
+            SortEigenComponents(ref result.eigenvalues, ref eigenvectors);
+
+            // 6. Назначаем главные компоненты
+            result.primaryAxis = eigenvectors[0];   // Наибольший eigenvalue
+            result.secondaryAxis = eigenvectors[1]; // Средний eigenvalue
+            result.normalAxis = eigenvectors[2];    // Наименьший eigenvalue
+
+            // 7. Выполняем робастную фильтрацию выбросов
+            var filteredPoints = FilterOutliers(worldPoints, result);
+            result.inlierCount = filteredPoints.Count;
+
+            // 8. Вычисляем среднее расстояние от точек до плоскости
+            result.averageDistance = ComputeAverageDistanceToPlane(filteredPoints, result.centroid, result.normalAxis);
+
+            Debug.Log($"[ARManagerInitializer2-PerformPCAAnalysis] PCA завершён: {result.inlierCount} инлайеров, плоскостность: {result.GetPlaneQuality():F3}");
+            return result;
+      }
+
+      /// <summary>
+      /// Вычисляет ковариационную матрицу для облака точек
+      /// </summary>
+      private float[,] ComputeCovarianceMatrix(List<Vector3> centeredPoints)
+      {
+            float[,] matrix = new float[3, 3];
+            int n = centeredPoints.Count;
+
+            for (int i = 0; i < n; i++)
+            {
+                  Vector3 p = centeredPoints[i];
+
+                  // Заполняем верхний треугольник матрицы
+                  matrix[0, 0] += p.x * p.x;
+                  matrix[0, 1] += p.x * p.y;
+                  matrix[0, 2] += p.x * p.z;
+                  matrix[1, 1] += p.y * p.y;
+                  matrix[1, 2] += p.y * p.z;
+                  matrix[2, 2] += p.z * p.z;
+            }
+
+            // Нормализуем на количество точек
+            for (int i = 0; i < 3; i++)
+            {
+                  for (int j = i; j < 3; j++)
+                  {
+                        matrix[i, j] /= (n - 1);
+                  }
+            }
+
+            // Заполняем нижний треугольник (симметричная матрица)
+            matrix[1, 0] = matrix[0, 1];
+            matrix[2, 0] = matrix[0, 2];
+            matrix[2, 1] = matrix[1, 2];
+
+            return matrix;
+      }
+
+      /// <summary>
+      /// Вычисляет собственные значения и векторы матрицы 3x3 методом степенных итераций
+      /// </summary>
+      private (float[] values, Vector3[] vectors) ComputeEigenvalues(float[,] matrix)
+      {
+            float[] eigenvalues = new float[3];
+            Vector3[] eigenvectors = new Vector3[3];
+
+            // Упрощённый алгоритм для матрицы 3x3
+            // Используем итеративный метод степенных итераций
+
+            float[,] workMatrix = (float[,])matrix.Clone();
+
+            // Найдём первый собственный вектор (наибольший eigenvalue)
+            Vector3 v1 = FindDominantEigenvector(workMatrix);
+            eigenvalues[0] = ComputeEigenvalue(workMatrix, v1);
+            eigenvectors[0] = v1;
+
+            // Дефляция матрицы для поиска второго собственного вектора
+            DeflateMatrix(workMatrix, v1, eigenvalues[0]);
+
+            // Найдём второй собственный вектор
+            Vector3 v2 = FindDominantEigenvector(workMatrix);
+            eigenvalues[1] = ComputeEigenvalue(matrix, v2);
+            eigenvectors[1] = v2;
+
+            // Третий собственный вектор - векторное произведение первых двух
+            Vector3 v3 = Vector3.Cross(v1, v2).normalized;
+            eigenvalues[2] = ComputeEigenvalue(matrix, v3);
+            eigenvectors[2] = v3;
+
+            return (eigenvalues, eigenvectors);
+      }
+
+      /// <summary>
+      /// Находит доминирующий собственный вектор методом степенных итераций
+      /// </summary>
+      private Vector3 FindDominantEigenvector(float[,] matrix)
+      {
+            Vector3 v = new Vector3(1f, 1f, 1f).normalized;
+
+            // Степенные итерации
+            for (int iter = 0; iter < 50; iter++)
+            {
+                  Vector3 newV = MultiplyMatrixVector(matrix, v);
+                  newV = newV.normalized;
+
+                  // Проверяем сходимость
+                  if (Vector3.Dot(v, newV) > 0.999f)
+                  {
+                        break;
+                  }
+
+                  v = newV;
+            }
+
+            return v;
+      }
+
+      /// <summary>
+      /// Умножает матрицу 3x3 на вектор
+      /// </summary>
+      private Vector3 MultiplyMatrixVector(float[,] matrix, Vector3 vector)
+      {
+            return new Vector3(
+                  matrix[0, 0] * vector.x + matrix[0, 1] * vector.y + matrix[0, 2] * vector.z,
+                  matrix[1, 0] * vector.x + matrix[1, 1] * vector.y + matrix[1, 2] * vector.z,
+                  matrix[2, 0] * vector.x + matrix[2, 1] * vector.y + matrix[2, 2] * vector.z
+            );
+      }
+
+      /// <summary>
+      /// Вычисляет собственное значение для данного собственного вектора
+      /// </summary>
+      private float ComputeEigenvalue(float[,] matrix, Vector3 eigenvector)
+      {
+            Vector3 result = MultiplyMatrixVector(matrix, eigenvector);
+            return Vector3.Dot(result, eigenvector);
+      }
+
+      /// <summary>
+      /// Выполняет дефляцию матрицы для исключения найденного собственного значения
+      /// </summary>
+      private void DeflateMatrix(float[,] matrix, Vector3 eigenvector, float eigenvalue)
+      {
+            for (int i = 0; i < 3; i++)
+            {
+                  for (int j = 0; j < 3; j++)
+                  {
+                        float vi = (i == 0) ? eigenvector.x : ((i == 1) ? eigenvector.y : eigenvector.z);
+                        float vj = (j == 0) ? eigenvector.x : ((j == 1) ? eigenvector.y : eigenvector.z);
+                        matrix[i, j] -= eigenvalue * vi * vj;
+                  }
+            }
+      }
+
+      /// <summary>
+      /// Сортирует собственные значения и векторы по убыванию
+      /// </summary>
+      private void SortEigenComponents(ref float[] eigenvalues, ref Vector3[] eigenvectors)
+      {
+            // Простая сортировка пузырьком для 3 элементов
+            for (int i = 0; i < 2; i++)
+            {
+                  for (int j = i + 1; j < 3; j++)
+                  {
+                        if (eigenvalues[i] < eigenvalues[j])
+                        {
+                              // Меняем местами eigenvalues
+                              float tempVal = eigenvalues[i];
+                              eigenvalues[i] = eigenvalues[j];
+                              eigenvalues[j] = tempVal;
+
+                              // Меняем местами eigenvectors
+                              Vector3 tempVec = eigenvectors[i];
+                              eigenvectors[i] = eigenvectors[j];
+                              eigenvectors[j] = tempVec;
+                        }
+                  }
+            }
+      }
+
+      /// <summary>
+      /// Фильтрует выбросы из облака точек на основе расстояния до плоскости
+      /// </summary>
+      private List<Vector3> FilterOutliers(List<Vector3> points, PCAResult pca)
+      {
+            List<Vector3> filteredPoints = new List<Vector3>();
+            List<float> distances = new List<float>();
+
+            // Вычисляем расстояния от каждой точки до плоскости
+            foreach (Vector3 point in points)
+            {
+                  float distance = Mathf.Abs(Vector3.Dot(point - pca.centroid, pca.normalAxis));
+                  distances.Add(distance);
+            }
+
+            // Сортируем расстояния для нахождения порога
+            List<float> sortedDistances = new List<float>(distances);
+            sortedDistances.Sort();
+
+            // Используем процентиль для определения порога выбросов
+            int thresholdIndex = Mathf.FloorToInt(sortedDistances.Count * (1.0f - pcaOutlierPercentage));
+            float adaptiveThreshold = Mathf.Min(sortedDistances[thresholdIndex], pcaOutlierThreshold);
+
+            // Фильтруем точки
+            for (int i = 0; i < points.Count; i++)
+            {
+                  if (distances[i] <= adaptiveThreshold)
+                  {
+                        filteredPoints.Add(points[i]);
+                  }
+            }
+
+            return filteredPoints;
+      }
+
+      /// <summary>
+      /// Вычисляет среднее расстояние от точек до плоскости
+      /// </summary>
+      private float ComputeAverageDistanceToPlane(List<Vector3> points, Vector3 centroid, Vector3 normal)
+      {
+            if (points.Count == 0) return 0f;
+
+            float totalDistance = 0f;
+            foreach (Vector3 point in points)
+            {
+                  float distance = Mathf.Abs(Vector3.Dot(point - centroid, normal));
+                  totalDistance += distance;
+            }
+
+            return totalDistance / points.Count;
+      }
+
+      /// <summary>
+      /// Собирает облако точек из контура для PCA анализа
+      /// </summary>
+      private List<Vector3> CollectPointCloudFromContour(Contour contour, int textureWidth, int textureHeight)
+      {
+            List<Vector3> worldPoints = new List<Vector3>();
+
+            // Собираем точки из контура
+            foreach (Vector2Int pixel in contour.points)
+            {
+                  // Переводим пиксельные координаты в UV
+                  Vector2 uv = new Vector2(pixel.x / (float)textureWidth, 1.0f - pixel.y / (float)textureHeight);
+
+                  // Получаем мировые координаты
+                  Vector3 worldPos = GetWorldPositionFromScreenCoordinates(uv, textureWidth, textureHeight);
+
+                  if (worldPos != Vector3.zero)
+                  {
+                        worldPoints.Add(worldPos);
+                  }
+            }
+
+            // Дополнительно семплируем точки внутри контура для лучшего анализа
+            if (worldPoints.Count < minPointsForPCA)
+            {
+                  worldPoints.AddRange(SamplePointsInsideContour(contour, textureWidth, textureHeight));
+            }
+
+            return worldPoints;
+      }
+
+      /// <summary>
+      /// Дополнительно семплирует точки внутри контура
+      /// </summary>
+      private List<Vector3> SamplePointsInsideContour(Contour contour, int textureWidth, int textureHeight)
+      {
+            List<Vector3> sampledPoints = new List<Vector3>();
+            Rect bounds = contour.boundingRect;
+
+            int stepX = Mathf.Max(1, (int)(bounds.width / 20)); // Примерно 20 точек по X
+            int stepY = Mathf.Max(1, (int)(bounds.height / 20)); // Примерно 20 точек по Y
+
+            for (int y = (int)bounds.yMin; y < bounds.yMax; y += stepY)
+            {
+                  for (int x = (int)bounds.xMin; x < bounds.xMax; x += stepX)
+                  {
+                        if (IsPointInContour(new Vector2Int(x, y), contour))
+                        {
+                              Vector2 uv = new Vector2(x / (float)textureWidth, 1.0f - y / (float)textureHeight);
+                              Vector3 worldPos = GetWorldPositionFromScreenCoordinates(uv, textureWidth, textureHeight);
+
+                              if (worldPos != Vector3.zero)
+                              {
+                                    sampledPoints.Add(worldPos);
+                              }
+                        }
+                  }
+            }
+
+            return sampledPoints;
+      }
+
+      /// <summary>
+      /// Проверяет, находится ли точка внутри контура
+      /// </summary>
+      private bool IsPointInContour(Vector2Int point, Contour contour)
+      {
+            // Упрощённый алгоритм ray casting для определения, находится ли точка внутри полигона
+            int intersections = 0;
+
+            for (int i = 0; i < contour.points.Count; i++)
+            {
+                  int next = (i + 1) % contour.points.Count;
+                  Vector2Int p1 = contour.points[i];
+                  Vector2Int p2 = contour.points[next];
+
+                  if (((p1.y > point.y) != (p2.y > point.y)) &&
+                      (point.x < (p2.x - p1.x) * (point.y - p1.y) / (p2.y - p1.y) + p1.x))
+                  {
+                        intersections++;
+                  }
+            }
+
+            return (intersections % 2) == 1;
+      }
+
+      /// <summary>
+      /// Создаёт оптимизированный OBB с дополнительной фильтрацией и настройками
+      /// </summary>
+      private OrientedBoundingBox CreateOptimizedOBB(PCAResult pca, List<Vector3> rawPoints)
+      {
+            // Фильтруем выбросы для более точного OBB
+            List<Vector3> filteredPoints = FilterOutliers(rawPoints, pca);
+
+            // Создаём базовый OBB
+            OrientedBoundingBox obb = OrientedBoundingBox.FromPCAAndPoints(pca, filteredPoints);
+
+            // Применяем минимальную толщину в направлении нормали
+            Vector3 size = obb.GetSize();
+            if (size.z < obbMinThickness)
+            {
+                  obb.extents.z = obbMinThickness * 0.5f;
+            }
+
+            // Убеждаемся, что OBB не слишком мал в других направлениях
+            if (size.x < minPlaneSize)
+            {
+                  obb.extents.x = minPlaneSize * 0.5f;
+            }
+            if (size.y < minPlaneSize)
+            {
+                  obb.extents.y = minPlaneSize * 0.5f;
+            }
+
+            // Обновляем метрики после корректировки
+            obb.volume = obb.GetSize().x * obb.GetSize().y * obb.GetSize().z;
+            obb.pointDensity = obb.volume > 0.001f ? obb.pointCount / obb.volume : 0f;
+
+            return obb;
+      }
+
+      /// <summary>
+      /// Валидирует OBB и возвращает фактор качества
+      /// </summary>
+      private float ValidateOBB(OrientedBoundingBox obb, Contour contour)
+      {
+            float qualityScore = obb.GetQuality();
+
+            // Дополнительные проверки качества
+            Vector3 size = obb.GetSize();
+
+            // Проверяем разумность размеров
+            if (size.x > maxWallWidth * 2f || size.y > maxWallHeight * 2f)
+            {
+                  qualityScore *= 0.5f; // Слишком большой
+            }
+
+            if (size.x < minPlaneSize * 0.5f || size.y < minPlaneSize * 0.5f)
+            {
+                  qualityScore *= 0.3f; // Слишком маленький
+            }
+
+            // Проверяем соответствие контуру
+            float contourAreaRatio = obb.GetSize().x * obb.GetSize().y / contour.area;
+            if (contourAreaRatio > 5f || contourAreaRatio < 0.2f)
+            {
+                  qualityScore *= 0.7f; // Плохое соответствие контуру
+            }
+
+            return qualityScore;
+      }
+
+      /// <summary>
+      /// Отладочная визуализация OBB (опционально)
+      /// </summary>
+      private void DebugDrawOBB(OrientedBoundingBox obb, Color color, float duration = 1f)
+      {
+            if (!enableCustomPlaneCreationLogging) return;
+
+            Vector3 size = obb.GetSize();
+            Vector3[] corners = new Vector3[8];
+
+            // Вычисляем 8 углов OBB
+            corners[0] = obb.LocalToWorld(new Vector3(-size.x / 2, -size.y / 2, -size.z / 2));
+            corners[1] = obb.LocalToWorld(new Vector3(size.x / 2, -size.y / 2, -size.z / 2));
+            corners[2] = obb.LocalToWorld(new Vector3(size.x / 2, size.y / 2, -size.z / 2));
+            corners[3] = obb.LocalToWorld(new Vector3(-size.x / 2, size.y / 2, -size.z / 2));
+            corners[4] = obb.LocalToWorld(new Vector3(-size.x / 2, -size.y / 2, size.z / 2));
+            corners[5] = obb.LocalToWorld(new Vector3(size.x / 2, -size.y / 2, size.z / 2));
+            corners[6] = obb.LocalToWorld(new Vector3(size.x / 2, size.y / 2, size.z / 2));
+            corners[7] = obb.LocalToWorld(new Vector3(-size.x / 2, size.y / 2, size.z / 2));
+
+            // Рисуем рёбра OBB
+            // Нижняя грань
+            Debug.DrawLine(corners[0], corners[1], color, duration);
+            Debug.DrawLine(corners[1], corners[2], color, duration);
+            Debug.DrawLine(corners[2], corners[3], color, duration);
+            Debug.DrawLine(corners[3], corners[0], color, duration);
+
+            // Верхняя грань
+            Debug.DrawLine(corners[4], corners[5], color, duration);
+            Debug.DrawLine(corners[5], corners[6], color, duration);
+            Debug.DrawLine(corners[6], corners[7], color, duration);
+            Debug.DrawLine(corners[7], corners[4], color, duration);
+
+            // Вертикальные рёбра
+            Debug.DrawLine(corners[0], corners[4], color, duration);
+            Debug.DrawLine(corners[1], corners[5], color, duration);
+            Debug.DrawLine(corners[2], corners[6], color, duration);
+            Debug.DrawLine(corners[3], corners[7], color, duration);
+      }
+
+      // Находит центр массы области сегментации для более точного позиционирования плоскости
+      private Vector2 FindAreaCenterOfMass(Rect area, int textureWidth, int textureHeight)
+      {
+            if (currentSegmentationMask == null)
+            {
+                  // Если маска недоступна, возвращаем геометрический центр
+                  // ИСПРАВЛЕНО: Убираем инверсию Y-координаты для ViewportPointToRay
+                  return new Vector2(
+                      (area.xMin + area.width * 0.5f) / textureWidth,
+                      (area.yMin + area.height * 0.5f) / textureHeight  // ❗ БЕЗ ИНВЕРСИИ Y
+                  );
+            }
+
+            // Создаем временную текстуру для чтения пикселей
+            Texture2D tempTexture = RenderTextureToTexture2D(currentSegmentationMask, textureWidth, textureHeight);
+            Color32[] pixels = tempTexture.GetPixels32();
+
+            float totalMass = 0f;
+            float centerX = 0f;
+            float centerY = 0f;
+            byte threshold = wallPixelThreshold;
+
+            // 🎯 УЛУЧШЕННЫЙ АЛГОРИТМ: Многоточечный анализ центра
+            List<Vector2> wallPixelPositions = new List<Vector2>();
+
+            // Вычисляем центр массы области И собираем все позиции пикселей стены
+            for (int y = Mathf.FloorToInt(area.yMin); y < Mathf.CeilToInt(area.yMax) && y < textureHeight; y++)
+            {
+                  for (int x = Mathf.FloorToInt(area.xMin); x < Mathf.CeilToInt(area.xMax) && x < textureWidth; x++)
+                  {
+                        Color32 pixel = pixels[y * textureWidth + x];
+                        if (pixel.r >= threshold)
+                        {
+                              float pixelMass = pixel.r / 255.0f; // Используем интенсивность как массу
+                              totalMass += pixelMass;
+                              centerX += x * pixelMass;
+                              centerY += y * pixelMass;
+
+                              // Сохраняем позицию для дополнительного анализа
+                              wallPixelPositions.Add(new Vector2(x, y));
+                        }
+                  }
+            }
+
+            // Очищаем временную текстуру
+            if (tempTexture != null)
+            {
+                  DestroyImmediate(tempTexture);
+            }
+
+            Vector2 finalCenter;
+
+            if (totalMass > 0 && wallPixelPositions.Count > 0)
+            {
+                  centerX /= totalMass;
+                  centerY /= totalMass;
+
+                  // 🔧 ДОПОЛНИТЕЛЬНАЯ КОРРЕКЦИЯ: Проверяем, находится ли центр массы внутри области стены
+                  Vector2 massCenter = new Vector2(centerX, centerY);
+
+                  if (accuratePositioning && wallPixelPositions.Count >= 4)
+                  {
+                        // 🎯 АЛГОРИТМ ТОЧНОГО ПОЗИЦИОНИРОВАНИЯ
+
+                        // 1. Находим медианные координаты для устойчивости к выбросам
+                        wallPixelPositions.Sort((a, b) => a.x.CompareTo(b.x));
+                        float medianX = wallPixelPositions[wallPixelPositions.Count / 2].x;
+
+                        wallPixelPositions.Sort((a, b) => a.y.CompareTo(b.y));
+                        float medianY = wallPixelPositions[wallPixelPositions.Count / 2].y;
+
+                        Vector2 medianCenter = new Vector2(medianX, medianY);
+
+                        // 2. Находим геометрический центр области
+                        Vector2 geometricCenter = new Vector2(
+                              area.xMin + area.width * 0.5f,
+                              area.yMin + area.height * 0.5f
+                        );
+
+                        // 3. Вычисляем расстояния между всеми центрами
+                        float massMedianDistance = Vector2.Distance(massCenter, medianCenter);
+                        float massGeometricDistance = Vector2.Distance(massCenter, geometricCenter);
+                        float medianGeometricDistance = Vector2.Distance(medianCenter, geometricCenter);
+
+                        // 4. Выбираем лучший центр на основе анализа
+                        float maxAllowedDeviation = Mathf.Min(area.width, area.height) * 0.25f;
+
+                        if (massMedianDistance <= maxAllowedDeviation)
+                        {
+                              // Центр массы и медиана близки - используем центр массы (более точный)
+                              finalCenter = massCenter;
+                        }
+                        else if (medianGeometricDistance <= maxAllowedDeviation)
+                        {
+                              // Медиана близка к геометрическому центру - используем медиану
+                              finalCenter = medianCenter;
+                        }
+                        else
+                        {
+                              // Большое расхождение - используем взвешенное среднее
+                              float massWeight = 0.5f;
+                              float medianWeight = 0.3f;
+                              float geometricWeight = 0.2f;
+
+                              finalCenter = (massCenter * massWeight + medianCenter * medianWeight + geometricCenter * geometricWeight);
+
+                              if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-FindAreaCenterOfMass] 🔧 Взвешенный центр: масса={massCenter}, медиана={medianCenter}, геом={geometricCenter}, финал={finalCenter}");
+                        }
+                  }
+                  else
+                  {
+                        finalCenter = massCenter;
+                  }
+
+                  // Возвращаем центр массы в UV координатах
+                  // ИСПРАВЛЕНО: Убираем инверсию Y-координаты для ViewportPointToRay
+                  Vector2 centerOfMass = new Vector2(
+                      finalCenter.x / textureWidth,
+                      finalCenter.y / textureHeight  // ❗ БЕЗ ИНВЕРСИИ Y
+                  );
+
+                  if (accuratePositioning && enableDetailedRaycastLogging)
+                  {
+                        Debug.Log($"[ARManagerInitializer2] 🎯 ТОЧНОЕ ПОЗИЦИОНИРОВАНИЕ: геом.центр=({(area.xMin + area.width * 0.5f):F0},{(area.yMin + area.height * 0.5f):F0}), финальный центр=({finalCenter.x:F0},{finalCenter.y:F0}), UV=({centerOfMass.x:F3},{centerOfMass.y:F3}) [Y БЕЗ инверсии]");
+                  }
+                  else
+                  {
+                        Debug.Log($"[ARManagerInitializer2] Центр массы области: геом.центр=({(area.xMin + area.width * 0.5f):F0},{(area.yMin + area.height * 0.5f):F0}), центр массы=({finalCenter.x:F0},{finalCenter.y:F0}), UV=({centerOfMass.x:F3},{centerOfMass.y:F3}) [Y БЕЗ инверсии]");
+                  }
+
+                  return centerOfMass;
+            }
+            else
+            {
+                  // Если не найдено пикселей, возвращаем геометрический центр
+                  // ИСПРАВЛЕНО: Убираем инверсию Y-координаты для ViewportPointToRay
+                  return new Vector2(
+                      (area.xMin + area.width * 0.5f) / textureWidth,
+                      (area.yMin + area.height * 0.5f) / textureHeight  // ❗ БЕЗ ИНВЕРСИИ Y
+                  );
+            }
+      }
+
+      // Вычисляет эффективный коэффициент площади области (отношение реальных пикселей стены к общей площади bounding box)
+      private float CalculateEffectiveAreaRatio(Rect area, int textureWidth, int textureHeight)
+      {
+            if (currentSegmentationMask == null)
+            {
+                  return 1.0f; // Если маска недоступна, используем полную площадь
+            }
+
+            // Создаем временную текстуру для чтения пикселей
+            Texture2D tempTexture = RenderTextureToTexture2D(currentSegmentationMask, textureWidth, textureHeight);
+            Color32[] pixels = tempTexture.GetPixels32();
+
+            int wallPixels = 0;
+            int totalPixels = 0;
+            byte threshold = wallPixelThreshold;
+
+            // Подсчитываем пиксели стены в области
+            for (int y = Mathf.FloorToInt(area.yMin); y < Mathf.CeilToInt(area.yMax) && y < textureHeight; y++)
+            {
+                  for (int x = Mathf.FloorToInt(area.xMin); x < Mathf.CeilToInt(area.xMax) && x < textureWidth; x++)
+                  {
+                        totalPixels++;
+                        Color32 pixel = pixels[y * textureWidth + x];
+                        if (pixel.r >= threshold)
+                        {
+                              wallPixels++;
+                        }
+                  }
+            }
+
+            // Очищаем временную текстуру
+            if (tempTexture != null)
+            {
+                  DestroyImmediate(tempTexture);
+            }
+
+            if (totalPixels > 0)
+            {
+                  float ratio = (float)wallPixels / totalPixels;
+                  // Применяем квадратный корень для более мягкого уменьшения
+                  ratio = Mathf.Sqrt(ratio);
+                  Debug.Log($"[ARManagerInitializer2] Эффективная площадь области: {wallPixels}/{totalPixels} = {(float)wallPixels / totalPixels:F2}, скорректированная: {ratio:F2}");
+                  return Mathf.Clamp(ratio, 0.3f, 1.0f); // Ограничиваем минимум 30% для избежания слишком мелких плоскостей
+            }
+            else
+            {
+                  return 1.0f;
+            }
       }
 
       // Создание плоскости для области стены
@@ -1109,11 +3771,8 @@ public class ARManagerInitializer2 : MonoBehaviour
             float halfFovVertical = mainCamera.fieldOfView * 0.5f * Mathf.Deg2Rad;
             float halfFovHorizontal = Mathf.Atan(Mathf.Tan(halfFovVertical) * mainCamera.aspect);
 
-            // Используем центральную точку области для рейкаста
-            Vector2 areaCenterUV = new Vector2(
-                (area.xMin + area.width * 0.5f) / textureWidth,
-                (area.yMin + area.height * 0.5f) / textureHeight
-            );
+            // Находим реальный центр массы области сегментации для более точного позиционирования
+            Vector2 areaCenterUV = FindAreaCenterOfMass(area, textureWidth, textureHeight);
 
             Ray ray = mainCamera.ViewportPointToRay(new Vector3(areaCenterUV.x, areaCenterUV.y, 0));
             // RaycastHit hit; // Удалено - переменная не использовалась
@@ -1121,33 +3780,63 @@ public class ARManagerInitializer2 : MonoBehaviour
             Quaternion planeRotation;
             float fallbackDistance = 2.0f; // Расстояние по умолчанию, если рейкаст не удался
 
-            // Устанавливаем маску слоев для рейкаста (например, только "Default" или специальный слой для геометрии сцены)
-            // int layerMask = LayerMask.GetMask("Default", "SimulatedEnvironment"); // Пример
-            // int layerMask = ~LayerMask.GetMask("ARCustomPlane", "Ignore Raycast"); // Игнорируем собственные плоскости и слой Ignore Raycast
-            LayerMask raycastLayerMask = LayerMask.GetMask("SimulatedEnvironment", "Default", "Wall"); // Добавляем слой "Wall"
+            // Используем унифицированную маску слоёв из настроек инспектора
+            // Это решает проблему несоответствия разных масок в разных методах
+            LayerMask raycastLayerMask = this.hitLayerMask;
 
             // Визуализация луча для отладки
             // Debug.DrawRay(ray.origin, ray.direction * maxRayDistance, Color.yellow, 1.0f); // ОТКЛЮЧЕНО: Визуализация всех лучей
 
+            // 🎯 УЛУЧШЕННЫЙ ТОЧНЫЙ РЕЙКАСТ: Один луч точно в центр поверхности
             RaycastHit hitInfo;
-            if (Physics.Raycast(ray, out hitInfo, maxRayDistance, raycastLayerMask))
+            bool raycastSuccessful = false;
+
+            // Создаем луч точно в центр обнаруженной поверхности
+            if (Physics.Raycast(ray, out hitInfo, maxRayDistance, hitLayerMask, QueryTriggerInteraction.Ignore))
             {
-                  distanceFromCamera = hitInfo.distance;
-                  Debug.DrawRay(ray.origin, ray.direction * hitInfo.distance, Color.green, 1.0f); // Раскомментировано: Визуализация успешного луча
-                  // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast hit! Distance: {distanceFromCamera:F2}m, Normal: {hit.normal:F2}, Point: {hit.point:F2}, Hit Object: {hit.collider.name}");
-                  planeRotation = Quaternion.LookRotation(-hitInfo.normal, mainCamera.transform.up); // Ориентируем Z плоскости по нормали
-                  planePosition = hitInfo.point + hitInfo.normal * 0.01f; // Смещаем немного от поверхности, чтобы избежать Z-fighting
+                  // Визуализируем УСПЕШНЫЙ рейкаст зеленым цветом
+                  Debug.DrawRay(ray.origin, ray.direction * hitInfo.distance, Color.green, 2.0f);
+
+                  planePosition = hitInfo.point + hitInfo.normal * 0.02f; // Небольшое смещение от поверхности
+                  distanceFromCamera = Vector3.Distance(mainCamera.transform.position, planePosition);
+                  raycastSuccessful = true;
+
+                  Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] ✅ ТОЧНЫЙ Raycast попал в {hitInfo.collider.name} на расстоянии {hitInfo.distance:F2}м");
             }
             else
             {
-                  // Если луч не попал, используем фиксированное расстояние и ориентацию параллельно камере
-                  distanceFromCamera = fallbackDistance; // Используем заданное расстояние по умолчанию
-                  planePosition = mainCamera.transform.position + mainCamera.transform.forward * distanceFromCamera;
-                  planeRotation = mainCamera.transform.rotation; // Ориентация как у камеры
-                                                                 // Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] Raycast miss. Using fixed distance ({distanceFromCamera}m) and camera-parallel orientation.");
-                  Debug.DrawRay(ray.origin, ray.direction * maxRayDistance, Color.red, 1.0f); // Раскомментировано: Визуализация промахнувшегося луча
+                  // Fallback: рейкаст по всем слоям
+                  if (Physics.Raycast(ray, out hitInfo, maxRayDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                  {
+                        // Визуализируем FALLBACK рейкаст желтым цветом
+                        Debug.DrawRay(ray.origin, ray.direction * hitInfo.distance, Color.yellow, 2.0f);
+
+                        planePosition = hitInfo.point + hitInfo.normal * 0.02f;
+                        distanceFromCamera = Vector3.Distance(mainCamera.transform.position, planePosition);
+                        raycastSuccessful = true;
+
+                        Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] ⚠️ Fallback Raycast попал в {hitInfo.collider.name}");
+                  }
+                  else
+                  {
+                        // Визуализируем НЕУДАЧНЫЙ рейкаст красным цветом
+                        Debug.DrawRay(ray.origin, ray.direction * maxRayDistance, Color.red, 2.0f);
+
+                        Debug.LogWarning($"[ARManagerInitializer2-CreatePlaneForWallArea] ❌ Все Raycast промахнулись для UV=({areaCenterUV.x:F3},{areaCenterUV.y:F3}), пропускаем создание плоскости");
+                        return; // Не удалось получить данные для плоскости
+                  }
+            }
+
+            if (!raycastSuccessful)
+            {
                   return; // Не удалось получить данные для плоскости
             }
+
+            // Определяем ориентацию плоскости на основе нормали поверхности
+            Vector3 surfaceNormal = hitInfo.normal;
+            planeRotation = Quaternion.LookRotation(-surfaceNormal, Vector3.up);
+
+            Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] ✅ ТОЧНЫЙ Raycast успешен! Позиция: {planePosition}, расстояние: {distanceFromCamera:F2}м, нормаль: {surfaceNormal}");
 
 
             // Расчет мировых размеров плоскости
@@ -1155,13 +3844,49 @@ public class ARManagerInitializer2 : MonoBehaviour
             float worldHeightAtDistance = 2.0f * distanceFromCamera * Mathf.Tan(halfFovVertical);
             float worldWidthAtDistance = worldHeightAtDistance * mainCamera.aspect;
 
-            // Мировые размеры плоскости, основанные на ее доле в маске
-            planeWorldWidth = (area.width / textureWidth) * worldWidthAtDistance * planeSizeMultiplier;
-            planeWorldHeight = (area.height / textureHeight) * worldHeightAtDistance * planeSizeMultiplier;
+            // 🎯 КОНСЕРВАТИВНЫЙ расчет размеров плоскости
+            // Вычисляем размер области в мировых координатах на найденном расстоянии
+            float areaWidthRatio = area.width / (float)textureWidth;
+            float areaHeightRatio = area.height / (float)textureHeight;
 
-            // ИСПРАВЛЕНО: Ограничиваем размеры реалистичными значениями для стен
-            planeWorldWidth = Mathf.Clamp(planeWorldWidth, minPlaneSize, maxWallWidth);
-            planeWorldHeight = Mathf.Clamp(planeWorldHeight, minPlaneSize, maxWallHeight);
+            // Базовые размеры с консервативным подходом
+            planeWorldWidth = areaWidthRatio * worldWidthAtDistance;
+            planeWorldHeight = areaHeightRatio * worldHeightAtDistance;
+
+            // 🔧 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Применяем коэффициенты уменьшения только если accurateSizing отключен
+            if (!accurateSizing)
+            {
+                  // Маска сегментации низкого разрешения (56x56) создает слишком большие области
+                  planeWorldWidth *= sizeReductionFactor * planeSizeMultiplier;
+                  planeWorldHeight *= sizeReductionFactor * planeSizeMultiplier;
+
+                  // Строгие ограничения размеров для точного соответствия стенам
+                  planeWorldWidth = Mathf.Clamp(planeWorldWidth, 0.05f, maxPlaneClampSize);
+                  planeWorldHeight = Mathf.Clamp(planeWorldHeight, 0.05f, maxPlaneClampSize);
+            }
+            else
+            {
+                  // Точное соответствие размеров - применяем только базовые ограничения
+                  planeWorldWidth *= planeSizeMultiplier;
+                  planeWorldHeight *= planeSizeMultiplier;
+
+                  // Более мягкие ограничения для точного соответствия
+                  planeWorldWidth = Mathf.Clamp(planeWorldWidth, minPlaneSize, maxWallWidth);
+                  planeWorldHeight = Mathf.Clamp(planeWorldHeight, minPlaneSize, maxWallHeight);
+            }
+
+            if (accurateSizing && accuratePositioning)
+            {
+                  Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] 🎯 ТОЧНОЕ СООТВЕТСТВИЕ: область {area.width}x{area.height}px ({areaWidthRatio:F3}x{areaHeightRatio:F3}) → {planeWorldWidth:F2}x{planeWorldHeight:F2}м, позиция по центру поверхности");
+            }
+            else if (accurateSizing)
+            {
+                  Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] 📐 Размеры (точное соответствие): область {area.width}x{area.height}px ({areaWidthRatio:F3}x{areaHeightRatio:F3}) → {planeWorldWidth:F2}x{planeWorldHeight:F2}м");
+            }
+            else
+            {
+                  Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] 📐 Размеры: область {area.width}x{area.height}px ({areaWidthRatio:F3}x{areaHeightRatio:F3}) → {planeWorldWidth:F2}x{planeWorldHeight:F2}м (уменьшено в {1 / sizeReductionFactor:F1}x)");
+            }
 
             // Проверка на минимальный размер перед созданием
             if (planeWorldWidth < minPlaneSizeInMeters || planeWorldHeight < minPlaneSizeInMeters)
@@ -1178,28 +3903,51 @@ public class ARManagerInitializer2 : MonoBehaviour
                   return;
             }
 
-            // Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Plane World Size: Width={planeWorldWidth:F2}, Height={planeWorldHeight:F2} at distance {distanceFromCamera:F2}m");
+            // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Отклоняем слишком большие плоскости
+            if (planeWorldWidth > maxWallWidth || planeWorldHeight > maxWallHeight)
+            {
+                  Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Плоскость отклонена из-за слишком больших размеров: {planeWorldWidth:F2}x{planeWorldHeight:F2}м (макс: {maxWallWidth}x{maxWallHeight}м)");
+                  return;
+            }
 
-            // УЛУЧШЕННАЯ проверка на перекрывающиеся плоскости
+            Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] Создаем плоскость: {planeWorldWidth:F2}x{planeWorldHeight:F2}м, расстояние: {distanceFromCamera:F2}м, область: {area.width}x{area.height}px");
+
+            // 🔄 СИСТЕМА ОБЪЕДИНЕНИЯ БЛИЗКИХ ПЛОСКОСТЕЙ
+            GameObject candidateForMerging = null;
+            float closestDistance = float.MaxValue;
+
             foreach (GameObject existingPlane in this.generatedPlanes)
             {
                   if (existingPlane == null) continue;
 
                   float distance = Vector3.Distance(existingPlane.transform.position, planePosition);
 
-                  // Проверяем близость по позиции
-                  if (distance < 0.5f) // Увеличили минимальное расстояние
+                  // Проверяем, находятся ли плоскости на одной стене (похожие нормали)
+                  Vector3 existingNormal = existingPlane.transform.forward;
+                  Vector3 newNormal = planeRotation * Vector3.forward;
+                  float normalSimilarity = Vector3.Dot(existingNormal, newNormal);
+
+                  // Если плоскости очень близко и на одной стене - кандидат для объединения
+                  if (distance < 0.4f && normalSimilarity > 0.7f && distance < closestDistance)
+                  {
+                        candidateForMerging = existingPlane;
+                        closestDistance = distance;
+                  }
+
+                  // Если плоскости слишком близко - пропускаем создание новой
+                  if (distance < 0.2f)
                   {
                         Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] ⚠️ Плоскость слишком близко к существующей ({distance:F2}м), пропускаем создание.");
                         return;
                   }
+            }
 
-                  // Проверяем перекрытие по площади (для плоскостей на одной стене)
-                  if (distance < 1.5f && Vector3.Dot(existingPlane.transform.forward, planeRotation * Vector3.forward) > 0.8f)
-                  {
-                        Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] ⚠️ Плоскость перекрывается с существующей на той же стене, пропускаем создание.");
-                        return;
-                  }
+            // Если найден кандидат для объединения - расширяем существующую плоскость
+            if (candidateForMerging != null)
+            {
+                  Debug.Log($"[ARManagerInitializer2-CreatePlaneForWallArea] 🔄 Объединяем с существующей плоскостью {candidateForMerging.name} (расстояние: {closestDistance:F2}м)");
+                  ExpandExistingPlane(candidateForMerging, planePosition, planeWorldWidth, planeWorldHeight);
+                  return;
             }
 
             // ... (код до создания planeObject) ...
@@ -1292,6 +4040,43 @@ public class ARManagerInitializer2 : MonoBehaviour
             planeInstanceCounter++;
             if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] ✔️ Плоскость '{planeName}' УСПЕШНО СОЗДАНА и добавлена. Всего создано: {planeInstanceCounter}. Текущее кол-во в generatedPlanes: {generatedPlanes.Count}");
             return; // ИСПРАВЛЕНО: planeObject больше не возвращается, т.к. метод void
+      }
+
+      /// <summary>
+      /// Расширяет существующую плоскость, объединяя её с новой областью
+      /// </summary>
+      private void ExpandExistingPlane(GameObject existingPlane, Vector3 newPosition, float newWidth, float newHeight)
+      {
+            if (existingPlane == null) return;
+
+            MeshFilter meshFilter = existingPlane.GetComponent<MeshFilter>();
+            MeshCollider meshCollider = existingPlane.GetComponent<MeshCollider>();
+
+            if (meshFilter == null || meshCollider == null) return;
+
+            // Получаем текущие размеры плоскости
+            Bounds currentBounds = meshFilter.mesh.bounds;
+            float currentWidth = currentBounds.size.x;
+            float currentHeight = currentBounds.size.y;
+
+            // Вычисляем новую позицию как среднюю между текущей и новой
+            Vector3 currentPosition = existingPlane.transform.position;
+            Vector3 mergedPosition = Vector3.Lerp(currentPosition, newPosition, 0.3f); // 30% влияние новой позиции
+
+            // Увеличиваем размеры консервативно
+            float mergedWidth = Mathf.Max(currentWidth, newWidth) * 1.1f; // Увеличиваем на 10%
+            float mergedHeight = Mathf.Max(currentHeight, newHeight) * 1.1f;
+
+            // Ограничиваем максимальные размеры
+            mergedWidth = Mathf.Clamp(mergedWidth, 0.05f, maxPlaneClampSize);
+            mergedHeight = Mathf.Clamp(mergedHeight, 0.05f, maxPlaneClampSize);
+
+            // Обновляем позицию и меш
+            existingPlane.transform.position = mergedPosition;
+            meshFilter.mesh = CreatePlaneMesh(mergedWidth, mergedHeight);
+            meshCollider.sharedMesh = meshFilter.mesh;
+
+            Debug.Log($"[ARManagerInitializer2-ExpandExistingPlane] 🔄 Плоскость {existingPlane.name} расширена: {currentWidth:F2}x{currentHeight:F2}м → {mergedWidth:F2}x{mergedHeight:F2}м");
       }
 
       private UnityEngine.Mesh CreatePlaneMesh(float width, float height)
@@ -1765,6 +4550,7 @@ public class ARManagerInitializer2 : MonoBehaviour
       // НОВЫЙ МЕТОД: Обновление существующей плоскости или создание новой для области стены
       private bool UpdateOrCreatePlaneForWallArea(Rect area, int textureWidth, int textureHeight, Dictionary<GameObject, bool> visitedPlanes)
       {
+            if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🎯 НАЧИНАЕМ ОБРАБОТКУ ОБЛАСТИ: {areaToString(area)}, useSinglePreciseRaycast={useSinglePreciseRaycast}");
             Debug.Log($"[ARManagerInitializer2-UpdateOrCreatePlaneForWallArea] ⭐ НАЧАЛО. Область: {area}, текстура: {textureWidth}x{textureHeight}");
             Camera currentMainCamera = Camera.main; // Переименовано во избежание конфликта
             if (currentMainCamera == null)
@@ -1795,16 +4581,64 @@ public class ARManagerInitializer2 : MonoBehaviour
             Vector3 cameraPosition = mainCamera.transform.position;
             // Quaternion cameraRotation = mainCamera.transform.rotation; // Раскомментировать, если понадобится
 
-            float normalizedCenterX = (area.x + area.width / 2f) / textureWidth;
-            float normalizedCenterY = (area.y + area.height / 2f) / textureHeight;
-            if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Нормализованный центр области (UV): X={normalizedCenterX:F2}, Y={normalizedCenterY:F2}");
+            // 🎯 УЛУЧШЕННЫЙ АЛГОРИТМ: Используем точный центр поверхности вместо геометрического центра
+            Vector2 areaCenterUV;
+            if (accuratePositioning)
+            {
+                  // Используем улучшенный алгоритм определения центра поверхности
+                  areaCenterUV = FindAreaCenterOfMass(area, textureWidth, textureHeight);
+                  if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🎯 ТОЧНЫЙ центр поверхности (UV): X={areaCenterUV.x:F2}, Y={areaCenterUV.y:F2}");
+            }
+            else
+            {
+                  // Простой геометрический центр области
+                  areaCenterUV = new Vector2(
+                        (area.x + area.width / 2f) / textureWidth,
+                        (area.y + area.height / 2f) / textureHeight
+                  );
+                  if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Геометрический центр области (UV): X={areaCenterUV.x:F2}, Y={areaCenterUV.y:F2}");
+            }
+
+            float normalizedCenterX = areaCenterUV.x;
+            float normalizedCenterY = areaCenterUV.y;
 
             if (normalizedCenterX < 0 || normalizedCenterX > 1 || normalizedCenterY < 0 || normalizedCenterY > 1)
             {
                   // Debug.LogWarning($"[ARManagerInitializer2-UOCP] ⚠️ Нормализованные координаты центра области ({normalizedCenterX:F2}, {normalizedCenterY:F2}) выходят за пределы [0,1].");
             }
 
-            Ray centerRay = mainCamera.ViewportPointToRay(new Vector3(normalizedCenterX, normalizedCenterY, 0));
+            // 🎯 ИСПРАВЛЕНИЕ ДЛЯ XR СИМУЛЯЦИИ: Создаем горизонтальные лучи вместо лучей из камеры
+            Ray centerRay;
+            Vector3 initialRayDirection;
+
+            // Проверяем, находимся ли мы в XR симуляции (камера высоко над сценой)
+            bool isXRSimulation = cameraPosition.y > 0.5f && Vector3.Dot(cameraForward, Vector3.down) > 0.3f;
+
+            if (isXRSimulation)
+            {
+                  // В XR симуляции создаем горизонтальные лучи от центра сцены в стены
+                  Vector3 sceneCenter = new Vector3(0, 0.5f, 0); // Центр сцены на высоте 0.5м
+
+                  // Преобразуем UV-координаты в горизонтальное направление
+                  Vector3 horizontalDirection = new Vector3(
+                        (normalizedCenterX - 0.5f) * 2f, // -1 до +1 по X
+                        0f,                              // Горизонтально (Y=0)
+                        (normalizedCenterY - 0.5f) * 2f  // -1 до +1 по Z
+                  ).normalized;
+
+                  centerRay = new Ray(sceneCenter, horizontalDirection);
+                  initialRayDirection = horizontalDirection;
+
+                  if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🎯 XR СИМУЛЯЦИЯ: Горизонтальный луч из {sceneCenter} в направлении {horizontalDirection:F2}");
+            }
+            else
+            {
+                  // Обычный режим: луч из камеры
+                  centerRay = mainCamera.ViewportPointToRay(new Vector3(normalizedCenterX, normalizedCenterY, 0));
+                  initialRayDirection = centerRay.direction;
+
+                  if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📷 ОБЫЧНЫЙ РЕЖИМ: Луч из камеры");
+            }
 
             if (enableDetailedRaycastLogging)
             {
@@ -1821,8 +4655,6 @@ public class ARManagerInitializer2 : MonoBehaviour
                         Debug.LogWarning("[ARManagerInitializer2-UOCP] _mainCamera IS NULL перед ViewportPointToRay!");
                   }
             }
-
-            Vector3 initialRayDirection = centerRay.direction;
             if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] Исходное направление луча (из ViewportPointToRay({normalizedCenterX:F2},{normalizedCenterY:F2})): {initialRayDirection.ToString("F3")}");
 
             // Новый, более надежный способ создания и логирования LayerMask
@@ -1874,39 +4706,53 @@ public class ARManagerInitializer2 : MonoBehaviour
 
             bool didHit = false;
 
-            // Массив смещений для лучей с более широким охватом и разной плотностью
-            // Центральная область имеет более высокую плотность лучей
+            // 🎯 НАСТРОЙКА РЕЙКАСТОВ: Один точный или множественные
             List<Vector3> rayOffsets = new List<Vector3>();
+            List<float> rayWeights = new List<float>();
 
-            // Центральный луч (с наивысшим приоритетом)
-            rayOffsets.Add(Vector3.zero);
+            if (useSinglePreciseRaycast)
+            {
+                  // ТОЧНЫЙ РЕЖИМ: Только один луч в центр поверхности
+                  rayOffsets.Add(Vector3.zero);
+                  rayWeights.Add(1.0f);
 
-            // Ближние лучи вокруг центра (высокий приоритет)
-            float innerRadius = 0.08f; // Внутренний радиус в метрах
-            rayOffsets.Add(cameraRight * innerRadius);                 // Правый
-            rayOffsets.Add(-cameraRight * innerRadius);                // Левый
-            rayOffsets.Add(cameraUp * innerRadius);                    // Верхний
-            rayOffsets.Add(-cameraUp * innerRadius);                   // Нижний
-            rayOffsets.Add(cameraRight * innerRadius * 0.7f + cameraUp * innerRadius * 0.7f);  // Правый верхний
-            rayOffsets.Add(cameraRight * innerRadius * 0.7f - cameraUp * innerRadius * 0.7f);  // Правый нижний
-            rayOffsets.Add(-cameraRight * innerRadius * 0.7f + cameraUp * innerRadius * 0.7f); // Левый верхний
-            rayOffsets.Add(-cameraRight * innerRadius * 0.7f - cameraUp * innerRadius * 0.7f); // Левый нижний
+                  if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🎯 ТОЧНЫЙ РЕЖИМ: Используется один рейкаст в центр поверхности для области {areaToString(area)}");
+            }
+            else
+            {
+                  // МНОЖЕСТВЕННЫЙ РЕЖИМ: Массив смещений для лучей с более широким охватом
+                  // Центральный луч (с наивысшим приоритетом)
+                  rayOffsets.Add(Vector3.zero);
 
-            // Дальние лучи (средний приоритет)
-            float outerRadius = 0.15f; // Внешний радиус в метрах
-            rayOffsets.Add(cameraRight * outerRadius);                 // Дальний правый
-            rayOffsets.Add(-cameraRight * outerRadius);                // Дальний левый 
-            rayOffsets.Add(cameraUp * outerRadius);                    // Дальний верхний
-            rayOffsets.Add(-cameraUp * outerRadius);                   // Дальний нижний
+                  // Ближние лучи вокруг центра (высокий приоритет)
+                  float innerRadius = 0.08f; // Внутренний радиус в метрах
+                  rayOffsets.Add(cameraRight * innerRadius);                 // Правый
+                  rayOffsets.Add(-cameraRight * innerRadius);                // Левый
+                  rayOffsets.Add(cameraUp * innerRadius);                    // Верхний
+                  rayOffsets.Add(-cameraUp * innerRadius);                   // Нижний
+                  rayOffsets.Add(cameraRight * innerRadius * 0.7f + cameraUp * innerRadius * 0.7f);  // Правый верхний
+                  rayOffsets.Add(cameraRight * innerRadius * 0.7f - cameraUp * innerRadius * 0.7f);  // Правый нижний
+                  rayOffsets.Add(-cameraRight * innerRadius * 0.7f + cameraUp * innerRadius * 0.7f); // Левый верхний
+                  rayOffsets.Add(-cameraRight * innerRadius * 0.7f - cameraUp * innerRadius * 0.7f); // Левый нижний
 
-            // Веса для лучей. Должны соответствовать порядку в rayOffsets
-            List<float> rayWeights = new List<float>
-        {
-            2.0f, // Центральный
-            1.5f, 1.5f, 1.5f, 1.5f, // Ближние основные (право, лево, верх, низ)
-            1.0f, 1.0f, 1.0f, 1.0f, // Ближние диагональные
-            0.5f, 0.5f, 0.5f, 0.5f  // Дальние
-        };
+                  // Дальние лучи (средний приоритет)
+                  float outerRadius = 0.15f; // Внешний радиус в метрах
+                  rayOffsets.Add(cameraRight * outerRadius);                 // Дальний правый
+                  rayOffsets.Add(-cameraRight * outerRadius);                // Дальний левый 
+                  rayOffsets.Add(cameraUp * outerRadius);                    // Дальний верхний
+                  rayOffsets.Add(-cameraUp * outerRadius);                   // Дальний нижний
+
+                  // Веса для лучей. Должны соответствовать порядку в rayOffsets
+                  rayWeights = new List<float>
+                  {
+                        2.0f, // Центральный
+                        1.5f, 1.5f, 1.5f, 1.5f, // Ближние основные (право, лево, верх, низ)
+                        1.0f, 1.0f, 1.0f, 1.0f, // Ближние диагональные
+                        0.5f, 0.5f, 0.5f, 0.5f  // Дальние
+                  };
+
+                  if (enableDetailedRaycastLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 📡 МНОЖЕСТВЕННЫЙ РЕЖИМ: Используется {rayOffsets.Count} рейкастов");
+            }
 
             float bestDistance = float.MaxValue;
             Vector3 bestNormal = Vector3.zero;
@@ -1927,8 +4773,11 @@ public class ARManagerInitializer2 : MonoBehaviour
             for (int i = 0; i < rayOffsets.Count; i++)
             {
                   Vector3 offsetDirection = rayOffsets[i]; // Это небольшое смещение направления в мировых координатах
-                  Vector3 currentRayOrigin = cameraPosition; // Все лучи исходят из позиции камеры
-                                                             // ИСПРАВЛЕНО: Правильное вычисление направления луча со смещением
+
+                  // 🎯 ИСПРАВЛЕНИЕ: Используем правильную начальную позицию для XR симуляции
+                  Vector3 currentRayOrigin = isXRSimulation ? centerRay.origin : cameraPosition;
+
+                  // ИСПРАВЛЕНО: Правильное вычисление направления луча со смещением
                   Vector3 currentRayDirection = (initialRayDirection + offsetDirection * 0.1f).normalized; // Добавляем смещение как небольшое отклонение, не нормализуем offsetDirection
 
                   // Отладочный вывод
@@ -2602,6 +5451,25 @@ public class ARManagerInitializer2 : MonoBehaviour
                   return false; // Не создаем новую, т.к. есть близкий дубликат
             }
 
+            // 🔄 ПРОВЕРКА СЛИЯНИЯ: Попытка найти близкую плоскость для слияния
+            if (enablePlaneMerging)
+            {
+                  var (closestPlane, distance, angle) = FindClosestExistingPlane(finalPlanePosition, bestNormal, planeMergingDistance, 30f);
+                  if (closestPlane != null)
+                  {
+                        if (enableCustomPlaneCreationLogging) Debug.Log($"[ARManagerInitializer2-UOCP] 🔄 СЛИЯНИЕ: Найдена близкая плоскость '{closestPlane.name}' на расстоянии {distance:F2}м. Расширяем вместо создания новой.");
+
+                        // Расширяем существующую плоскость
+                        ExpandExistingPlane(closestPlane, finalPlanePosition, finalPlaneWorldWidth, finalPlaneWorldHeight);
+
+                        // Помечаем как посещенную
+                        if (visitedPlanes != null) visitedPlanes[closestPlane] = true;
+                        if (planeLastVisitedTime != null) planeLastVisitedTime[closestPlane] = Time.time;
+
+                        return true; // Плоскость "создана" путем слияния
+                  }
+            }
+
             // Создаем и настраиваем GameObject для плоскости
             string newPlaneName = $"MyARPlane_Debug_{planeInstanceCounter++}";
             GameObject planeObj = new GameObject(newPlaneName);
@@ -2707,11 +5575,20 @@ public class ARManagerInitializer2 : MonoBehaviour
             return true;
       }
 
-      // Удаляем устаревшие плоскости, если их слишком много
+      // 🛡️ Удаляем устаревшие плоскости с системой гистерезиса для предотвращения мерцания
       private void CleanupOldPlanes(Dictionary<GameObject, bool> visitedPlanesInCurrentMask) // New name for clarity
       {
-            List<GameObject> planesToRemove = new List<GameObject>();
+            // Защита: не удаляем плоскости во время слияния
+            if (Time.time - lastDynamicMergingTime < 0.5f)
+            {
+                  if (enableVerboseLoggingCleanup)
+                  {
+                        Debug.Log("[ARManagerInitializer2-CleanupOldPlanes] ⏸️ Пропускаем очистку - недавно было слияние плоскостей");
+                  }
+                  return;
+            }
 
+            List<GameObject> planesToRemove = new List<GameObject>();
             float currentTime = Time.time;
 
             foreach (var plane in generatedPlanes.ToList()) // ToList() to allow modification during iteration
@@ -2723,48 +5600,290 @@ public class ARManagerInitializer2 : MonoBehaviour
                   if (IsPlanePersistent(plane))
                         continue;
 
-                  if (planeLastVisitedTime.TryGetValue(plane, out float lastVisitTime))
+                  // 🛡️ СИСТЕМА ГИСТЕРЕЗИСА: обновляем счетчик пропущенных кадров
+                  if (enablePlaneHysteresis)
                   {
-                        // Если плоскость не была посещена в текущей маске И прошла задержка
-                        if (currentTime - lastVisitTime > planePersistenceDelay &&
-                            (visitedPlanesInCurrentMask == null || !visitedPlanesInCurrentMask.ContainsKey(plane)))
+                        // Если плоскость не была найдена в текущей маске
+                        if (visitedPlanesInCurrentMask == null || !visitedPlanesInCurrentMask.ContainsKey(plane))
                         {
-                              if (enableVerboseLoggingCleanup)
-                                    Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] Plane {plane.name} not visited in current mask. Last visit was {currentTime - lastVisitTime:F2}s ago (threshold: {planePersistenceDelay}s). Adding to removal list.");
-                              planesToRemove.Add(plane);
+                              // Увеличиваем счетчик пропущенных кадров
+                              if (!planeMissedFrames.ContainsKey(plane))
+                              {
+                                    planeMissedFrames[plane] = 0;
+                              }
+                              planeMissedFrames[plane]++;
+
+                              // Удаляем только если пропустили достаточно кадров подряд
+                              if (planeMissedFrames[plane] >= maxMissedFrames)
+                              {
+                                    if (enableVerboseLoggingCleanup)
+                                    {
+                                          Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] 🛡️ Плоскость {plane.name} пропущена {planeMissedFrames[plane]} кадров подряд (порог: {maxMissedFrames}). Удаляем.");
+                                    }
+                                    planesToRemove.Add(plane);
+                              }
+                              else
+                              {
+                                    if (enableVerboseLoggingCleanup)
+                                    {
+                                          Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] 🛡️ Плоскость {plane.name} пропущена {planeMissedFrames[plane]}/{maxMissedFrames} кадров. Ожидаем...");
+                                    }
+                              }
+                        }
+                        else
+                        {
+                              // Плоскость найдена - сбрасываем счетчик пропущенных кадров
+                              if (planeMissedFrames.ContainsKey(plane))
+                              {
+                                    planeMissedFrames.Remove(plane);
+                              }
                         }
                   }
-                  else if (visitedPlanesInCurrentMask == null || !visitedPlanesInCurrentMask.ContainsKey(plane))
+                  else
                   {
-                        // Если для плоскости нет времени последнего посещения и её нет в текущей маске,
-                        // возможно, это новая, но сразу невидимая плоскость, или что-то пошло не так.
-                        // Добавляем её к удалению, если она существует дольше задержки (предосторожность).
-                        if (planeCreationTimes.TryGetValue(plane, out float creationTime) && currentTime - creationTime > planePersistenceDelay)
+                        // 🚫 СТАНДАРТНАЯ СИСТЕМА: удаляем по времени (может вызывать мерцание)
+                        if (planeLastVisitedTime.TryGetValue(plane, out float lastVisitTime))
                         {
-                              if (enableVerboseLoggingCleanup)
-                                    Debug.LogWarning($"[ARManagerInitializer2-CleanupOldPlanes] Plane {plane.name} has no lastVisitTime and not in current mask. Created {currentTime - creationTime:F2}s ago. Adding to removal list as precaution (threshold: {planePersistenceDelay}s).");
-                              planesToRemove.Add(plane);
+                              // Если плоскость не была посещена в текущей маске И прошла задержка
+                              if (currentTime - lastVisitTime > planePersistenceDelay &&
+                                  (visitedPlanesInCurrentMask == null || !visitedPlanesInCurrentMask.ContainsKey(plane)))
+                              {
+                                    if (enableVerboseLoggingCleanup)
+                                          Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] 🚫 Плоскость {plane.name} не посещена {currentTime - lastVisitTime:F2}с (порог: {planePersistenceDelay}с). Удаляем.");
+                                    planesToRemove.Add(plane);
+                              }
+                        }
+                        else if (visitedPlanesInCurrentMask == null || !visitedPlanesInCurrentMask.ContainsKey(plane))
+                        {
+                              // Если для плоскости нет времени последнего посещения и её нет в текущей маске
+                              if (planeCreationTimes.TryGetValue(plane, out float creationTime) && currentTime - creationTime > planePersistenceDelay)
+                              {
+                                    if (enableVerboseLoggingCleanup)
+                                          Debug.LogWarning($"[ARManagerInitializer2-CleanupOldPlanes] 🚫 Плоскость {plane.name} без истории посещений, создана {currentTime - creationTime:F2}с назад. Удаляем.");
+                                    planesToRemove.Add(plane);
+                              }
                         }
                   }
             }
 
+            // Удаляем плоскости и очищаем все словари
             foreach (GameObject planeToRemove in planesToRemove)
             {
                   generatedPlanes.Remove(planeToRemove);
-                  // Ensure removal from all tracking dictionaries
-                  if (planeCreationTimes.ContainsKey(planeToRemove))
-                  {
-                        planeCreationTimes.Remove(planeToRemove);
-                  }
-                  if (planeLastVisitedTime.ContainsKey(planeToRemove))
-                  {
-                        planeLastVisitedTime.Remove(planeToRemove);
-                  }
-                  if (persistentGeneratedPlanes.ContainsKey(planeToRemove))
-                  {
-                        persistentGeneratedPlanes.Remove(planeToRemove);
-                  }
+                  planeCreationTimes.Remove(planeToRemove);
+                  planeLastVisitedTime.Remove(planeToRemove);
+                  persistentGeneratedPlanes.Remove(planeToRemove);
+                  planeMissedFrames.Remove(planeToRemove); // 🛡️ Очищаем и гистерезис
                   Destroy(planeToRemove);
+            }
+
+            if (planesToRemove.Count > 0 && enableVerboseLoggingCleanup)
+            {
+                  Debug.Log($"[ARManagerInitializer2-CleanupOldPlanes] 🧹 Удалено {planesToRemove.Count} плоскостей. Осталось: {generatedPlanes.Count}");
+            }
+      }
+
+      /// <summary>
+      /// Проверяет, нужно ли выполнить динамическое слияние плоскостей
+      /// </summary>
+      private bool ShouldPerformDynamicMerging()
+      {
+            // Проверяем минимальное количество плоскостей
+            if (generatedPlanes.Count < minPlanesForDynamicMerging)
+            {
+                  return false;
+            }
+
+            // Проверяем временной интервал
+            if (Time.time - lastDynamicMergingTime < dynamicMergingInterval)
+            {
+                  return false;
+            }
+
+            // Проверяем, значительно ли изменилось количество плоскостей
+            int planeCountDifference = Mathf.Abs(generatedPlanes.Count - lastMergingPlaneCount);
+            bool significantChange = planeCountDifference >= 5; // Минимум 5 новых плоскостей для повторного слияния
+
+            if (enableCustomPlaneCreationLogging && significantChange)
+            {
+                  Debug.Log($"[ARManagerInitializer2-ShouldMerge] ✅ Условия для слияния выполнены: плоскостей {generatedPlanes.Count} (было {lastMergingPlaneCount}), прошло {Time.time - lastDynamicMergingTime:F1}с");
+            }
+
+            return significantChange;
+      }
+
+      /// <summary>
+      /// 🔄 Динамическое слияние плоскостей в крупные области
+      /// </summary>
+      private void PerformDynamicPlaneMerging()
+      {
+            if (!enableDynamicMerging || generatedPlanes.Count < minPlanesForDynamicMerging)
+            {
+                  return;
+            }
+
+            int initialPlaneCount = generatedPlanes.Count;
+            List<GameObject> planesToMerge = new List<GameObject>(generatedPlanes);
+            List<List<GameObject>> mergeGroups = new List<List<GameObject>>();
+
+            if (enableCustomPlaneCreationLogging)
+            {
+                  Debug.Log($"[ARManagerInitializer2-DynamicMerging] 🔄 НАЧИНАЕМ ДИНАМИЧЕСКОЕ СЛИЯНИЕ: {initialPlaneCount} плоскостей");
+            }
+
+            // Группируем плоскости по близости и схожести нормалей
+            for (int i = 0; i < planesToMerge.Count; i++)
+            {
+                  GameObject currentPlane = planesToMerge[i];
+                  if (currentPlane == null) continue;
+
+                  // Проверяем, не была ли эта плоскость уже добавлена в группу
+                  bool alreadyInGroup = false;
+                  foreach (var group in mergeGroups)
+                  {
+                        if (group.Contains(currentPlane))
+                        {
+                              alreadyInGroup = true;
+                              break;
+                        }
+                  }
+                  if (alreadyInGroup) continue;
+
+                  // Создаем новую группу для слияния
+                  List<GameObject> currentGroup = new List<GameObject> { currentPlane };
+                  Vector3 currentPos = currentPlane.transform.position;
+                  Vector3 currentNormal = currentPlane.transform.up;
+
+                  // Ищем близкие плоскости для добавления в группу
+                  for (int j = i + 1; j < planesToMerge.Count; j++)
+                  {
+                        GameObject otherPlane = planesToMerge[j];
+                        if (otherPlane == null) continue;
+
+                        Vector3 otherPos = otherPlane.transform.position;
+                        Vector3 otherNormal = otherPlane.transform.up;
+
+                        float distance = Vector3.Distance(currentPos, otherPos);
+                        float normalSimilarity = Vector3.Dot(currentNormal, otherNormal);
+
+                        // Проверяем критерии для слияния
+                        if (distance <= dynamicMergingRadius && normalSimilarity > 0.7f)
+                        {
+                              currentGroup.Add(otherPlane);
+                              if (enableCustomPlaneCreationLogging)
+                              {
+                                    Debug.Log($"[ARManagerInitializer2-DynamicMerging] ➕ Добавляем плоскость '{otherPlane.name}' в группу (расстояние: {distance:F2}м, схожесть нормалей: {normalSimilarity:F2})");
+                              }
+                        }
+                  }
+
+                  // Добавляем группу только если в ней больше одной плоскости
+                  if (currentGroup.Count > 1)
+                  {
+                        mergeGroups.Add(currentGroup);
+                  }
+            }
+
+            // Выполняем слияние для каждой группы
+            int mergedGroups = 0;
+            foreach (var group in mergeGroups)
+            {
+                  if (group.Count <= 1) continue;
+
+                  GameObject masterPlane = group[0];
+                  Vector3 avgPosition = Vector3.zero;
+                  Vector3 avgNormal = Vector3.zero;
+                  float totalWidth = 0f;
+                  float totalHeight = 0f;
+
+                  // Вычисляем средние параметры группы
+                  foreach (var plane in group)
+                  {
+                        avgPosition += plane.transform.position;
+                        avgNormal += plane.transform.up;
+
+                        // Получаем размеры плоскости
+                        var meshFilter = plane.GetComponent<MeshFilter>();
+                        if (meshFilter != null && meshFilter.mesh != null)
+                        {
+                              Bounds bounds = meshFilter.mesh.bounds;
+                              totalWidth += bounds.size.x;
+                              totalHeight += bounds.size.z;
+                        }
+                  }
+
+                  avgPosition /= group.Count;
+                  avgNormal = avgNormal.normalized;
+                  float avgWidth = totalWidth / group.Count;
+                  float avgHeight = totalHeight / group.Count;
+
+                  // Увеличиваем размер объединенной плоскости
+                  float mergedWidth = Mathf.Min(avgWidth * 1.5f, maxWallWidth);
+                  float mergedHeight = Mathf.Min(avgHeight * 1.5f, maxWallHeight);
+
+                  // Обновляем мастер-плоскость
+                  masterPlane.transform.position = avgPosition;
+                  masterPlane.transform.rotation = Quaternion.LookRotation(Vector3.Cross(avgNormal, Vector3.up), avgNormal);
+
+                  // Обновляем меш мастер-плоскости
+                  var masterMeshFilter = masterPlane.GetComponent<MeshFilter>();
+                  if (masterMeshFilter != null)
+                  {
+                        masterMeshFilter.mesh = CreatePlaneMesh(mergedWidth, mergedHeight);
+                  }
+
+                  // Обновляем коллайдер
+                  var masterCollider = masterPlane.GetComponent<MeshCollider>();
+                  if (masterCollider != null)
+                  {
+                        masterCollider.sharedMesh = masterMeshFilter.mesh;
+                  }
+
+                  // Удаляем остальные плоскости из группы
+                  for (int i = 1; i < group.Count; i++)
+                  {
+                        GameObject planeToRemove = group[i];
+                        generatedPlanes.Remove(planeToRemove);
+                        if (persistentGeneratedPlanes.ContainsKey(planeToRemove))
+                        {
+                              persistentGeneratedPlanes.Remove(planeToRemove);
+                        }
+                        if (planeCreationTimes.ContainsKey(planeToRemove))
+                        {
+                              planeCreationTimes.Remove(planeToRemove);
+                        }
+                        if (planeLastVisitedTime.ContainsKey(planeToRemove))
+                        {
+                              planeLastVisitedTime.Remove(planeToRemove);
+                        }
+
+                        DestroyImmediate(planeToRemove);
+                  }
+
+                  // Обновляем имя мастер-плоскости
+                  masterPlane.name = $"MergedPlane_{mergedGroups}_{group.Count}planes_T{Time.time:F0}";
+                  mergedGroups++;
+
+                  // Помечаем как посещенную в текущем кадре (защита от удаления)
+                  if (planeLastVisitedTime.ContainsKey(masterPlane))
+                  {
+                        planeLastVisitedTime[masterPlane] = Time.time;
+                  }
+                  else
+                  {
+                        planeLastVisitedTime.Add(masterPlane, Time.time);
+                  }
+
+                  if (enableCustomPlaneCreationLogging)
+                  {
+                        Debug.Log($"[ARManagerInitializer2-DynamicMerging] ✅ СЛИЯНИЕ ЗАВЕРШЕНО: Группа из {group.Count} плоскостей объединена в '{masterPlane.name}' (размер: {mergedWidth:F2}x{mergedHeight:F2}м)");
+                  }
+            }
+
+            int finalPlaneCount = generatedPlanes.Count;
+            if (enableCustomPlaneCreationLogging)
+            {
+                  Debug.Log($"[ARManagerInitializer2-DynamicMerging] 🎯 РЕЗУЛЬТАТ СЛИЯНИЯ: {initialPlaneCount} → {finalPlaneCount} плоскостей (-{initialPlaneCount - finalPlaneCount}), объединено {mergedGroups} групп");
             }
       }
 
@@ -2842,6 +5961,71 @@ public class ARManagerInitializer2 : MonoBehaviour
                   return "NONE";
             }
             return included.ToString();
+      }
+
+      /// <summary>
+      /// Валидация настроек слоёв для рейкастинга
+      /// Решает Проблему 2: проверяет корректность hitLayerMask
+      /// </summary>
+      private void ValidateLayerMask()
+      {
+            Debug.Log($"[ARManagerInitializer2] 🔍 Валидация hitLayerMask: {LayerMaskToString(hitLayerMask)}");
+
+            // Проверяем ключевые слои
+            string[] expectedLayers = { "Default", "SimulatedEnvironment", "Wall" };
+            List<string> missingLayers = new List<string>();
+            List<string> foundLayers = new List<string>();
+
+            foreach (string layerName in expectedLayers)
+            {
+                  int layer = LayerMask.NameToLayer(layerName);
+                  if (layer == -1)
+                  {
+                        missingLayers.Add(layerName);
+                  }
+                  else
+                  {
+                        // Проверяем, включён ли этот слой в hitLayerMask
+                        if ((hitLayerMask.value & (1 << layer)) != 0)
+                        {
+                              foundLayers.Add($"{layerName}({layer})");
+                        }
+                        else
+                        {
+                              Debug.LogWarning($"⚠️ Слой '{layerName}' ({layer}) существует, но не включён в hitLayerMask");
+                        }
+                  }
+            }
+
+            // Выводим результаты валидации
+            if (missingLayers.Count > 0)
+            {
+                  Debug.LogWarning($"⚠️ Отсутствующие слои в проекте: {string.Join(", ", missingLayers)}");
+            }
+
+            if (foundLayers.Count > 0)
+            {
+                  Debug.Log($"✅ Активные слои в hitLayerMask: {string.Join(", ", foundLayers)}");
+            }
+
+            // Проверяем, что в маске есть хотя бы один слой
+            if (hitLayerMask.value == 0)
+            {
+                  Debug.LogError("❌ hitLayerMask пуста! Рейкастинг не будет работать.");
+            }
+            else if (foundLayers.Count == 0)
+            {
+                  Debug.LogWarning("⚠️ В hitLayerMask нет ожидаемых слоёв. Проверьте настройки.");
+            }
+
+            // Дополнительная информация о текущих слоях
+            if (enableDetailedRaycastLogging)
+            {
+                  Debug.Log($"[ARManagerInitializer2] 📋 Подробная информация о слоях:");
+                  Debug.Log($"- hitLayerMask.value: {hitLayerMask.value}");
+                  Debug.Log($"- Двоичное представление: {System.Convert.ToString(hitLayerMask.value, 2).PadLeft(32, '0')}");
+                  Debug.Log($"- Включённые слои: {LayerMaskToString(hitLayerMask)}");
+            }
       }
 
       // Публичные свойства для доступа к материалам извне
@@ -2959,9 +6143,17 @@ public class ARManagerInitializer2 : MonoBehaviour
       [SerializeField] private float makePersistentCheckInterval = 1.0f;
 #pragma warning restore 0414
       [Tooltip("Задержка перед удалением 'потерянной' плоскости (в секундах)")]
-      [SerializeField] private float planePersistenceDelay = 2.0f; // ИЗМЕНЕНО с 0.5f
+      [SerializeField] private float planePersistenceDelay = 8.0f; // УВЕЛИЧЕНО: с 2.0f до 8.0f для стабильности
       [Tooltip("Минимальное время существования плоскости, чтобы она считалась 'стабильной' и могла стать 'постоянной' (в секундах)")]
       [SerializeField] private float minPlaneLifetimeForPersistence = 3.0f; // MODIFIED: Was 2.0f
+
+      [Header("🛡️ Система гистерезиса плоскостей")]
+      [Tooltip("Включить систему гистерезиса для предотвращения мерцания плоскостей")]
+      [SerializeField] private bool enablePlaneHysteresis = true;
+      [Tooltip("Количество последовательных кадров без обнаружения плоскости перед её удалением")]
+      [SerializeField, Range(3, 20)] private int maxMissedFrames = 15; // УВЕЛИЧЕНО: с 8 до 15 для большей стабильности
+      [Tooltip("Частота обработки маски сегментации (каждый N-й кадр для стабильности)")]
+      [SerializeField, Range(1, 10)] private int maskProcessingInterval = 5; // УВЕЛИЧЕНО: с 3 до 5 для меньшей частоты обработки // Обрабатывать каждый 3-й кадр
 
       // Метод для автоматического превращения стабильных плоскостей в персистентные
       private void MakeStablePlanesPersistent()
@@ -3592,6 +6784,181 @@ public class ARManagerInitializer2 : MonoBehaviour
       /// </summary>
       public List<GameObject> GeneratedPlanes => generatedPlanes;
 
+      /// <summary>
+      /// Публичный метод для ручного запуска динамического слияния плоскостей
+      /// </summary>
+      public void ManuallyMergePlanes()
+      {
+            if (enableDynamicMerging)
+            {
+                  Debug.Log($"[ARManagerInitializer2-ManualMerge] 🔄 Ручное слияние плоскостей запущено. Текущее количество: {generatedPlanes.Count}");
+                  PerformDynamicPlaneMerging();
+                  Debug.Log($"[ARManagerInitializer2-ManualMerge] ✅ Ручное слияние завершено. Итоговое количество: {generatedPlanes.Count}");
+            }
+            else
+            {
+                  Debug.LogWarning("[ARManagerInitializer2-ManualMerge] ⚠️ Динамическое слияние отключено. Включите enableDynamicMerging для использования этой функции.");
+            }
+      }
+
+      /// <summary>
+      /// Применяет оптимизированные настройки для создания меньшего количества более крупных плоскостей
+      /// </summary>
+      [ContextMenu("Применить консервативные настройки")]
+      public void ApplyConservativeSettings()
+      {
+            Debug.Log("[ARManagerInitializer2] 🎯 Применение консервативных настроек для меньшего количества плоскостей...");
+
+            // Увеличиваем минимальные размеры для фильтрации мелких областей
+            minPlaneSizeInMeters = 0.8f;
+            minPixelsDimensionForArea = 25;
+            minAreaSizeInPixels = 2000;
+
+            // Более строгие фильтры качества
+            minWallRatio = 0.7f;
+            maxAreaAspectRatio = 4.0f;
+
+            // Более крупные плоскости
+            minPlaneSize = 1.0f;
+            maxAspectRatio = 3.5f;
+            sizeReductionFactor = 0.98f;
+            wallFitMultiplier = 0.9f;
+
+            // Отключаем продвинутые системы для стабильности
+            useContourBasedDetection = false;
+            useAsyncGPUReadback = false;
+            enableDynamicMerging = false;
+
+            Debug.Log("[ARManagerInitializer2] ✅ Консервативные настройки применены. Система будет создавать меньше, но более крупных плоскостей.");
+      }
+
+      /// <summary>
+      /// Применяет более агрессивные настройки для максимального уменьшения количества плоскостей
+      /// </summary>
+      [ContextMenu("Применить максимально строгие настройки")]
+      public void ApplyStrictSettings()
+      {
+            Debug.Log("[ARManagerInitializer2] 🎯 Применение максимально строгих настроек...");
+
+            // Очень высокие пороги для фильтрации
+            minPlaneSizeInMeters = 1.2f;
+            minPixelsDimensionForArea = 40;
+            minAreaSizeInPixels = 4000;
+
+            // Строгие фильтры качества
+            minWallRatio = 0.8f;
+            maxAreaAspectRatio = 3.0f;
+
+            // Только крупные плоскости
+            minPlaneSize = 1.5f;
+            maxAspectRatio = 2.5f;
+            sizeReductionFactor = 1.0f;
+            wallFitMultiplier = 1.0f;
+
+            // Отключаем все продвинутые системы
+            useContourBasedDetection = false;
+            useAsyncGPUReadback = false;
+            enableDynamicMerging = false;
+            usePCAForPlaneOrientation = false;
+            useOBBForPlaneSizing = false;
+
+            Debug.Log("[ARManagerInitializer2] ⚠️ СТРОГИЕ настройки применены. Система будет создавать минимальное количество только крупных плоскостей.");
+      }
+
+      /// <summary>
+      /// 🛡️ Активирует систему стабилизации для предотвращения мерцания плоскостей
+      /// </summary>
+      [ContextMenu("🛡️ Активировать систему стабилизации")]
+      public void ApplyStabilizationSettings()
+      {
+            Debug.Log("[ARManagerInitializer2] 🛡️ Активируем систему стабилизации для предотвращения мерцания...");
+
+            // Включаем систему гистерезиса
+            enablePlaneHysteresis = true;
+            maxMissedFrames = 15; // УВЕЛИЧЕНО: Плоскость должна пропасть на 15 кадров подряд
+            maskProcessingInterval = 5; // УВЕЛИЧЕНО: Обрабатываем каждый 5-й кадр
+            planePersistenceDelay = 15.0f; // УВЕЛИЧЕНО: 15 секунд задержки
+
+            // Консервативные настройки для стабильности
+            minPlaneSizeInMeters = 1.0f; // УВЕЛИЧЕНО: с 0.6f до 1.0f
+            minAreaSizeInPixels = 3000; // УВЕЛИЧЕНО: с 1500 до 3000
+            minWallRatio = 0.75f; // УВЕЛИЧЕНО: с 0.6f до 0.75f
+            minPixelsDimensionForArea = 50; // УВЕЛИЧЕНО: более строгая фильтрация
+            maxAreaAspectRatio = 4.0f; // УМЕНЬШЕНО: более строгие пропорции
+
+            // Включаем логирование для диагностики стабилизации
+            enableCustomPlaneCreationLogging = false; // Отключаем детальное логирование создания
+            enableDetailedRaycastLogging = false; // Отключаем детальное логирование рейкастов
+            enableVerboseLoggingCleanup = true; // ВКЛЮЧАЕМ: логирование очистки для контроля
+
+            Debug.Log("[ARManagerInitializer2] ✅ Система стабилизации активирована! Плоскости больше не должны мерцать.");
+
+            // Показываем состояние системы для проверки
+            Invoke(nameof(DebugHysteresisState), 1.0f); // Показать состояние через 1 секунду
+      }
+
+      /// <summary>
+      /// 📊 Показывает состояние системы гистерезиса для отладки
+      /// </summary>
+      [ContextMenu("📊 Показать состояние гистерезиса")]
+      public void DebugHysteresisState()
+      {
+            Debug.Log("=== [ARManagerInitializer2] 📊 СОСТОЯНИЕ СИСТЕМЫ ГИСТЕРЕЗИСА ===");
+            Debug.Log($"🛡️ Система гистерезиса: {(enablePlaneHysteresis ? "ВКЛЮЧЕНА" : "ОТКЛЮЧЕНА")}");
+            Debug.Log($"📊 Максимальные пропущенные кадры: {maxMissedFrames}");
+            Debug.Log($"⏱️ Интервал обработки маски: каждый {maskProcessingInterval}-й кадр");
+            Debug.Log($"🔄 Текущий счетчик кадров: {maskProcessingFrameCounter}");
+            Debug.Log($"📝 Задержка удаления: {planePersistenceDelay}с");
+            Debug.Log($"📈 Общее количество плоскостей: {generatedPlanes.Count}");
+            Debug.Log($"💾 Плоскостей с счетчиком пропусков: {planeMissedFrames.Count}");
+
+            if (planeMissedFrames.Count > 0)
+            {
+                  Debug.Log("📋 Детали по пропущенным кадрам:");
+                  foreach (var kvp in planeMissedFrames)
+                  {
+                        GameObject plane = kvp.Key;
+                        int missedCount = kvp.Value;
+                        string planeName = plane != null ? plane.name : "УДАЛЕНА";
+                        Debug.Log($"  ├─ {planeName}: {missedCount}/{maxMissedFrames} пропущено");
+                  }
+            }
+            Debug.Log("=== КОНЕЦ ОТЧЕТА О ГИСТЕРЕЗИСЕ ===");
+      }
+
+      /// <summary>
+      /// 🚨 Экстремальная стабилизация для самых сложных случаев мерцания
+      /// </summary>
+      [ContextMenu("🚨 Экстремальная стабилизация")]
+      public void ApplyExtremeStabilizationSettings()
+      {
+            Debug.Log("[ARManagerInitializer2] 🚨 АКТИВИРУЕМ ЭКСТРЕМАЛЬНУЮ СТАБИЛИЗАЦИЮ для устранения мерцания...");
+
+            // Максимальные настройки гистерезиса
+            enablePlaneHysteresis = true;
+            maxMissedFrames = 20; // Очень высокий порог - плоскость должна пропасть на 20 кадров подряд
+            maskProcessingInterval = 8; // Обрабатываем только каждый 8-й кадр
+            planePersistenceDelay = 30.0f; // 30 секунд задержки удаления
+
+            // Экстремально строгие фильтры создания
+            minPlaneSizeInMeters = 1.5f; // Только большие плоскости
+            minAreaSizeInPixels = 5000; // Очень большие области
+            minWallRatio = 0.9f; // 90% пикселей должны быть стенами
+            minPixelsDimensionForArea = 100; // Очень строгая фильтрация
+            maxAreaAspectRatio = 3.0f; // Только квадратные области
+
+            // Отключаем все создание на время стабилизации
+            wallPixelThreshold = 250; // Максимальный порог - почти не создаем новых плоскостей
+
+            // Включаем логирование для контроля
+            enableVerboseLoggingCleanup = true;
+
+            Debug.Log("[ARManagerInitializer2] 🚨 ЭКСТРЕМАЛЬНАЯ СТАБИЛИЗАЦИЯ активирована! Плоскости будут максимально стабильными.");
+
+            // Показываем состояние через 1 секунду
+            Invoke(nameof(DebugHysteresisState), 1.0f);
+      }
+
       private void ConfigureARMeshManager()
       {
             var meshManager = FindObjectOfType<ARMeshManager>();
@@ -4014,6 +7381,19 @@ public class ARManagerInitializer2 : MonoBehaviour
             mesh.RecalculateBounds();
 
             return mesh;
+      }
+
+      /// <summary>
+      /// Метод очистки ресурсов при уничтожении объекта
+      /// </summary>
+      private void OnDestroy()
+      {
+            // ⚡ УРОВЕНЬ 2: Очистка асинхронной системы GPU
+            if (useAsyncGPUReadback)
+            {
+                  CleanupAsyncSystem();
+                  Debug.Log("✅ AsyncGPUReadback система очищена");
+            }
       }
 
       #endregion

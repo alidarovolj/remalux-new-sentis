@@ -472,22 +472,46 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: be9aa24f5f5898f44a2af4ebd50ffbf3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  enableTapToCreate: 1
   sessionManager: {fileID: 1288005832}
   planeManager: {fileID: 151853166}
   xrOrigin: {fileID: 1004066121}
   planeConfigurator: {fileID: 6941533}
   planeDebugVisualizer: {fileID: 0}
   useDetectedPlanes: 1
-  minPlaneSizeInMeters: 0.1
-  minPixelsDimensionForArea: 1
-  minAreaSizeInPixels: 35
+  minPlaneSizeInMeters: 1.5
+  minPixelsDimensionForArea: 100
+  minAreaSizeInPixels: 5000
   maskProcessingResolution: 128
-  wallPixelThreshold: 100
-  enableDetailedRaycastLogging: 1
+  wallPixelThreshold: 250
+  minWallRatio: 0.9
+  maxAreaAspectRatio: 3
+  useAdaptiveThresholds: 1
+  noiseToleranceFactor: 1.2
+  useContourBasedDetection: 0
+  minContourLength: 10
+  contourSimplificationEpsilon: 2
+  minContourArea: 100
+  maxContourPoints: 5000
+  maxContourIterations: 10000
+  usePCAForPlaneOrientation: 1
+  minPointsForPCA: 50
+  pcaOutlierThreshold: 0.1
+  pcaOutlierPercentage: 0.15
+  useOBBForPlaneSizing: 1
+  obbExpansionFactor: 1.1
+  obbMinThickness: 0.02
+  useAdaptiveOBBSizing: 1
+  useAsyncGPUReadback: 1
+  maxConcurrentReadbacks: 3
+  asyncReadbackTimeout: 1
+  useTexturePooling: 1
+  texturePoolSize: 4
+  enableDetailedRaycastLogging: 0
   maxRayDistance: 20
   hitLayerMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 1073742647
   minHitDistanceThreshold: 0.1
   maxWallNormalAngleDeviation: 20
   maxFloorNormalAngleDeviation: 15
@@ -502,17 +526,33 @@ MonoBehaviour:
     type: 2}
   debugRayMaterial: {fileID: 2100000, guid: 5c263d28743de4e4f94614f477a090e8, type: 2}
   enableSceneObjectsDiagnostics: 1
-  enableCustomPlaneCreationLogging: 1
+  enableCustomPlaneCreationLogging: 0
   enableVerboseLoggingCleanup: 1
+  enableSegmentationEventDiagnostics: 1
   maxPlaneSize: 50
   minPlaneSize: 0.1
   maxAspectRatio: 10
   maxWallHeight: 2.8
   maxWallWidth: 4
   planeSizeMultiplier: 0.6
+  accurateSizing: 1
+  accuratePositioning: 1
+  useSinglePreciseRaycast: 1
+  enablePlaneMerging: 1
+  planeMergingDistance: 0.5
+  enableDynamicMerging: 1
+  dynamicMergingRadius: 1.5
+  minPlanesForDynamicMerging: 10
+  dynamicMergingInterval: 2
+  sizeReductionFactor: 0.3
+  maxPlaneClampSize: 0.8
+  wallFitMultiplier: 0.5
   makePersistentCheckInterval: 1
-  planePersistenceDelay: 2
+  planePersistenceDelay: 30
   minPlaneLifetimeForPersistence: 2
+  enablePlaneHysteresis: 1
+  maxMissedFrames: 20
+  maskProcessingInterval: 8
   enableDoubleTapSave: 1
   doubleTapTimeThreshold: 0.3
 --- !u!4 &367304187
@@ -802,6 +842,7 @@ MonoBehaviour:
   useSafeModelLoading: 1
   modelLoadTimeout: 30
   forceXRSimulationCapture: 1
+  xrSimulationCameraFeed: {fileID: 0}
   wallClassIndex: 0
   floorClassIndex: 2
   wallConfidence: 0.15

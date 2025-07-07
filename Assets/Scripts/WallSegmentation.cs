@@ -45,6 +45,9 @@ public class WallSegmentation : MonoBehaviour
       [Tooltip("Принудительно использовать метод захвата изображения для XR Simulation")]
       public bool forceXRSimulationCapture = true;
 
+      [Tooltip("Ссылка на XRSimulationCameraFeed для получения кадров в режиме симуляции")]
+      public XRSimulationCameraFeed xrSimulationCameraFeed;
+
       [Header("Настройки сегментации")]
       [Tooltip("Индекс класса стены в модели")][SerializeField] private int wallClassIndex = 1;     // Стена (ИЗМЕНЕНО для segformer-b4-wall)
       [Tooltip("Индекс класса пола в модели")][SerializeField] private int floorClassIndex = 2; // Пол (ИЗМЕНЕНО для segformer-b4-wall, если есть, иначе -1)
@@ -1134,9 +1137,38 @@ public class WallSegmentation : MonoBehaviour
             // Проверяем, работаем ли мы в режиме XR Simulation
             bool isSimulation = IsRunningInXRSimulation();
 
-            // В режиме симуляции сразу используем альтернативный метод
+            // В режиме симуляции сначала пробуем XRSimulationCameraFeed
             if (isSimulation)
             {
+                  // Автоматический поиск XRSimulationCameraFeed если не задан
+                  if (xrSimulationCameraFeed == null)
+                  {
+                        xrSimulationCameraFeed = FindObjectOfType<XRSimulationCameraFeed>();
+                  }
+
+                  // Пробуем получить кадр от XRSimulationCameraFeed
+                  if (xrSimulationCameraFeed != null)
+                  {
+                        Texture2D simulationFrame = xrSimulationCameraFeed.GetCurrentFrame();
+                        if (simulationFrame != null)
+                        {
+                              if (debugFlags.HasFlag(DebugFlags.CameraTexture))
+                              {
+                                    Debug.Log($"✅ Получен кадр от XRSimulationCameraFeed: {simulationFrame.width}x{simulationFrame.height}");
+                              }
+                              return simulationFrame;
+                        }
+                        else if (debugFlags.HasFlag(DebugFlags.CameraTexture))
+                        {
+                              Debug.LogWarning("⚠️ XRSimulationCameraFeed не предоставил кадр, используем fallback");
+                        }
+                  }
+                  else if (debugFlags.HasFlag(DebugFlags.CameraTexture))
+                  {
+                        Debug.LogWarning("⚠️ XRSimulationCameraFeed не найден, используем fallback");
+                  }
+
+                  // Fallback к старому методу
                   Texture2D result = GetCameraTextureFromSimulation();
                   if (result == null)
                   {
